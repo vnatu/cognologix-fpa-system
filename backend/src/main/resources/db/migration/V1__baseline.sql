@@ -1,0 +1,4 @@
+-- V1: Baseline migration — schema establishment point.
+-- No tables yet. Flyway tracks this version as the starting point.
+-- Module-specific tables will follow in subsequent numbered migrations
+-- once each bounded context's schema is designed.

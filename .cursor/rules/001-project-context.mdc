@@ -1,0 +1,11 @@
+---
+description: Cognologix FPA system context
+alwaysApply: true
+---
+Spring Boot 3.3.2 + Spring Modulith modular monolith. PostgreSQL + Flyway. React 18 + Ant Design 5 frontend. Java 21.
+
+Bounded contexts: people-payroll (com.cognologix.fpa.people), customer-management (com.cognologix.fpa.customer), general (com.cognologix.fpa.general). Each module's public API is its root package only — sub-packages are internal. Cross-module calls go through the owning module's service, NEVER direct repository access.
+
+Docs in docs/ — read before implementing any module. ADR log at docs/ADR-log.md — update immediately on any architectural decision. Module specs at docs/Cognologix_PeopleMaster_RequirementsSpec_v1.0.md and docs/Cognologix_CustomerManagement_RequirementsSpec_v1.0.md.
+
+NEVER generate placeholder dashboard content, fake metrics, or unspecified nav items.

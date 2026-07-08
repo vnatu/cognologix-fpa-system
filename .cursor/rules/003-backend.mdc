@@ -1,0 +1,12 @@
+---
+description: Backend conventions for Spring Boot + Spring Modulith
+globs: ["backend/src/**/*.java"]
+alwaysApply: false
+---
+- Flyway migrations are append-only — NEVER modify an existing migration file.
+- Entities live in module sub-packages (internal). DTOs and controllers live in module root package (public).
+- Use UUID primary keys with gen_random_uuid().
+- Effective-dated records (rate_card, fx_rate) need overlap exclusion constraints via btree_gist.
+- Partial unique index required for nullable unique columns (e.g. rate_card_line flat uniqueness).
+- One aggregate root per repository. No cross-module repository injection.
+- Validation annotations on all request DTOs.

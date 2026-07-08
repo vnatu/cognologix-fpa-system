@@ -1,0 +1,21 @@
+# Java / Maven
+backend/target/
+backend/.mvn/repository/
+*.class
+*.jar
+!backend/mvnw.cmd
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.local
+*.env
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store

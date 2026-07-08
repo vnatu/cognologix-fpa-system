@@ -1,0 +1,11 @@
+---
+description: Frontend conventions for React + Ant Design
+globs: ["frontend/src/**/*.{ts,tsx}"]
+alwaysApply: false
+---
+- ALL theme values (colors, fonts) MUST come from antdTheme.ts via ConfigProvider — no hardcoded hex values in components.
+- Colors: primary/accent Red #f05756, Orange #f68c45 as accents only. Header bar Black #232323. Content/sidebar Light BG #f7f6f4.
+- Logo: dark backgrounds = gradient glyph + white wordmark. Light backgrounds = gradient glyph + Grey #525957 wordmark. NEVER black wordmark.
+- Use Ant Design Skeleton while loading, Empty for empty states, notification for API success/error.
+- All API calls via axios with JWT bearer token from AuthContext.
+- Desktop-primary layout using Ant Design Layout + Row/Col grid — no fixed pixel widths.

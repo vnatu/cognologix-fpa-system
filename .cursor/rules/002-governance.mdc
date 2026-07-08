@@ -1,0 +1,15 @@
+---
+description: Documentation sync rules — update on every relevant change
+alwaysApply: true
+---
+ALWAYS update docs/ADR-log.md immediately when an architectural or technology decision is made. NEVER defer.
+
+ALWAYS read the relevant spec in docs/ before writing any entity, service, migration, or controller for a module.
+
+ALWAYS flag if implementation contradicts the spec — do not silently deviate.
+
+Any snapshot or computed record involving USD→INR conversion MUST store fx_rate_id as a FK reference (ADR-017).
+
+No DELETE endpoints on Customer — use lifecycle status CHURNED. Rate cards are effective-dated — close current, create new; NEVER edit in place.
+
+Run mvn test after every structural change. Fix failures before proceeding.

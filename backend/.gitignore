@@ -1,0 +1,25 @@
+# Build output
+target/
+*.jar
+*.war
+*.class
+
+# Maven wrapper (if generated)
+.mvn/wrapper/maven-wrapper.jar
+
+# Spring Boot
+spring-pid
+
+# IDE
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# Test output
+surefire-reports/
+
+# Environment overrides
+application-local.yml
+application-local.properties
