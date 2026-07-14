@@ -172,7 +172,7 @@ export default function SnapshotDetailPage() {
     const byType = new Map<PayrollImportType, SnapshotUploadMetadata>();
     for (const upload of uploads) {
       if (isPayrollImportType(upload.importType)) {
-        byType.set(upload.importType, upload);
+        byType.set(upload.importType as PayrollImportType, upload);
       }
     }
     return byType;

@@ -223,3 +223,103 @@ export interface SnapshotDetail {
   payrollRows: PayrollSnapshotRow[];
   exitedRegistryRows: ExitedRegistryRow[];
 }
+
+export type DashboardTrendMetric =
+  | 'BILLABLE_HC'
+  | 'BENCH_HC'
+  | 'TOTAL_HC'
+  | 'BILLABLE_RATIO_PCT'
+  | 'TOTAL_GROSS_PAY'
+  | 'BILLABLE_GROSS_PAY';
+
+export interface DashboardPeriodVersion {
+  id: string;
+  versionNumber: number;
+  status: PeriodStatus;
+  isLatestFinalised: boolean;
+}
+
+export interface DashboardPeriod {
+  id: string;
+  periodMonth: number;
+  periodYear: number;
+  versions: DashboardPeriodVersion[];
+}
+
+export interface DashboardSummary {
+  periodMonth: number;
+  periodYear: number;
+  versionNumber: number;
+  status: PeriodStatus;
+  headcount: {
+    total: number;
+    billable: number;
+    bench: number;
+    support: number;
+    leadership: number;
+    management: number;
+    billableRatioPct: number;
+  };
+  salaryMetrics: {
+    totalGrossPay: number;
+    billableGrossPay: number;
+    benchGrossPay: number;
+    supportGrossPay: number;
+    leadershipGrossPay: number;
+    managementGrossPay: number;
+    avgPerHeadBillable: number;
+    avgPerHeadBench: number;
+    avgPerHeadSupport: number;
+    avgPerHeadLeadership: number;
+    avgPerHeadManagement: number;
+  };
+  puBreakdown: Array<{
+    practiceUnit: string;
+    totalHc: number;
+    billableHc: number;
+    benchHc: number;
+    billablePct: number;
+    benchPct: number;
+    totalGrossPay: number;
+    billableGrossPay: number;
+    benchGrossPay: number;
+  }>;
+  clientBreakdown: Array<{
+    businessUnit: string;
+    customerCode: string | null;
+    isInternal: boolean;
+    totalHc: number;
+    billableHc: number;
+    nonBillableHc: number;
+    billabilityPct: number;
+    totalGrossPay: number;
+  }>;
+  internalBuBreakdown: Array<{
+    businessUnit: string;
+    customerCode: string | null;
+    totalHc: number;
+    billableHc: number;
+    nonBillableHc: number;
+    totalGrossPay: number;
+    grossPayPct: number;
+  }>;
+  reconciliationSummary: {
+    payrollPending: number;
+    autoMatchedExited: number;
+    unmatched: number;
+    manuallyMapped: number;
+  };
+  dataQualitySummary: {
+    totalWarnings: number;
+    missingProjectCode: number;
+    projectCodeNotFound: number;
+    billingClientUnresolved: number;
+  };
+}
+
+export interface DashboardTrendPoint {
+  periodMonth: number;
+  periodYear: number;
+  versionNumber: number;
+  value: number;
+}

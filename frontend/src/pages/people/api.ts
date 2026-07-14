@@ -2,6 +2,10 @@ import axios from 'axios';
 import type {
   ClassificationConfigMap,
   ClassificationConfigType,
+  DashboardPeriod,
+  DashboardSummary,
+  DashboardTrendMetric,
+  DashboardTrendPoint,
   EmployeeRegistryEntry,
   ImportType,
   MappingTemplate,
@@ -202,3 +206,34 @@ export const deleteClassificationConfig = (id: string): Promise<void> =>
   axios
     .delete(`/api/people/config/classification/${id}`)
     .then(() => undefined);
+
+// ── Dashboard ────────────────────────────────────────────────────────────────
+
+export const fetchDashboardPeriods = (): Promise<DashboardPeriod[]> =>
+  axios
+    .get<DashboardPeriod[]>('/api/people/dashboard/periods')
+    .then((r) => r.data);
+
+export const fetchDashboardSummary = (
+  periodVersionId: string,
+): Promise<DashboardSummary> =>
+  axios
+    .get<DashboardSummary>(
+      `/api/people/dashboard/${periodVersionId}/summary`,
+    )
+    .then((r) => r.data);
+
+export const fetchDashboardTrend = (params: {
+  metric: DashboardTrendMetric;
+  practiceUnit?: string;
+  businessUnit?: string;
+}): Promise<DashboardTrendPoint[]> =>
+  axios
+    .get<DashboardTrendPoint[]>('/api/people/dashboard/trend', {
+      params: {
+        metric: params.metric,
+        practiceUnit: params.practiceUnit || undefined,
+        businessUnit: params.businessUnit || undefined,
+      },
+    })
+    .then((r) => r.data);

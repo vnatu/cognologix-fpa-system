@@ -9,7 +9,7 @@ import {
 import PeriodManagementPage from '@/pages/people/periods/PeriodManagementPage';
 import SnapshotDetailPage from '@/pages/people/SnapshotDetailPage';
 import MasterDataPage from '@/pages/people/master/MasterDataPage';
-import PeopleDashboardPlaceholder from '@/pages/people/dashboard/PeopleDashboardPlaceholder';
+import PeopleDashboardPage from '@/pages/people/dashboard/PeopleDashboardPage';
 
 export default function PeoplePayrollRoutes() {
   return (
@@ -32,7 +32,7 @@ export default function PeoplePayrollRoutes() {
           element={<SnapshotDetailPage />}
         />
         <Route path="master" element={<MasterDataPage />} />
-        <Route path="dashboard" element={<PeopleDashboardPlaceholder />} />
+        <Route path="dashboard" element={<PeopleDashboardPage />} />
       </Route>
     </Routes>
   );

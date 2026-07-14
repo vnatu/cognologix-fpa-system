@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Button,
   Checkbox,
@@ -57,6 +58,7 @@ const { Title, Text } = Typography;
 
 export default function MasterDataPage() {
   const { formatDate } = useDateFormat();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [periods, setPeriods] = useState<PeriodResponse[]>([]);
   const [showSuperseded, setShowSuperseded] = useState(false);
@@ -66,10 +68,15 @@ export default function MasterDataPage() {
   const [summary, setSummary] = useState<MasterSummary | null>(null);
   const [recordsLoading, setRecordsLoading] = useState(false);
 
-  const [statusFilter, setStatusFilter] = useState<ReconciliationStatus[]>([]);
+  const initialStatus = searchParams.get('reconciliationStatus');
+  const [statusFilter, setStatusFilter] = useState<ReconciliationStatus[]>(
+    initialStatus ? [initialStatus as ReconciliationStatus] : [],
+  );
   const [classificationFilter, setClassificationFilter] = useState<string[]>([]);
   const [buFilter, setBuFilter] = useState<string[]>([]);
-  const [warningsOnlyFilter, setWarningsOnlyFilter] = useState(false);
+  const [warningsOnlyFilter, setWarningsOnlyFilter] = useState(
+    searchParams.get('hasWarnings') === 'true',
+  );
 
   const [reconcileRecord, setReconcileRecord] = useState<MasterRecord | null>(
     null,
@@ -78,6 +85,16 @@ export default function MasterDataPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [reconciling, setReconciling] = useState(false);
   const [openWarningId, setOpenWarningId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const status = searchParams.get('reconciliationStatus');
+    if (status) {
+      setStatusFilter([status as ReconciliationStatus]);
+    }
+    if (searchParams.get('hasWarnings') === 'true') {
+      setWarningsOnlyFilter(true);
+    }
+  }, [searchParams]);
 
   const versionOptions = useMemo(
     () => buildMasterVersionOptions(periods, showSuperseded),

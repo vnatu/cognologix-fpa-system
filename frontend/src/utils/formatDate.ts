@@ -38,3 +38,12 @@ export function formatDateTime(
   if (!parsed.isValid()) return '—';
   return `${formatDate(date, format)} ${parsed.format('HH:mm')}`;
 }
+
+/** Indian Rupee formatting — ₹X,XX,XXX via en-IN grouping. */
+export function formatCurrency(amount: number | null | undefined): string {
+  if (amount == null || Number.isNaN(amount)) return '—';
+  return `₹${Number(amount).toLocaleString('en-IN', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  })}`;
+}

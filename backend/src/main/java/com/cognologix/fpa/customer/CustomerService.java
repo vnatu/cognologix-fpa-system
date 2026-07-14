@@ -624,6 +624,21 @@ public class CustomerService {
     }
 
     /**
+     * Resolves a Zoho People BU (code or name) to Customer Master code, name, and internal flag (ADR-029).
+     */
+    public Optional<BuCustomerRef> resolveBuCustomer(String customerCodeOrName) {
+        if (customerCodeOrName == null || customerCodeOrName.isBlank()) {
+            return Optional.empty();
+        }
+        String key = customerCodeOrName.trim();
+        return customerRepository.findByCustomerCodeOrCustomerName(key, key)
+                .map(c -> new BuCustomerRef(c.getCustomerCode(), c.getCustomerName(), c.isInternal()));
+    }
+
+    /** Lightweight cross-module BU identity — avoids exposing Customer entity (ADR-008). */
+    public record BuCustomerRef(String customerCode, String customerName, boolean internal) {}
+
+    /**
      * Resolves a Zoho People project code to the parent customer's customer_code (Module 2 §9).
      * Returns null when no mapping exists.
      */

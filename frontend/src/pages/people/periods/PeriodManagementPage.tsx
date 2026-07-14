@@ -194,7 +194,7 @@ export default function PeriodManagementPage() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string, version) => (
+      render: (status: string) => (
         <Tag color={periodStatusBadgeColor(status as never)}>
           {PERIOD_STATUS_LABELS[status] ?? status}
         </Tag>
