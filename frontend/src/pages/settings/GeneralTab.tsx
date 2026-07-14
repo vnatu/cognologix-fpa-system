@@ -1,8 +1,27 @@
-import { useState } from 'react';
-import { Table, Button, Modal, Form, Input, Tag, Space, Typography } from 'antd';
+import { useEffect, useState } from 'react';
+import {
+  Button,
+  Form,
+  Modal,
+  Input,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  notification,
+} from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import dayjs from 'dayjs';
+import { updateDateFormat, fetchDateFormat } from '@/api/general';
+import { useDateFormat } from '@/context/DateFormatContext';
 import { HEADING_FONT } from '@/theme/antdTheme';
+import {
+  DATE_FORMAT_OPTIONS,
+  formatDate,
+  type DateFormatOption,
+} from '@/utils/formatDate';
 
 const { Text } = Typography;
 
@@ -43,6 +62,86 @@ const COLUMNS: ColumnsType<Member> = [
   },
 ];
 
+function DateFormatSettings() {
+  const { format, setFormat } = useDateFormat();
+  const [selected, setSelected] = useState<DateFormatOption>(format);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const current = await fetchDateFormat();
+        setSelected(current);
+        setFormat(current);
+      } catch {
+        notification.error({ message: 'Failed to load date format' });
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [setFormat]);
+
+  useEffect(() => {
+    setSelected(format);
+  }, [format]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const saved = await updateDateFormat(selected);
+      setFormat(saved);
+      notification.success({ message: 'Date format saved' });
+    } catch {
+      notification.error({ message: 'Failed to save date format' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const preview = formatDate(dayjs().toDate(), selected);
+
+  return (
+    <div style={{ marginBottom: 40 }}>
+      <div
+        style={{
+          fontFamily: HEADING_FONT,
+          fontWeight: 700,
+          fontSize: 17,
+          color: '#232323',
+          marginBottom: 4,
+        }}
+      >
+        Date Format
+      </div>
+      <div style={{ fontSize: 13, color: '#888888', marginBottom: 16 }}>
+        Choose how dates are displayed across the application.
+      </div>
+      <Space direction="vertical" size="middle" style={{ maxWidth: 360 }}>
+        <Select
+          style={{ width: '100%' }}
+          value={selected}
+          loading={loading}
+          options={DATE_FORMAT_OPTIONS.map((o) => ({ label: o, value: o }))}
+          onChange={setSelected}
+        />
+        <Text type="secondary">
+          Preview: <Text strong>{preview}</Text>
+        </Text>
+        <Button
+          type="primary"
+          loading={saving}
+          onClick={handleSave}
+          disabled={loading}
+          style={{ fontFamily: HEADING_FONT, fontWeight: 600 }}
+        >
+          Save
+        </Button>
+      </Space>
+    </div>
+  );
+}
+
 export default function GeneralTab() {
   const [members, setMembers] = useState<Member[]>(INITIAL_MEMBERS);
   const [open, setOpen] = useState(false);
@@ -64,6 +163,8 @@ export default function GeneralTab() {
 
   return (
     <>
+      <DateFormatSettings />
+
       <div
         style={{
           display: 'flex',

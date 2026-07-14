@@ -2,6 +2,7 @@ package com.cognologix.fpa.people;
 
 import com.cognologix.fpa.people.domain.ExitDatePrecision;
 import com.cognologix.fpa.people.domain.ExitStatus;
+import com.cognologix.fpa.people.domain.SnapshotUpload;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -47,6 +48,10 @@ public class EmployeeRegistry {
     @Enumerated(EnumType.STRING)
     @Column(name = "exit_date_precision", length = 12)
     private ExitDatePrecision exitDatePrecision;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "last_updated_by_upload_id")
+    private SnapshotUpload lastUpdatedByUpload;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

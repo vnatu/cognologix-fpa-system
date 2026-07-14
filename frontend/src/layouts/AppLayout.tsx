@@ -5,6 +5,7 @@ import {
   DashboardOutlined,
   SettingOutlined,
   LogoutOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import AppLogo from '@/components/AppLogo';
@@ -14,13 +15,29 @@ const { Header, Sider, Content } = Layout;
 
 const NAV_ITEMS = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
-  { key: '/settings',  icon: <SettingOutlined />,   label: 'Settings'  },
+  { key: '/people-payroll', icon: <TeamOutlined />, label: 'People & Payroll' },
+  { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
 const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
   '/dashboard': { title: 'Dashboard', subtitle: 'Financial planning overview' },
-  '/settings':  { title: 'Settings',  subtitle: 'Workspace & members' },
+  '/people-payroll': {
+    title: 'People & Payroll',
+    subtitle: 'Imports, periods, master data & analytics',
+  },
+  '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
 };
+
+function resolveTopbarMeta(pathname: string) {
+  if (TOPBAR_META[pathname]) return TOPBAR_META[pathname];
+  if (pathname.startsWith('/people-payroll')) return TOPBAR_META['/people-payroll'];
+  return { title: '', subtitle: '' };
+}
+
+function selectedNavKey(pathname: string): string {
+  if (pathname.startsWith('/people-payroll')) return '/people-payroll';
+  return pathname;
+}
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -28,7 +45,7 @@ export default function AppLayout() {
   const { logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
 
-  const meta = TOPBAR_META[pathname] ?? { title: '', subtitle: '' };
+  const meta = resolveTopbarMeta(pathname);
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -118,7 +135,7 @@ export default function AppLayout() {
 
           <Menu
             mode="inline"
-            selectedKeys={[pathname]}
+            selectedKeys={[selectedNavKey(pathname)]}
             items={NAV_ITEMS}
             onClick={({ key }) => navigate(key)}
             style={{ border: 'none', marginTop: 8 }}

@@ -10,11 +10,15 @@ import {
   Select,
   Skeleton,
   Table,
+  Tag,
+  Checkbox,
+  Space,
 } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ExportOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { HEADING_FONT } from '@/theme/antdTheme';
-import { fetchCustomers, fetchProjectCodes, addProjectCode, deleteProjectCode } from './api';
+import { fetchCustomers, fetchProjectCodes, addProjectCode, deleteProjectCode, downloadProjectCodeImportSample, exportProjectCodes } from './api';
+import ProjectCodeImportModal from './ProjectCodeImportModal';
 import type { CustomerSummary, ProjectCode } from './types';
 
 interface Props {
@@ -32,19 +36,22 @@ export default function ProjectCodesSection({
   onSelectCustomer,
 }: Props) {
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
+  const [showInternal, setShowInternal] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(true);
   const [codes, setCodes] = useState<ProjectCode[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm<FormValues>();
 
   useEffect(() => {
-    fetchCustomers()
+    setCustomersLoading(true);
+    fetchCustomers(showInternal)
       .then(setCustomers)
       .catch(() => notification.error({ message: 'Failed to load customers' }))
       .finally(() => setCustomersLoading(false));
-  }, []);
+  }, [showInternal]);
 
   const loadCodes = useCallback(async (customerId: string) => {
     setLoading(true);
@@ -143,6 +150,8 @@ export default function ProjectCodesSection({
           justifyContent: 'space-between',
           alignItems: 'center',
           marginBottom: 16,
+          flexWrap: 'wrap',
+          gap: 12,
         }}
       >
         <h3
@@ -156,36 +165,79 @@ export default function ProjectCodesSection({
         >
           Project Codes
         </h3>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => { form.resetFields(); setModalOpen(true); }}
-          disabled={!selectedCustomerId}
-        >
-          Add Project Code
-        </Button>
+        <Space>
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => {
+              exportProjectCodes().catch(() =>
+                notification.error({ message: 'Failed to export project codes' }),
+              );
+            }}
+          >
+            Export Project Codes
+          </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => {
+              downloadProjectCodeImportSample().catch(() =>
+                notification.error({ message: 'Failed to download sample file' }),
+              );
+            }}
+          >
+            Download Sample File
+          </Button>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+            Import Project Codes
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => { form.resetFields(); setModalOpen(true); }}
+            disabled={!selectedCustomerId}
+          >
+            Add Project Code
+          </Button>
+        </Space>
       </div>
 
       {customersLoading ? (
         <Skeleton active paragraph={{ rows: 1 }} />
       ) : (
-        <Form.Item label="Customer" style={{ marginBottom: 20, maxWidth: 360 }}>
-          <Select
-            showSearch
-            placeholder="Select a customer"
-            value={selectedCustomerId ?? undefined}
-            onChange={onSelectCustomer}
-            options={customers.map((c) => ({
-              label: `${c.customerCode} — ${c.customerName}`,
-              value: c.id,
-            }))}
-            filterOption={(input, option) =>
-              (option?.label as string)
-                .toLowerCase()
-                .includes(input.toLowerCase())
-            }
-          />
-        </Form.Item>
+        <>
+          <Checkbox
+            checked={showInternal}
+            onChange={(e) => setShowInternal(e.target.checked)}
+            style={{ marginBottom: 12 }}
+          >
+            Show internal BUs
+          </Checkbox>
+          <Form.Item label="Customer" style={{ marginBottom: 20, maxWidth: 360 }}>
+            <Select
+              showSearch
+              placeholder="Select a customer"
+              value={selectedCustomerId ?? undefined}
+              onChange={onSelectCustomer}
+              options={customers.map((c) => ({
+                label: (
+                  <span>
+                    {c.customerCode} — {c.customerName}
+                    {c.internal ? (
+                      <Tag style={{ marginLeft: 8 }}>Internal</Tag>
+                    ) : null}
+                  </span>
+                ),
+                value: c.id,
+              }))}
+              filterOption={(input, option) => {
+                const c = customers.find((x) => x.id === option?.value);
+                if (!c) return false;
+                return `${c.customerCode} ${c.customerName}`
+                  .toLowerCase()
+                  .includes(input.toLowerCase());
+              }}
+            />
+          </Form.Item>
+        </>
       )}
 
       {!selectedCustomerId ? (
@@ -240,6 +292,14 @@ export default function ProjectCodesSection({
           </Form.Item>
         </Form>
       </Modal>
+
+      <ProjectCodeImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          if (selectedCustomerId) loadCodes(selectedCustomerId);
+        }}
+      />
     </div>
   );
 }

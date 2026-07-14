@@ -424,13 +424,15 @@ Three sub-decisions, all accepted together:
 Original Module 1 spec implied master records were immutable once built per period. During schema design walkthrough, the real operational need was clarified: Finance must be able to correct data in open periods without losing the point-in-time guarantee for finalised periods.
 
 **Decision**
-Master records are materialised (stored in a table, not computed on the fly) but remain mutable until the period is explicitly finalised by Finance. Period lifecycle: OPEN → SNAPSHOTS_UPLOADED → MASTER_BUILT → FINALISED. Corrections to open periods are supported two ways: re-upload the entire snapshot file (bulk correction, replaces all records, triggers recalculation) or edit individual employee records directly in the UI (targeted correction, triggers recalculation). Master record build is always an explicit Finance action — never triggered automatically. No recalculation log is stored — the audit trail is the snapshot upload history. Only FINALISED periods are immutable. Dashboard metrics are computed on demand from Master records at query time, not stored separately — acceptable at current data volume (~100-300 employees monthly).
+Master records are materialised (stored in a table, not computed on the fly) but remain mutable until the period is explicitly finalised by Finance. Period lifecycle: OPEN → SNAPSHOTS_UPLOADED → MASTER_BUILT → FINALISED. A fifth status, SUPERSEDED, marks prior versions that were auto-replaced by a bulk re-upload correction. Corrections to open periods are supported two ways: re-upload the entire snapshot file for a given import type (bulk correction — if that import type was already uploaded on the current version, the current version is marked SUPERSEDED and a new version is auto-created with an incremented version_number; otherwise a normal insert on the current version) or edit individual employee records directly in the UI (targeted correction, triggers recalculation). Master record build is always an explicit Finance action — never triggered automatically. No recalculation log is stored — the audit trail is the snapshot upload history and superseded period versions. Only FINALISED periods are immutable. Dashboard metrics are computed on demand from Master records at query time, not stored separately — acceptable at current data volume (~100-300 employees monthly).
 
 **Consequences**
 - (+) Finance can correct data entry errors without losing the point-in-time guarantee for historical periods.
 - (+) Dashboard always reflects current Master state for open periods.
 - (+) Explicit finalisation gives Finance control over when a period becomes authoritative.
+- (+) Re-upload auto-bump preserves a complete audit trail — superseded versions retain their snapshot uploads.
 - (–) Dashboard for open periods may show different numbers if Master is rebuilt — Finance must understand that open-period figures are provisional until finalised.
+- (–) After a re-upload bump, Finance must re-upload any other import types on the new version before building Master.
 
 ---
 
@@ -465,6 +467,276 @@ Include as a third upload type now alongside Zoho People (active) and Zoho Payro
 - (+) Exact exit dates available from day one — useful for prorated salary calculations and precise headcount reporting.
 - (+) Consistent upload pattern across all three import types — same UI, same mapping template mechanism.
 - (–) Slightly more monthly work for Finance — three upload types instead of two — acceptable given the small team and low employee turnover at current scale.
+
+---
+
+## ADR-021: Navigation Structure — Domain-First, Import as Sub-Section
+
+**Status:** Accepted — July 2026
+
+**Context**
+Initial navigation design had a dedicated top-level "Imports" section with sub-sections per module (Imports → People & Payroll, Imports → Books). On review, organising by action type rather than domain was identified as a weaker information architecture — users think in terms of the domain they're working on, not the action they're performing.
+
+**Decision**
+Navigation is organised domain-first. Each bounded context with operational screens gets its own top-level nav section. Import is a sub-section within that domain, not a separate top-level concern. Confirmed structure:
+
+- **People & Payroll** — Imports (Zoho People, Zoho Payroll, Zoho People Exited), Period Management (view periods, trigger Master build, finalise/reopen), Master Data (view/edit Master records, trigger recalculation), Dashboard (People Analytics — headcount, PU/BU breakdown, salary metrics, trend view)
+- **Customer Management** — moved to top-level (currently only in Settings); operational screens (Customers, Rate Cards, Project Codes) live here; Settings > Customer Management tab becomes config-only (concentration risk thresholds)
+- **Revenue** (future) — Imports (Zoho Books), Revenue Data, Revenue Dashboard
+- **Budgeting & Forecasting** (future) — Plan vs. Actual, Scenarios, Forecasting
+- **Settings** — General, People & Payroll config (classification rules), Customer Management config (thresholds)
+
+**Consequences**
+- (+) Users navigate by what they're working on, not what action they're performing — more intuitive for a daily-use tool.
+- (+) Each module's full workflow (import → process → view → configure) is self-contained under one nav item.
+- (+) Consistent pattern across all future modules — Revenue, Budgeting follow the same structure without redesign.
+- (–) Customer Management needs a nav refactor — currently operational screens are under Settings, needs to move to a top-level section.
+
+---
+
+## ADR-022: Budgeting & Forecasting Data Consumption — Event-Driven Snapshot on Period Finalisation
+
+**Status:** Accepted — July 2026
+
+**Context**
+Budgeting & Forecasting is the downstream consumer of People & Payroll's Master data (for the "Actual" side of Plan vs. Actual). Two options were considered: (A) query People & Payroll live via its public service API on demand, or (B) receive aggregated data via a domain event when a period is finalised and store its own copy.
+
+**Decision**
+Option B — event-driven snapshot on finalisation. When Finance finalises a period in People & Payroll, `PeoplePayrollService.finalisePeriod()` publishes a `PeriodFinalisedEvent` via Spring Modulith's in-process event mechanism. Budgeting & Forecasting listens via `@ApplicationModuleListener` and stores the aggregated People actuals it needs into its own tables — these become the "Actual" side of Plan vs. Actual for that period.
+
+Aggregated figures stored by Budgeting from the event: Billable/Bench/Support/Leadership/Management headcount and salary cost totals, per-BU billable HC and salary cost (for BU-level P&L), per-PU billable HC and salary cost. Period is referenced by month/year value — not a FK into People & Payroll's tables (cross-module boundary preserved per ADR-008).
+
+**Consequences**
+- (+) Finalisation is the natural, correct trigger — Budgeting should only work with finalised People data, not provisional open-period figures.
+- (+) Budgeting & Forecasting is independent after the event — no ongoing runtime dependency on People & Payroll for historical period queries.
+- (+) Dependency is strictly one-directional: People & Payroll fires and forgets; Budgeting listens and stores.
+- (+) Uses Spring Modulith's native event mechanism — consistent with ADR-008, no message broker needed.
+- (+) Aligns with ADR-007's note that scoped, lightweight domain events were explicitly not ruled out — this is exactly that use case.
+- (–) Budgeting stores a copy of aggregated People data — small duplication, justified by the decoupling benefit.
+- (–) If a finalised period is reopened and re-finalised with corrected data, Budgeting must handle the re-published event and update its stored actuals — needs explicit handling in the listener.
+
+**Alternatives considered**
+- Live query via `PeoplePayrollService.getPeriodSummary(periodId)` — rejected: creates ongoing runtime dependency, doesn't enforce the finalisation boundary, and complicates multi-period Plan vs. Actual queries that span many periods simultaneously.
+
+---
+
+## ADR-023: Snapshot Upload Warning Persistence for Import Preview
+
+**Status:** Accepted — July 2026
+
+**Context**
+The People REST API requires `POST /api/people/imports/{periodVersionId}/upload` to return unmapped/missing Excel columns and unrecognised BU codes as informational warnings, and `GET .../preview` to resurface those same warnings after upload. `snapshot_upload` previously stored only audit metadata (who, when, filename, row count) — not the column/BU diagnostics from the parse.
+
+**Decision**
+Add nullable TEXT columns on `snapshot_upload`: `unmapped_columns`, `missing_columns`, `unrecognized_bu_codes` (comma-separated values). Written at upload time; preview aggregates distinct values across all uploads for the period version. Warnings remain non-blocking (ADR-019 informational mapping gaps; Module 1 §9.4 BU validation as a surfaced gap, not a gate).
+
+**Consequences**
+- (+) Preview can show upload diagnostics without a separate session/cache store.
+- (+) Audit trail retains what Finance saw on each upload.
+- (–) Comma-separated TEXT is simple but not normalised — acceptable at current volume; can move to JSONB later if needed.
+
+**Alternatives considered**
+- In-memory / Redis session store for last-upload warnings — rejected: lost on restart, not attributable per upload.
+- Separate `snapshot_upload_warning` child table — deferred as overkill for MVP.
+
+---
+
+
+## ADR-024: Snapshot Detail Screen — All Three Import Types, No Original File Download
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+After uploading a snapshot file, Finance had no way to inspect the imported rows before building Master records. A mapping error or a wrong file would only be discovered after the Master build, requiring a re-upload. A snapshot detail screen was identified as a missing piece.
+ 
+**Decision**
+Add a `SnapshotDetailPage` accessible from two places: the upload result (Step 4) via "View imported rows" link, and Period Management via "View Snapshots" per import type per version. One shared backend endpoint: `GET /api/people/imports/{periodVersionId}/snapshots/{importType}` returns all rows for that version and import type plus snapshot_upload metadata (uploaded_by, uploaded_at, filename, row_count, warnings). Full table display (all rows loaded client-side, default page size 20, client-side search by Employee ID/Name). Columns differ by import type: Zoho People (Employee ID, Full Name, PU, BU, BU Code, Project Code, Billable Status, Job Level, Title, DOJ), Zoho Payroll (Employee No, Full Name, Gross Pay, Net Pay, CTC), Zoho People Exited (same as Zoho People + Last Working Day). Warning alerts (unmapped/missing columns, unrecognised BU codes) shown non-blocking per ADR-019.
+ 
+No original file download — the system stores only mapped fields (ADR-019), not raw Excel bytes. An export-back-to-Excel option was considered and explicitly deferred.
+ 
+For ZOHO_PEOPLE_EXITED: `employee_registry` needs a `last_updated_by_upload_id` nullable FK (V7 migration) so the detail screen can query which registry rows were updated by a specific upload.
+ 
+**Consequences**
+- (+) Finance can sanity-check imported data before committing to Master build.
+- (+) Warnings surfaced at detail time, not just at upload time.
+- (–) No original file download — acceptable since the stored data is the mapped extract, not the raw file.
+---
+ 
+## ADR-025: Date Format Configuration in General Settings
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Multiple screens display dates (snapshot upload dates, period labels, DOJ, exit dates, rate card effective dates). Hardcoding a format (e.g. DD MMM YYYY) in individual components creates inconsistency and makes format changes expensive. A configurable date format in General settings was identified as the right solution.
+ 
+**Decision**
+Add a date format setting to General configuration (owned by the General module per ADR-012). The setting stores a format string (e.g. `DD MMM YYYY`, `DD/MM/YYYY`, `MM/DD/YYYY`). The frontend reads this setting from `GET /api/general/config/date-format` on app load and stores it in a React context or global state — all date rendering across the app uses this format via a shared utility function `formatDate(date, format)` rather than inline formatting. Additional format types (time, month-only, fiscal year) are added to this config as the need arises — not invented upfront.
+ 
+**Consequences**
+- (+) Consistent date display across all screens from a single config point.
+- (+) Finance can change the display format without a code change.
+- (+) Shared utility function means format changes propagate everywhere automatically.
+- (–) Adds one API call on app load — negligible overhead.
+**Alternatives considered**
+- Hardcode DD MMM YYYY throughout — rejected: creates inconsistency and makes changes expensive.
+- Per-screen format configuration — rejected: overkill, no identified need for different formats on different screens.
+---
+
+## ADR-026: ZOHO_PAYROLL_FNF — Full & Final Payroll Sub-Type
+
+**Status:** Accepted — July 2026
+
+**Context**
+Exited-employee full-and-final settlements arrive as a separate Zoho Payroll export with the same column format as regular payroll but different business meaning. Finance needs to upload both independently while viewing and reconciling them together.
+
+**Decision**
+Add `ZOHO_PAYROLL_FNF` as a fourth import type (extends ADR-020). Same upload flow and column mapping mechanism as `ZOHO_PAYROLL`. `payroll_snapshot.import_type` distinguishes regular vs F&F rows. Re-upload of one sub-type replaces only that sub-type's rows for the period version. `SNAPSHOTS_UPLOADED` requires People snapshot plus at least one payroll upload (regular and/or F&F). Master build: unmatched F&F rows reconcile via Employee Registry — `EXITED` → `AUTO_MATCHED_EXITED`, `ACTIVE` or not found → `UNMATCHED`. Snapshot detail for either payroll path returns all payroll rows combined with per-row `importType`; Period Management shows a single "View Payroll" button.
+
+**Consequences**
+- (+) F&F settlements tracked separately without a second mapping format.
+- (+) Combined payroll detail view gives Finance one place to review all payroll rows.
+- (+) Same employee may appear in both regular and F&F uploads for one period version (unique on `period_version_id`, `employee_no`, `import_type` — V10 migration).
+
+**Revision (July 2026):** Initial constraint `(period_version_id, employee_no)` was relaxed to include `import_type` after Finance confirmed employees routinely appear in both regular payroll and F&F settlement for the same period.
+
+---
+
+## ADR-027: Customer Import — Excel Upload with User-Controlled Conflict Resolution
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Customers were added manually one by one. For initial data load (migrating from the existing Customer Code/Project Code spreadsheet) and bulk updates, an Excel import was identified as necessary.
+ 
+**Decision**
+Add customer import to Settings → Customer Management → Customers section. Two new buttons: "Download Sample File" (client-side SheetJS, no API — generates empty Excel with headers: Customer Code, Customer Name, Zoho Books Customer Ref, Lifecycle Status, DSO Days, Relationship Owner Employee ID) and "Import Customers" (multi-step modal flow). Import scope: Customer Master only — Project Codes import deferred. Conflict resolution is user-controlled: system detects conflicts via a pre-flight endpoint before import, shows conflicting codes, and asks user to choose SKIP or REPLACE. Defaults: Lifecycle Status → ACTIVE if blank/invalid, DSO Days → 30 if blank/invalid. Import response includes created/updated/skipped counts and per-row errors. Scope limited to Customer Master — Project Codes import deferred.
+ 
+**Consequences**
+- (+) Initial data load from existing spreadsheet is now self-service for Finance.
+- (+) User-controlled conflict resolution avoids silent overwrites.
+- (+) Sample file download ensures correct column names without documentation.
+- (–) Project Codes not included in this import — deferred to a later prompt.
+
+**Revision (July 2026):** Conflicts pre-flight endpoint implemented as `POST /api/customers/import/conflicts` (not GET) because browsers cannot send multipart file bodies on GET requests.
+
+---
+
+## ADR-028: Rate Card Import — Excel Upload with Active-Card Skip Rule
+
+**Status:** Accepted — July 2026
+
+**Context**
+Customer import (ADR-027) covers Customer Master initial load. Rate cards remain manual one-by-one entry. Finance needs bulk import of effective-dated rate cards from spreadsheet, consistent with ADR-015's single-currency-per-card model.
+
+**Decision**
+Add rate card import to Settings → Customer Management → Rate Cards section. Excel structure: one row per rate card line; rows grouped by Customer Code + Rate Card Name + Effective From. FLAT = one row (Job Level blank); TIERED = N rows per job level. Import creates rate cards only when the customer has no active card (`effective_to IS NULL`) — otherwise skips the group (does not supersede; unlike manual create). Unknown customer codes are row errors; customers are never created on the fly. Sample template served via `GET /api/customers/rate-cards/import/sample` (Apache POI). Response includes `skipped` detail list for UI filtering.
+
+**Consequences**
+- (+) Initial rate card load is self-service for Finance.
+- (+) Skip-when-active prevents silent overwrite of live billing terms during bulk import.
+- (+) Currency on card header, single `rate_amount` per line — consistent with ADR-015.
+- (–) Import cannot supersede an active card; Finance must close/replace manually or clear active card first.
+
+---
+
+## ADR-029: Internal BU Model — Phase 1
+
+**Status:** Accepted — July 2026
+
+**Context**
+Zoho People uses Business Unit values for both external clients and internal organisational units (Management, Leadership, Pool, L&D, Business Enabler Function). These internal BUs need to exist in Customer Master for BU validation during People snapshot upload, but must not appear alongside external clients in billing workflows. Billable classification incorrectly required IsDeliveryPU for billable flag, excluding legitimately billable Leadership members.
+
+**Decision**
+Add `customer.is_internal` flag; seed five internal BU customers (MGMT, LDSP, POOL, LND, BEF) via Flyway V11 (V10 already taken by payroll snapshot constraint). Add `master_record.billing_customer_code` — derived at master build from project code → customer_project_code lookup when IsBillable=true. Correct IsBillable rule to Billable Status=Y only (IsBench unchanged). `GET /api/customers?includeInternal=false` by default; Customers table shows internal BUs with distinct styling; rate card management disabled for internal BUs in Phase 1.
+
+**Consequences**
+- (+) Internal BU codes validate cleanly during People upload — no false unrecognised-BU warnings.
+- (+) Billable Leadership members correctly flagged IsBillable=true alongside IsLeadership=true.
+- (+) Billing client join key available on master records for future Revenue module.
+- (–) Rate cards not supported for internal BUs until a later phase.
+
+---
+
+
+## ADR-029: Internal BU Model — Phase 1 (is_internal flag on Customer, billing_customer_code on Master)
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Certain BUs in Zoho People are internal organisational units (Management, Leadership, Pool, Learning & Development, Business Enabler Function) with no corresponding external client. The existing model had no way to distinguish internal BUs from client BUs, causing: internal BU employees generating unrecognised BU warnings on import; Leadership members who are billable to clients being incorrectly excluded from IsBillable due to the IsDeliveryPU requirement; and no clean way to track internal BU salary % vs overall or derive which client a billable leadership member is billing to.
+ 
+**Decision — Phase 1**
+Three changes applied together:
+ 
+1. **`is_internal` flag on `customer` table.** Internal BUs get Customer Master records with `is_internal = true` — seeded: Management (MGMT), Leadership (LDSP), Pool (POOL), Learning & Development (LND), Business Enabler Function (BEF). This keeps every BU consistently mapped in Customer Management while making internal vs external distinction explicit. Internal customers are filtered out of all revenue-facing dropdowns and lists by default, with an optional "Show internal BUs" toggle.
+2. **`IsBillable` rule corrected.** Changed from `IsDeliveryPU=Y + Billable Status=Y + BU ≠ Management` to simply `Billable Status=Y`. A Leadership member with Billable Status=Y is genuinely billable to a client. IsDeliveryPU requirement removed from IsBillable specifically — retained for IsBench calculation only. Salary bucketing priority rule unchanged: Leadership bucket always wins for salary attribution regardless of IsBillable.
+3. **`billing_customer_code` added to `master_record`.** Derived by: employee.project_code → `customer_project_code.project_code` lookup → parent `customer.customer_code`. Stored as a soft reference (VARCHAR, no FK — cross-module boundary per ADR-008). Null for non-billable employees or where project code has no match. For single-product clients where BU Code = Project Code (e.g. Nexxa AI: NXAI = NXAI), the derivation works identically — no special handling needed.
+**Billing client derivation logic (confirmed):**
+`employee.project_code → customer_project_code → customer.customer_code` — not BU-based. BU is the organisational home; Project Code determines the billing client.
+ 
+**Phase 2 (deferred):**
+Correct the underlying model more explicitly — separating org-home from billing assignment more formally. May involve Zoho People model changes. Not yet specified.
+ 
+**Consequences**
+- (+) All three use cases resolved: internal BU salary % tracking, headcount including internal BUs, Leadership members correctly billable to clients.
+- (+) No Zoho People model changes needed — existing data (Billable Status + Project Code) is already correct.
+- (+) BU validation no longer generates false warnings for internal BU values.
+- (+) `billing_customer_code` on Master records enables Budgeting & Forecasting to correctly attribute billable leadership cost to the right client for BU-level P&L (Phase 2 consumer).
+- (–) Internal BUs as Customer records is a pragmatic Phase 1 compromise — not the cleanest long-term model (hence Phase 2).
+**Alternatives considered**
+- Separate `INTERNAL_BU` classification config type — rejected in favour of `is_internal` on Customer to keep all BU references in one place.
+- Using BU to derive billing client instead of Project Code — rejected: BU is org home, not billing assignment. Project Code is the correct join key into Customer Management.
+
+---
+
+## ADR-030: Master Record Data Quality Flags
+
+**Status:** Accepted — July 2026
+
+**Context**
+After ADR-029 introduced `billing_customer_code` derivation from project code, Finance needs visibility into master records where billing client cannot be resolved — missing project codes on external BUs, unregistered project codes, or billable employees with no derived billing client. These are data-quality issues in Zoho People or Customer Management, not reconciliation gaps.
+
+**Decision**
+Add nullable `master_record.data_quality_flags` (VARCHAR 500, comma-separated) populated at master build time. Flag values: `MISSING_PROJECT_CODE`, `PROJECT_CODE_NOT_FOUND`, `BILLING_CLIENT_UNRESOLVED`. External BU employees (customer `is_internal = false`) with blank project code get `MISSING_PROJECT_CODE`; external BU with unknown project code get `PROJECT_CODE_NOT_FOUND`; billable employees with null `billing_customer_code` get `BILLING_CLIENT_UNRESOLVED`. Internal BU employees with blank project code are normal — no flag. Exposed on `MasterRecordResponse` with derived `hasWarnings` boolean. Master Data UI shows warning indicator, filter, and summary card.
+
+**Consequences**
+- (+) Finance can quickly identify employees needing Zoho People corrections before period finalisation.
+- (+) Flags are persisted on master records for audit and downstream reporting.
+- (–) Flags are point-in-time at master build — rebuilding master refreshes them.
+
+---
+
+## ADR-031: Internal BU Customer Code Corrections
+
+**Status:** Accepted — July 2026
+
+**Context**
+V11 internal BU seeds had incorrect codes for some units (Leadership mis-coded as LND on early deployments; Business Enabler Function as BEF with singular name). Finance also needs to edit internal BU customer records (code, name, lifecycle status) from Customer Management settings.
+
+**Decision**
+Flyway V13 corrects `LND` → `LNDT` where LDSP does not already exist, and `BEF` → `BEFN` with name "Business Enabler Functions". `PUT /api/customers/{id}` allows `customerCode` updates for `is_internal = true` customers only. Frontend Customers table enables edit modal for internal BUs with simplified fields and an "Internal BU" tag.
+
+**Consequences**
+- (+) Internal BU codes align with Zoho People BU values.
+- (+) Finance can correct internal BU metadata without DB access.
+- (–) External client `customer_code` remains immutable after creation (spec §7).
+
+---
+
+## ADR-032: Customer Management Export and Project Code Import
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-027 and ADR-028 added Excel import for customers and rate cards. Finance needs round-trip export in the same column layout for backup, migration, and re-import. Project Codes import was deferred in ADR-027.
+
+**Decision**
+Add Apache POI Excel exports: `GET /api/customers/export`, `GET /api/customers/rate-cards/export`, `GET /api/customers/project-codes/export` — column layouts match import templates. Add project code import via `POST /api/customers/project-codes/import` with skip-existing behaviour (no conflict resolution). Rate card import sorts groups by Customer Code + Effective From ASC before processing so full-history re-import creates cards chronologically.
+
+**Consequences**
+- (+) Finance can export and re-import customer master data without manual reconstruction.
+- (+) Project code bulk load completes ADR-027 deferred scope.
+- (+) Historical rate card export + sorted re-import supports migration workflows.
 
 ---
 

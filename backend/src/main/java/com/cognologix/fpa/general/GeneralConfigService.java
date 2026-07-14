@@ -1,6 +1,7 @@
 package com.cognologix.fpa.general;
 
 import com.cognologix.fpa.general.repository.ConcentrationRiskConfigRepository;
+import com.cognologix.fpa.general.repository.GeneralConfigRepository;
 import com.cognologix.fpa.general.repository.FxRateRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -10,11 +11,12 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Public API surface for the General Configuration module (ADR-017/ADR-018).
  *
- * Owns: FX rates, concentration risk thresholds.
+ * Owns: FX rates, concentration risk thresholds, date format (ADR-025).
  * No dependency on any other bounded-context module — keeps the general module cycle-free.
  */
 @Service
@@ -22,8 +24,12 @@ import java.util.Optional;
 @Transactional(readOnly = true)
 public class GeneralConfigService {
 
+    public static final Set<String> ALLOWED_DATE_FORMATS =
+            Set.of("DD MMM YYYY", "DD/MM/YYYY", "MM/DD/YYYY");
+
     private final FxRateRepository fxRateRepository;
     private final ConcentrationRiskConfigRepository concentrationRiskConfigRepository;
+    private final GeneralConfigRepository generalConfigRepository;
 
     // ── FX Rates ─────────────────────────────────────────────────────────────
 
@@ -74,5 +80,30 @@ public class GeneralConfigService {
         var config = getConcentrationRiskConfig();
         config.setSingleClientThresholdPct(thresholdPct);
         return concentrationRiskConfigRepository.save(config);
+    }
+
+    // ── Date format (ADR-025) ─────────────────────────────────────────────────
+
+    public String getDateFormat() {
+        return generalConfigRepository.findById(GeneralConfig.DATE_FORMAT_KEY)
+                .map(GeneralConfig::getConfigValue)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Date format config not found — check V7 migration seed"));
+    }
+
+    @Transactional
+    public String updateDateFormat(String format) {
+        if (!ALLOWED_DATE_FORMATS.contains(format)) {
+            throw new GeneralBadRequestException(
+                    "Invalid date format. Allowed: " + ALLOWED_DATE_FORMATS);
+        }
+        GeneralConfig config = generalConfigRepository.findById(GeneralConfig.DATE_FORMAT_KEY)
+                .orElseGet(() -> {
+                    GeneralConfig c = new GeneralConfig();
+                    c.setConfigKey(GeneralConfig.DATE_FORMAT_KEY);
+                    return c;
+                });
+        config.setConfigValue(format);
+        return generalConfigRepository.save(config).getConfigValue();
     }
 }

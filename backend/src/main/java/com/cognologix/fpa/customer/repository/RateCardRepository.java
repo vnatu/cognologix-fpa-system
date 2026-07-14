@@ -26,4 +26,12 @@ public interface RateCardRepository extends JpaRepository<RateCard, UUID> {
             """)
     Optional<RateCard> findActiveOnDate(@Param("customerId") UUID customerId,
                                         @Param("asOf") LocalDate asOf);
+
+    @Query("""
+            SELECT DISTINCT rc FROM RateCard rc
+            JOIN FETCH rc.customer c
+            JOIN FETCH rc.lines
+            ORDER BY c.customerCode ASC, rc.effectiveFrom ASC
+            """)
+    List<RateCard> findAllForExport();
 }

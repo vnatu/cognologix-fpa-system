@@ -179,6 +179,35 @@ describe('CustomersSection', () => {
     });
   });
 
+  it('enables customer code edit for internal BUs', async () => {
+    const internalCustomer: CustomerSummary = {
+      id: 'uuid-internal',
+      customerCode: 'MGMT',
+      customerName: 'Management',
+      lifecycleStatus: 'ACTIVE',
+      internal: true,
+    };
+    mockFetch.mockResolvedValue([...MOCK_CUSTOMERS, internalCustomer]);
+    mockFetchOne.mockResolvedValue({
+      ...internalCustomer,
+      commercialTerms: { dsoDays: 0 },
+      projectCodes: [],
+    });
+
+    const user = userEvent.setup();
+    render(<CustomersSection onSelectCustomer={noop} />);
+    await waitFor(() => screen.getByText('Management'));
+
+    const editButtons = screen.getAllByRole('button', { name: /edit/i });
+    await user.click(editButtons[editButtons.length - 1]);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Internal BU')).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('MGMT')).not.toBeDisabled();
+    expect(within(dialog).queryByLabelText('Zoho Books Customer Ref')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('DSO Days')).not.toBeInTheDocument();
+  });
+
   it('calls updateCustomer when editing an existing customer', async () => {
     const user = userEvent.setup();
     render(<CustomersSection onSelectCustomer={noop} />);

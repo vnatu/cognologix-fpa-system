@@ -10,4 +10,8 @@ import java.util.UUID;
 public interface ClassificationConfigRepository extends JpaRepository<ClassificationConfig, UUID> {
 
     List<ClassificationConfig> findByConfigType(ClassificationConfigType configType);
+
+    boolean existsByConfigTypeAndValue(ClassificationConfigType configType, String value);
+
+    long countByConfigType(ClassificationConfigType configType);
 }

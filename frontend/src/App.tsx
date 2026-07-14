@@ -1,8 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { DateFormatProvider } from '@/context/DateFormatContext';
 import AppLayout from '@/layouts/AppLayout';
 import LoginPage from '@/pages/LoginPage';
 import DashboardPage from '@/pages/DashboardPage';
+import PeoplePayrollRoutes from '@/pages/people/PeoplePayrollRoutes';
 import SettingsPage from '@/pages/settings/SettingsPage';
 
 function ProtectedRoute({ element }: { element: React.ReactNode }) {
@@ -13,7 +15,8 @@ function ProtectedRoute({ element }: { element: React.ReactNode }) {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      <DateFormatProvider>
+        <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route
@@ -22,10 +25,12 @@ export default function App() {
           >
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="people-payroll/*" element={<PeoplePayrollRoutes />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
+      </DateFormatProvider>
     </AuthProvider>
   );
 }
