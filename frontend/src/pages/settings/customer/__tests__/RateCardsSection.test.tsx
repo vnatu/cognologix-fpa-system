@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { DateFormatProvider } from '@/context/DateFormatContext';
+import { AuthProvider } from '@/context/AuthContext';
 import * as api from '../api';
 import type { CustomerSummary, RateCard } from '../types';
 import RateCardsSection from '../RateCardsSection';
@@ -52,8 +54,17 @@ const mockCreateRateCard = vi.mocked(api.createRateCard);
 
 const noop = () => {};
 
+function renderWithDateFormat(ui: React.ReactElement) {
+  return render(
+    <AuthProvider>
+      <DateFormatProvider>{ui}</DateFormatProvider>
+    </AuthProvider>,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.setItem('fpa_token', 'test-token');
   mockFetchCustomers.mockResolvedValue(MOCK_CUSTOMERS);
   mockFetchRateCards.mockResolvedValue([ACTIVE_FLAT_CARD, TIERED_CARD]);
   mockCreateRateCard.mockResolvedValue(ACTIVE_FLAT_CARD);
@@ -64,35 +75,35 @@ const waitForCards = () => waitFor(() => screen.getByText('FY2526 Standard'));
 
 describe('RateCardsSection', () => {
   it('shows empty state when no customer is selected', async () => {
-    render(<RateCardsSection selectedCustomerId={null} onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId={null} onSelectCustomer={noop} />);
     await waitFor(() =>
       expect(screen.getByText(/select a customer to view/i)).toBeInTheDocument(),
     );
   });
 
   it('loads rate cards when a customer is pre-selected', async () => {
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitFor(() => expect(mockFetchRateCards).toHaveBeenCalledWith('uuid-1'));
     await waitForCards();
     expect(screen.getByText('FY2526 Tiered')).toBeInTheDocument();
   });
 
   it('displays card names and effective dates', async () => {
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
-    // Dates are rendered as "YYYY-MM-DD → present" or "YYYY-MM-DD → YYYY-MM-DD"
-    expect(screen.getByText(/2026-01-01/)).toBeInTheDocument();
-    expect(screen.getByText(/2025-01-01/)).toBeInTheDocument();
+    // Dates use configured format (default DD MMM YYYY)
+    expect(screen.getByText(/01 Jan 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/01 Jan 2025/)).toBeInTheDocument();
   });
 
   it('shows Active tag for the card with no effectiveTo', async () => {
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
 
   it('renders flat rate card with rate column and currency in header', async () => {
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
     expect(screen.getAllByText(/150,000/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('INR').length).toBeGreaterThan(0);
@@ -100,7 +111,7 @@ describe('RateCardsSection', () => {
   });
 
   it('renders tiered rate card with job level column', async () => {
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
     expect(screen.getByText('L3')).toBeInTheDocument();
     expect(screen.getByText('L4')).toBeInTheDocument();
@@ -117,7 +128,7 @@ describe('RateCardsSection', () => {
         ],
       },
     ]);
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitFor(() => screen.getByText('FY2526 Tiered'));
 
     const rows = screen.getAllByRole('row');
@@ -127,7 +138,7 @@ describe('RateCardsSection', () => {
   });
 
   it('"New Rate Card" button is disabled when no customer is selected', async () => {
-    render(<RateCardsSection selectedCustomerId={null} onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId={null} onSelectCustomer={noop} />);
     const btn = await waitFor(() =>
       screen.getByRole('button', { name: /new rate card/i }),
     );
@@ -136,7 +147,7 @@ describe('RateCardsSection', () => {
 
   it('opens New Rate Card modal when button clicked with customer selected', async () => {
     const user = userEvent.setup();
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
 
     await user.click(screen.getByRole('button', { name: /new rate card/i }));
@@ -147,7 +158,7 @@ describe('RateCardsSection', () => {
 
   it('modal has Name, Type, Currency, and Effective From fields', async () => {
     const user = userEvent.setup();
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
 
     await user.click(screen.getByRole('button', { name: /new rate card/i }));
@@ -163,7 +174,7 @@ describe('RateCardsSection', () => {
 
   it('shows Blended Rate label for FLAT type (default)', async () => {
     const user = userEvent.setup();
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
 
     await user.click(screen.getByRole('button', { name: /new rate card/i }));
@@ -175,7 +186,7 @@ describe('RateCardsSection', () => {
 
   it('shows dynamic job-level rows for TIERED type', async () => {
     const user = userEvent.setup();
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
 
     await user.click(screen.getByRole('button', { name: /new rate card/i }));
@@ -199,7 +210,7 @@ describe('RateCardsSection', () => {
 
   it('cancelling the modal does not trigger a reload', async () => {
     const user = userEvent.setup();
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
 
     await user.click(screen.getByRole('button', { name: /new rate card/i }));
@@ -213,7 +224,7 @@ describe('RateCardsSection', () => {
   it('shows error notification when rate cards fail to load', async () => {
     mockFetchRateCards.mockRejectedValue(new Error('Network error'));
     const { notification } = await import('antd');
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitFor(() =>
       expect(notification.error).toHaveBeenCalledWith(
         expect.objectContaining({ message: 'Failed to load rate cards' }),
@@ -223,7 +234,7 @@ describe('RateCardsSection', () => {
 
   it('shows empty state when customer has no rate cards', async () => {
     mockFetchRateCards.mockResolvedValue([]);
-    render(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitFor(() =>
       expect(
         screen.getByText('No active rate card — create one below'),

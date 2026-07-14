@@ -39,6 +39,18 @@ public class SnapshotUpload {
     @Column(name = "row_count", nullable = false)
     private Integer rowCount;
 
+    /** Comma-separated Excel headers present in the file but not in the mapping template. */
+    @Column(name = "unmapped_columns", columnDefinition = "TEXT")
+    private String unmappedColumns;
+
+    /** Comma-separated mapping excel_column_names not found in the uploaded file. */
+    @Column(name = "missing_columns", columnDefinition = "TEXT")
+    private String missingColumns;
+
+    /** Comma-separated BU codes / names not recognised by Customer Management. */
+    @Column(name = "unrecognized_bu_codes", columnDefinition = "TEXT")
+    private String unrecognizedBuCodes;
+
     @PrePersist
     private void prePersist() {
         uploadedAt = Instant.now();

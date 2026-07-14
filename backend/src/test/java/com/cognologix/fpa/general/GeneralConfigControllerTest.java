@@ -21,7 +21,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(GeneralConfigController.class)
+@WebMvcTest(controllers = {GeneralConfigController.class, GeneralExceptionHandler.class})
 @Import(TestSecurityConfig.class)
 class GeneralConfigControllerTest {
 
@@ -110,6 +110,38 @@ class GeneralConfigControllerTest {
                 {"currencyPair":"USD_INR","rate":0,"effectiveFrom":"2026-01-01"}
                 """;
         mockMvc.perform(post("/api/general/fx-rates")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void getDateFormat_returnsOk() throws Exception {
+        when(generalConfigService.getDateFormat()).thenReturn("DD MMM YYYY");
+        mockMvc.perform(get("/api/general/config/date-format"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.format").value("DD MMM YYYY"));
+    }
+
+    @Test
+    void updateDateFormat_returnsOk() throws Exception {
+        when(generalConfigService.updateDateFormat("DD/MM/YYYY")).thenReturn("DD/MM/YYYY");
+        var body = """
+                {"format":"DD/MM/YYYY"}
+                """;
+        mockMvc.perform(put("/api/general/config/date-format")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.format").value("DD/MM/YYYY"));
+    }
+
+    @Test
+    void updateDateFormat_invalidFormat_returns400() throws Exception {
+        var body = """
+                {"format":"YYYY-MM-DD"}
+                """;
+        mockMvc.perform(put("/api/general/config/date-format")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest());

@@ -13,4 +13,6 @@ public interface ImportColumnMappingRepository extends JpaRepository<ImportColum
     List<ImportColumnMapping> findByImportType(ImportType importType);
 
     Optional<ImportColumnMapping> findByImportTypeAndActiveTrue(ImportType importType);
+
+    List<ImportColumnMapping> findByActiveTrue();
 }

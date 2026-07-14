@@ -2,6 +2,7 @@ package com.cognologix.fpa.customer;
 
 import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.domain.*;
+import com.cognologix.fpa.customer.dto.CustomerDetailResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,7 +44,7 @@ class CustomerControllerTest {
 
     @Test
     void listCustomers_returnsOk() throws Exception {
-        when(customerService.findAllCustomers()).thenReturn(List.of(sampleCustomer()));
+        when(customerService.findAllCustomers(false)).thenReturn(List.of(sampleCustomer()));
         mockMvc.perform(get("/api/customers"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].customerCode").value("ICERTI"));
@@ -63,10 +64,14 @@ class CustomerControllerTest {
                 .andExpect(jsonPath("$.customerCode").value("ICERTI"));
     }
 
+    private CustomerDetailResponse sampleCustomerDetail() {
+        return CustomerDetailResponse.from(sampleCustomer(), null, List.of());
+    }
+
     @Test
     void getCustomer_found_returnsOk() throws Exception {
         var id = UUID.fromString("00000000-0000-0000-0000-000000000001");
-        when(customerService.findById(id)).thenReturn(Optional.of(sampleCustomer()));
+        when(customerService.getCustomerDetail(id)).thenReturn(Optional.of(sampleCustomerDetail()));
         mockMvc.perform(get("/api/customers/{id}", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customerName").value("Icertis"));
@@ -74,7 +79,7 @@ class CustomerControllerTest {
 
     @Test
     void getCustomer_notFound_returns404() throws Exception {
-        when(customerService.findById(any())).thenReturn(Optional.empty());
+        when(customerService.getCustomerDetail(any())).thenReturn(Optional.empty());
         mockMvc.perform(get("/api/customers/{id}", UUID.randomUUID()))
                 .andExpect(status().isNotFound());
     }
@@ -82,8 +87,8 @@ class CustomerControllerTest {
     @Test
     void updateCustomer_returnsOk() throws Exception {
         var id = UUID.fromString("00000000-0000-0000-0000-000000000001");
-        when(customerService.updateCustomer(eq(id), any(), any(), any(), any()))
-                .thenReturn(sampleCustomer());
+        when(customerService.updateCustomer(eq(id), any(), any(), any(), any(), any()))
+                .thenReturn(sampleCustomerDetail());
         var body = """
                 {"lifecycleStatus":"AT_RISK"}
                 """;

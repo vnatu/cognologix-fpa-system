@@ -1,5 +1,6 @@
 package com.cognologix.fpa.customer;
 
+import com.cognologix.fpa.customer.domain.ConflictResolution;
 import com.cognologix.fpa.customer.domain.RateCardLine;
 import com.cognologix.fpa.customer.dto.*;
 import io.swagger.v3.oas.annotations.Operation;
@@ -7,8 +8,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.UUID;
@@ -24,9 +27,10 @@ public class CustomerController {
     // ── Customer Master ──────────────────────────────────────────────────────
 
     @GetMapping
-    @Operation(summary = "List all customers")
-    public List<CustomerSummaryResponse> listCustomers() {
-        return customerService.findAllCustomers().stream()
+    @Operation(summary = "List customers — external clients by default; pass includeInternal=true for internal BUs")
+    public List<CustomerSummaryResponse> listCustomers(
+            @RequestParam(defaultValue = "false") boolean includeInternal) {
+        return customerService.findAllCustomers(includeInternal).stream()
                 .map(CustomerSummaryResponse::from)
                 .toList();
     }
@@ -45,8 +49,7 @@ public class CustomerController {
     @GetMapping("/{id}")
     @Operation(summary = "Get customer detail")
     public ResponseEntity<CustomerDetailResponse> getCustomer(@PathVariable UUID id) {
-        return customerService.findById(id)
-                .map(CustomerDetailResponse::from)
+        return customerService.getCustomerDetail(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -57,10 +60,56 @@ public class CustomerController {
     public ResponseEntity<CustomerDetailResponse> updateCustomer(
             @PathVariable UUID id,
             @Valid @RequestBody UpdateCustomerRequest req) {
-        var updated = customerService.updateCustomer(
-                id, req.customerName(), req.lifecycleStatus(),
-                req.relationshipOwnerEmployeeId(), req.dsoDays());
-        return ResponseEntity.ok(CustomerDetailResponse.from(updated));
+        return ResponseEntity.ok(customerService.updateCustomer(
+                id, req.customerCode(), req.customerName(), req.lifecycleStatus(),
+                req.relationshipOwnerEmployeeId(), req.dsoDays()));
+    }
+
+    // ── Customer Import (ADR-027) ────────────────────────────────────────────
+
+    @GetMapping("/export")
+    @Operation(summary = "Export all customers (including internal BUs) as Excel")
+    public ResponseEntity<byte[]> exportCustomers() {
+        return excelAttachment(customerService.exportCustomers(), "customers_export.xlsx");
+    }
+
+    @PostMapping(value = "/import/conflicts", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Pre-flight check — which Customer Codes in the file already exist")
+    public CustomerImportConflictsResponse detectImportConflicts(@RequestPart("file") MultipartFile file) {
+        return customerService.detectImportConflicts(file);
+    }
+
+    @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import customers from Excel with SKIP or REPLACE conflict resolution")
+    public CustomerImportResponse importCustomers(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam ConflictResolution conflictResolution) {
+        return customerService.importCustomers(file, conflictResolution);
+    }
+
+    // ── Rate Card Import ─────────────────────────────────────────────────────
+
+    @GetMapping("/rate-cards/export")
+    @Operation(summary = "Export all rate cards (including historical) as Excel")
+    public ResponseEntity<byte[]> exportRateCards() {
+        return excelAttachment(customerService.exportRateCards(), "rate_cards_export.xlsx");
+    }
+
+    @GetMapping("/rate-cards/import/sample")
+    @Operation(summary = "Download rate card import template (headers only)")
+    public ResponseEntity<byte[]> downloadRateCardImportSample() {
+        byte[] content = customerService.buildRateCardImportSample();
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"rate_card_import_template.xlsx\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(content);
+    }
+
+    @PostMapping(value = "/rate-cards/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import rate cards from Excel — one row per rate card line")
+    public RateCardImportResponse importRateCards(@RequestPart("file") MultipartFile file) {
+        return customerService.importRateCards(file);
     }
 
     // ── Rate Cards ───────────────────────────────────────────────────────────
@@ -93,7 +142,29 @@ public class CustomerController {
         return ResponseEntity.status(HttpStatus.CREATED).body(RateCardResponse.from(card));
     }
 
-    // ── Project Codes ────────────────────────────────────────────────────────
+    // ── Project Codes (bulk) ─────────────────────────────────────────────────
+
+    @GetMapping("/project-codes/export")
+    @Operation(summary = "Export all project codes as Excel")
+    public ResponseEntity<byte[]> exportProjectCodes() {
+        return excelAttachment(customerService.exportProjectCodes(), "project_codes_export.xlsx");
+    }
+
+    @GetMapping("/project-codes/import/sample")
+    @Operation(summary = "Download project code import template (headers only)")
+    public ResponseEntity<byte[]> downloadProjectCodeImportSample() {
+        return excelAttachment(
+                customerService.buildProjectCodeImportSample(),
+                "project_codes_import_template.xlsx");
+    }
+
+    @PostMapping(value = "/project-codes/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import project codes from Excel — skips existing codes per customer")
+    public ProjectCodeImportResponse importProjectCodes(@RequestPart("file") MultipartFile file) {
+        return customerService.importProjectCodes(file);
+    }
+
+    // ── Project Codes (per customer) ─────────────────────────────────────────
 
     @GetMapping("/{id}/project-codes")
     @Operation(summary = "List project codes for a customer")
@@ -120,5 +191,13 @@ public class CustomerController {
             @PathVariable UUID codeId) {
         customerService.removeProjectCode(id, codeId);
         return ResponseEntity.noContent().build();
+    }
+
+    private static ResponseEntity<byte[]> excelAttachment(byte[] content, String filename) {
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(content);
     }
 }

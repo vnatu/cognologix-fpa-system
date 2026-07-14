@@ -4,5 +4,6 @@ public enum PeriodStatus {
     OPEN,
     SNAPSHOTS_UPLOADED,
     MASTER_BUILT,
-    FINALISED
+    FINALISED,
+    SUPERSEDED
 }

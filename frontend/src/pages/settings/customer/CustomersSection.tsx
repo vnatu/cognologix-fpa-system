@@ -11,8 +11,10 @@ import {
   Skeleton,
   Table,
   Tag,
+  Space,
+  theme,
 } from 'antd';
-import { PlusOutlined, EditOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, UploadOutlined, DownloadOutlined, ExportOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import {
@@ -20,8 +22,10 @@ import {
   fetchCustomer,
   createCustomer,
   updateCustomer,
+  exportCustomers,
 } from './api';
 import type { CustomerSummary, CustomerDetail, LifecycleStatus } from './types';
+import CustomerImportModal, { downloadCustomerImportTemplate } from './CustomerImportModal';
 
 const STATUS_COLOR: Record<LifecycleStatus, string> = {
   ACTIVE: 'green',
@@ -51,17 +55,20 @@ interface FormValues {
 }
 
 export default function CustomersSection({ onSelectCustomer }: Props) {
+  const { token } = theme.useToken();
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingInternal, setEditingInternal] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [form] = Form.useForm<FormValues>();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setCustomers(await fetchCustomers());
+      setCustomers(await fetchCustomers(true));
     } catch {
       notification.error({ message: 'Failed to load customers' });
     } finally {
@@ -73,14 +80,17 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
 
   const openAdd = () => {
     setEditingId(null);
+    setEditingInternal(false);
     setModalOpen(true);
   };
 
-  const openEdit = async (id: string) => {
+  const openEdit = async (id: string, internal = false) => {
     setEditingId(id);
+    setEditingInternal(internal);
     setModalOpen(true);
     try {
       const detail: CustomerDetail = await fetchCustomer(id);
+      setEditingInternal(detail.internal === true);
       form.setFieldsValue({
         customerCode: detail.customerCode,
         customerName: detail.customerName,
@@ -104,12 +114,19 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
     setSaving(true);
     try {
       if (editingId) {
-        await updateCustomer(editingId, {
-          customerName: values.customerName,
-          lifecycleStatus: values.lifecycleStatus,
-          relationshipOwnerEmployeeId: values.relationshipOwnerEmployeeId,
-          dsoDays: values.dsoDays,
-        });
+        const payload = editingInternal
+          ? {
+              customerCode: values.customerCode,
+              customerName: values.customerName,
+              lifecycleStatus: values.lifecycleStatus,
+            }
+          : {
+              customerName: values.customerName,
+              lifecycleStatus: values.lifecycleStatus,
+              relationshipOwnerEmployeeId: values.relationshipOwnerEmployeeId,
+              dsoDays: values.dsoDays,
+            };
+        await updateCustomer(editingId, payload);
         notification.success({ message: 'Customer updated' });
       } else {
         await createCustomer({
@@ -146,6 +163,17 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
       key: 'customerName',
     },
     {
+      title: 'Type',
+      key: 'type',
+      width: 100,
+      render: (_: unknown, row: CustomerSummary) =>
+        row.internal ? (
+          <Tag>Internal</Tag>
+        ) : (
+          <Tag color="processing">Client</Tag>
+        ),
+    },
+    {
       title: 'Lifecycle Status',
       dataIndex: 'lifecycleStatus',
       key: 'lifecycleStatus',
@@ -171,7 +199,7 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
           icon={<EditOutlined />}
           onClick={(e) => {
             e.stopPropagation();
-            openEdit(row.id);
+            openEdit(row.id, row.internal === true);
           }}
         >
           Edit
@@ -196,14 +224,28 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
             fontWeight: 700,
             fontSize: 16,
             margin: 0,
-            color: '#232323',
           }}
         >
           Customers
         </h3>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
-          Add Customer
-        </Button>
+        <Space>
+          <Button icon={<ExportOutlined />} onClick={() => {
+            exportCustomers().catch(() =>
+              notification.error({ message: 'Failed to export customers' }),
+            );
+          }}>
+            Export Customers
+          </Button>
+          <Button icon={<DownloadOutlined />} onClick={downloadCustomerImportTemplate}>
+            Download Sample File
+          </Button>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+            Import Customers
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+            Add Customer
+          </Button>
+        </Space>
       </div>
 
       {loading ? (
@@ -215,10 +257,13 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
           rowKey="id"
           size="small"
           onRow={(row) => ({
-            style: { cursor: 'pointer' },
+            style: {
+              cursor: 'pointer',
+              ...(row.internal ? { background: token.colorBgLayout } : {}),
+            },
             onClick: () => {
               onSelectCustomer(row.id);
-              openEdit(row.id);
+              openEdit(row.id, row.internal === true);
             },
           })}
           locale={{
@@ -248,13 +293,19 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
         destroyOnHidden
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          {editingInternal && (
+            <Tag color="gold" style={{ marginBottom: 16 }}>
+              Internal BU
+            </Tag>
+          )}
+
           <Form.Item
             name="customerCode"
             label="Customer Code"
             rules={[{ required: true, message: 'Customer code is required' }]}
           >
             <Input
-              disabled={!!editingId}
+              disabled={!!editingId && !editingInternal}
               placeholder="e.g. ICERTI"
               maxLength={50}
             />
@@ -268,12 +319,14 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
             <Input placeholder="e.g. Icertis" maxLength={255} />
           </Form.Item>
 
-          <Form.Item
-            name="zohoBooksCustomerRef"
-            label="Zoho Books Customer Ref"
-          >
-            <Input placeholder="External reference from Zoho Books" maxLength={100} />
-          </Form.Item>
+          {!editingInternal && (
+            <Form.Item
+              name="zohoBooksCustomerRef"
+              label="Zoho Books Customer Ref"
+            >
+              <Input placeholder="External reference from Zoho Books" maxLength={100} />
+            </Form.Item>
+          )}
 
           <Form.Item
             name="lifecycleStatus"
@@ -283,24 +336,34 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
             <Select options={STATUS_OPTIONS} placeholder="Select status" />
           </Form.Item>
 
-          <Form.Item
-            name="relationshipOwnerEmployeeId"
-            label="Relationship Owner Employee ID"
-            extra="EmployeeID from the People & Payroll registry"
-          >
-            <Input placeholder="e.g. EMP0042" maxLength={50} />
-          </Form.Item>
+          {!editingInternal && (
+            <>
+              <Form.Item
+                name="relationshipOwnerEmployeeId"
+                label="Relationship Owner Employee ID"
+                extra="EmployeeID from the People & Payroll registry"
+              >
+                <Input placeholder="e.g. EMP0042" maxLength={50} />
+              </Form.Item>
 
-          <Form.Item name="dsoDays" label="DSO Days">
-            <InputNumber
-              min={0}
-              max={365}
-              placeholder="e.g. 45"
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
+              <Form.Item name="dsoDays" label="DSO Days">
+                <InputNumber
+                  min={0}
+                  max={365}
+                  placeholder="e.g. 45"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </>
+          )}
         </Form>
       </Modal>
+
+      <CustomerImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={load}
+      />
     </div>
   );
 }

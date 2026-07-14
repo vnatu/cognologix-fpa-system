@@ -55,4 +55,18 @@ public class GeneralConfigController {
         var updated = generalConfigService.updateSingleClientThreshold(req.singleClientThresholdPct());
         return ConcentrationRiskConfigResponse.from(updated);
     }
+
+    // ── Date format (ADR-025) ─────────────────────────────────────────────────
+
+    @GetMapping("/config/date-format")
+    @Operation(summary = "Get the configured date display format")
+    public DateFormatResponse getDateFormat() {
+        return new DateFormatResponse(generalConfigService.getDateFormat());
+    }
+
+    @PutMapping("/config/date-format")
+    @Operation(summary = "Update the date display format")
+    public DateFormatResponse updateDateFormat(@Valid @RequestBody UpdateDateFormatRequest req) {
+        return new DateFormatResponse(generalConfigService.updateDateFormat(req.format()));
+    }
 }

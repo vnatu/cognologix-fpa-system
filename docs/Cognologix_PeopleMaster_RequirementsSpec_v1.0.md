@@ -195,7 +195,7 @@ Every employee, in every period, is classified into exactly one of five mutually
 | **Flag**     | **Rule**                                                               | **Notes**                                      |
 |--------------|------------------------------------------------------------------------|------------------------------------------------|
 | IsDeliveryPU | PU = Product Engineering OR DevOps OR Data & AI                        | Identifies delivery vs support function        |
-| IsBillable   | IsDeliveryPU=Y + Billable Status=Y + BU ≠ Management                   | Leadership CAN be billable if in a delivery PU |
+| IsBillable   | Billable Status=Y                                                        | Leadership members with Billable Status=Y are correctly classified as both IsLeadership=true and IsBillable=true simultaneously. Salary bucketing priority rule (Leadership bucket wins) remains unchanged. |
 | IsBench      | IsDeliveryPU=Y + Billable Status=N + BU ≠ Management + BU ≠ Leadership | Delivery resources without an active client    |
 | IsSupport    | IsDeliveryPU=N + BU ≠ Management + BU ≠ Leadership                     | HR, IT, Admin, Finance                         |
 | IsLeadership | BU = Leadership                                                        | Senior Management (6 persons)                  |

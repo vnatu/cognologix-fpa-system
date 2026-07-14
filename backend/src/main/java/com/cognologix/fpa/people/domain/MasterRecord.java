@@ -81,6 +81,14 @@ public class MasterRecord {
     @Column(name = "reconciliation_status", nullable = false, length = 25)
     private ReconciliationStatus reconciliationStatus;
 
+    /** Billing client derived from project code lookup when employee is billable (ADR-029). */
+    @Column(name = "billing_customer_code", length = 100)
+    private String billingCustomerCode;
+
+    /** Comma-separated data quality flags (e.g. MISSING_PROJECT_CODE). Null when no issues. */
+    @Column(name = "data_quality_flags", length = 500)
+    private String dataQualityFlags;
+
     @Column(name = "built_at", nullable = false, updatable = false)
     private Instant builtAt;
 

@@ -11,12 +11,13 @@ public record CustomerSummaryResponse(
         String customerName,
         String zohoBooksCustomerRef,
         String relationshipOwnerEmployeeId,
-        LifecycleStatus lifecycleStatus
+        LifecycleStatus lifecycleStatus,
+        boolean internal
 ) {
     public static CustomerSummaryResponse from(Customer c) {
         return new CustomerSummaryResponse(
                 c.getId(), c.getCustomerCode(), c.getCustomerName(),
                 c.getZohoBooksCustomerRef(), c.getRelationshipOwnerEmployeeId(),
-                c.getLifecycleStatus());
+                c.getLifecycleStatus(), c.isInternal());
     }
 }

@@ -9,4 +9,6 @@ import java.util.UUID;
 public interface PeriodVersionRepository extends JpaRepository<PeriodVersion, UUID> {
 
     List<PeriodVersion> findByPeriodIdOrderByVersionNumberDesc(UUID periodId);
+
+    List<PeriodVersion> findByPeriodIdAndLatestFinalisedTrue(UUID periodId);
 }

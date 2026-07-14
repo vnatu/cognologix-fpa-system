@@ -8,7 +8,9 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "payroll_snapshot",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"period_version_id", "employee_no"}))
+        uniqueConstraints = @UniqueConstraint(
+                name = "payroll_snapshot_period_version_employee_import_type_key",
+                columnNames = {"period_version_id", "employee_no", "import_type"}))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -27,6 +29,11 @@ public class PayrollSnapshot {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "period_version_id", nullable = false)
     private PeriodVersion periodVersion;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "import_type", nullable = false, length = 30)
+    @Builder.Default
+    private ImportType importType = ImportType.ZOHO_PAYROLL;
 
     @Column(name = "employee_no", nullable = false, length = 100)
     private String employeeNo;

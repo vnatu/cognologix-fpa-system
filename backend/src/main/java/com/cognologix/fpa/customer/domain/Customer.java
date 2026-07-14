@@ -43,6 +43,11 @@ public class Customer {
     @Column(name = "lifecycle_status", nullable = false, length = 20)
     private LifecycleStatus lifecycleStatus;
 
+    /** Internal BU codes (MGMT, LDSP, POOL, LND, BEF) — not external billing clients (ADR-029). */
+    @Column(name = "is_internal", nullable = false)
+    @Builder.Default
+    private boolean internal = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

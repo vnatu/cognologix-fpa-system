@@ -15,12 +15,15 @@ import {
   Table,
   Tag,
   Typography,
+  Checkbox,
 } from 'antd';
-import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, MinusCircleOutlined, DownloadOutlined, UploadOutlined, ExportOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
+import { useDateFormat } from '@/context/DateFormatContext';
 import { HEADING_FONT } from '@/theme/antdTheme';
-import { fetchCustomers, fetchRateCards, createRateCard } from './api';
+import { fetchCustomers, fetchRateCards, createRateCard, downloadRateCardImportSample, exportRateCards } from './api';
+import RateCardImportModal from './RateCardImportModal';
 import type {
   CustomerSummary,
   RateCard,
@@ -69,20 +72,26 @@ export default function RateCardsSection({
   onSelectCustomer,
 }: Props) {
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
+  const [showInternal, setShowInternal] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(true);
   const [rateCards, setRateCards] = useState<RateCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm<FormValues>();
   const rateCardType = Form.useWatch('rateCardType', form);
 
   useEffect(() => {
-    fetchCustomers()
+    setCustomersLoading(true);
+    fetchCustomers(showInternal)
       .then(setCustomers)
       .catch(() => notification.error({ message: 'Failed to load customers' }))
       .finally(() => setCustomersLoading(false));
-  }, []);
+  }, [showInternal]);
+
+  const selectedCustomer = customers.find((c) => c.id === selectedCustomerId);
+  const isInternalSelected = selectedCustomer?.internal === true;
 
   const loadRateCards = useCallback(async (customerId: string) => {
     setLoading(true);
@@ -161,42 +170,91 @@ export default function RateCardsSection({
             fontWeight: 700,
             fontSize: 16,
             margin: 0,
-            color: '#232323',
           }}
         >
           Rate Cards
         </h3>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={openModal}
-          disabled={!selectedCustomerId}
-        >
-          New Rate Card
-        </Button>
+        <Space>
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => {
+              exportRateCards().catch(() =>
+                notification.error({ message: 'Failed to export rate cards' }),
+              );
+            }}
+          >
+            Export Rate Cards
+          </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => {
+              downloadRateCardImportSample().catch(() =>
+                notification.error({ message: 'Failed to download sample file' }),
+              );
+            }}
+          >
+            Download Sample File
+          </Button>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+            Import Rate Cards
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={openModal}
+            disabled={!selectedCustomerId || isInternalSelected}
+          >
+            New Rate Card
+          </Button>
+        </Space>
       </div>
 
       {customersLoading ? (
         <Skeleton active paragraph={{ rows: 1 }} />
       ) : (
-        <Form.Item label="Customer" style={{ marginBottom: 20, maxWidth: 360 }}>
-          <Select
-            showSearch
-            placeholder="Select a customer"
-            value={selectedCustomerId ?? undefined}
-            onChange={onSelectCustomer}
-            options={customers.map((c) => ({
-              label: `${c.customerCode} — ${c.customerName}`,
-              value: c.id,
-            }))}
-            filterOption={(input, option) =>
-              (option?.label as string).toLowerCase().includes(input.toLowerCase())
-            }
-          />
-        </Form.Item>
+        <>
+          <Checkbox
+            checked={showInternal}
+            onChange={(e) => setShowInternal(e.target.checked)}
+            style={{ marginBottom: 12 }}
+          >
+            Show internal BUs
+          </Checkbox>
+          <Form.Item label="Customer" style={{ marginBottom: 20, maxWidth: 360 }}>
+            <Select
+              showSearch
+              placeholder="Select a customer"
+              value={selectedCustomerId ?? undefined}
+              onChange={onSelectCustomer}
+              options={customers.map((c) => ({
+                label: (
+                  <span>
+                    {c.customerCode} — {c.customerName}
+                    {c.internal ? (
+                      <Tag style={{ marginLeft: 8 }}>Internal</Tag>
+                    ) : null}
+                  </span>
+                ),
+                value: c.id,
+              }))}
+              filterOption={(input, option) => {
+                const c = customers.find((x) => x.id === option?.value);
+                if (!c) return false;
+                return `${c.customerCode} ${c.customerName}`
+                  .toLowerCase()
+                  .includes(input.toLowerCase());
+              }}
+            />
+          </Form.Item>
+        </>
       )}
 
-      {!selectedCustomerId ? (
+      {isInternalSelected ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="Rate cards are not managed for internal BUs in Phase 1"
+        />
+      ) : !selectedCustomerId ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description="Select a customer to view their rate cards"
@@ -349,6 +407,15 @@ export default function RateCardsSection({
           )}
         </Form>
       </Modal>
+
+      <RateCardImportModal
+        open={importOpen}
+        customers={customers}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          if (selectedCustomerId) loadRateCards(selectedCustomerId);
+        }}
+      />
     </div>
   );
 }
@@ -360,6 +427,7 @@ interface RateCardCardProps {
 }
 
 function RateCardCard({ card }: RateCardCardProps) {
+  const { formatDate } = useDateFormat();
   const isActive = !card.effectiveTo;
   const sortedLines = [...card.lines].sort((a, b) => a.rateAmount - b.rateAmount);
 
@@ -427,8 +495,10 @@ function RateCardCard({ card }: RateCardCardProps) {
         </Text>
         <Tag style={{ margin: 0 }}>{card.currency}</Tag>
         <Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
-          {card.effectiveFrom}
-          {card.effectiveTo ? ` → ${card.effectiveTo}` : ' → present'}
+          {formatDate(card.effectiveFrom)}
+          {card.effectiveTo
+            ? ` → ${formatDate(card.effectiveTo)}`
+            : ' → present'}
         </Text>
       </div>
 
