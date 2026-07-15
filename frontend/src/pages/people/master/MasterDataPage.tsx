@@ -73,7 +73,10 @@ export default function MasterDataPage() {
     initialStatus ? [initialStatus as ReconciliationStatus] : [],
   );
   const [classificationFilter, setClassificationFilter] = useState<string[]>([]);
-  const [buFilter, setBuFilter] = useState<string[]>([]);
+  const initialBu = searchParams.get('bu');
+  const [buFilter, setBuFilter] = useState<string[]>(
+    initialBu ? [initialBu] : [],
+  );
   const [warningsOnlyFilter, setWarningsOnlyFilter] = useState(
     searchParams.get('hasWarnings') === 'true',
   );
@@ -93,6 +96,10 @@ export default function MasterDataPage() {
     }
     if (searchParams.get('hasWarnings') === 'true') {
       setWarningsOnlyFilter(true);
+    }
+    const bu = searchParams.get('bu');
+    if (bu) {
+      setBuFilter([bu]);
     }
   }, [searchParams]);
 

@@ -79,6 +79,11 @@
       <groupId>org.springframework.modulith</groupId>
       <artifactId>spring-modulith-starter-core</artifactId>
     </dependency>
+    <!-- @ApplicationModuleListener (ADR-022 cross-module PeriodFinalisedEvent) -->
+    <dependency>
+      <groupId>org.springframework.modulith</groupId>
+      <artifactId>spring-modulith-events-api</artifactId>
+    </dependency>
     <!-- Validation -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

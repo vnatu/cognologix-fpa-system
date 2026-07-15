@@ -876,22 +876,26 @@ public class PeoplePayrollService {
 
     private PeriodFinalisedEvent buildPeriodFinalisedEvent(PeriodVersion version) {
         MasterSummary summary = summarizeMaster(version.getId());
-        Map<String, Integer> hcByBu = summary.buBreakdown().stream()
-                .collect(Collectors.toMap(BuBreakdown::businessUnit, BuBreakdown::billableHc, Integer::sum));
-        BigDecimal totalPay = summary.billableGrossPay()
-                .add(summary.benchGrossPay())
-                .add(summary.supportGrossPay())
-                .add(summary.leadershipGrossPay())
-                .add(summary.managementGrossPay());
+        List<PeriodFinalisedEvent.BuPeriodActual> buActuals = summary.buBreakdown().stream()
+                .map(b -> new PeriodFinalisedEvent.BuPeriodActual(
+                        b.businessUnit(), b.billableHc(), b.totalGrossPay()))
+                .toList();
+        Period period = version.getPeriod();
         return new PeriodFinalisedEvent(
                 version.getId(),
+                period.getPeriodMonth(),
+                period.getPeriodYear(),
                 summary.billableHc(),
                 summary.benchHc(),
                 summary.supportHc(),
                 summary.leadershipHc(),
                 summary.managementHc(),
-                totalPay,
-                hcByBu);
+                summary.billableGrossPay(),
+                summary.benchGrossPay(),
+                summary.supportGrossPay(),
+                summary.leadershipGrossPay(),
+                summary.managementGrossPay(),
+                buActuals);
     }
 
     private void validateNoDuplicateEmployeeKeys(ImportType importType, List<Map<String, String>> rows) {

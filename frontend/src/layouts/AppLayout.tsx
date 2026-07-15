@@ -7,6 +7,7 @@ import {
   LogoutOutlined,
   TeamOutlined,
   ShopOutlined,
+  FundProjectionScreenOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import AppLogo from '@/components/AppLogo';
@@ -22,6 +23,11 @@ const NAV_ITEMS = [
     icon: <ShopOutlined />,
     label: 'Customer Management',
   },
+  {
+    key: '/budgeting',
+    icon: <FundProjectionScreenOutlined />,
+    label: 'Budgeting & Forecasting',
+  },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -35,6 +41,10 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
     title: 'Customer Management',
     subtitle: 'Customers, rate cards & project codes',
   },
+  '/budgeting': {
+    title: 'Budgeting & Forecasting',
+    subtitle: 'AOP plan, rolling forecast & Plan vs Actual',
+  },
   '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
 };
 
@@ -44,12 +54,14 @@ function resolveTopbarMeta(pathname: string) {
   if (pathname.startsWith('/customer-management')) {
     return TOPBAR_META['/customer-management'];
   }
+  if (pathname.startsWith('/budgeting')) return TOPBAR_META['/budgeting'];
   return { title: '', subtitle: '' };
 }
 
 function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/people-payroll')) return '/people-payroll';
   if (pathname.startsWith('/customer-management')) return '/customer-management';
+  if (pathname.startsWith('/budgeting')) return '/budgeting';
   return pathname;
 }
 
@@ -63,7 +75,6 @@ export default function AppLayout() {
 
   return (
     <Layout style={{ height: '100vh' }}>
-      {/* ── Top header bar — Black #232323 per ADR-013 ── */}
       <Header
         style={{
           display: 'flex',
@@ -73,10 +84,8 @@ export default function AppLayout() {
           position: 'sticky',
           top: 0,
           zIndex: 100,
-          // Ant Design Layout.headerBg token handles the #232323 background
         }}
       >
-        {/* Logo — dark variant: gradient glyph + white wordmark */}
         <AppLogo variant="dark" height={28} />
 
         <Space>
@@ -110,7 +119,6 @@ export default function AppLayout() {
       </Header>
 
       <Layout>
-        {/* ── Sidebar — white, light variant ── */}
         <Sider
           collapsible
           collapsed={collapsed}
@@ -118,7 +126,6 @@ export default function AppLayout() {
           width={220}
           style={{ background: '#ffffff', borderRight: '1px solid #d8d8d8' }}
         >
-          {/* Logo sub-label */}
           {!collapsed && (
             <div
               style={{
@@ -127,7 +134,6 @@ export default function AppLayout() {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {/* Glyph-only logo on light sidebar */}
                 <AppLogo variant="light" height={22} showWordmark={false} />
                 <div>
                   <div
@@ -156,6 +162,8 @@ export default function AppLayout() {
                 navigate('/people-payroll/imports/zoho-people');
               } else if (key === '/customer-management') {
                 navigate('/customer-management/customers');
+              } else if (key === '/budgeting') {
+                navigate('/budgeting/dashboard');
               } else {
                 navigate(key);
               }
@@ -163,11 +171,10 @@ export default function AppLayout() {
             style={{ border: 'none', marginTop: 8 }}
           />
 
-          {/* User footer */}
           <div
             style={{
               position: 'absolute',
-              bottom: 48, // above the collapse trigger
+              bottom: 48,
               left: 0,
               right: 0,
               padding: '10px 14px',
@@ -215,7 +222,6 @@ export default function AppLayout() {
           </div>
         </Sider>
 
-        {/* ── Main content — Light BG #f7f6f4 ── */}
         <Content style={{ overflow: 'auto', background: '#f7f6f4' }}>
           <Outlet />
         </Content>

@@ -22,6 +22,6 @@ class ModularityTest {
 
         assertThat(names)
                 .as("Spring Modulith must detect all bounded-context modules")
-                .contains("people", "customer", "general");
+                .contains("people", "customer", "general", "budgeting");
     }
 }
