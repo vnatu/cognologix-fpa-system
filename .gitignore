@@ -8,6 +8,8 @@ backend/.mvn/repository/
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/.pnpm-store/
+.pnpm-store/
 
 # Environment
 .env

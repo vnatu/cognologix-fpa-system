@@ -338,7 +338,17 @@ export default function PeopleDashboardPage() {
   const clientColumns: ColumnsType<
     DashboardSummary['clientBreakdown'][number]
   > = [
-    { title: 'Client', dataIndex: 'businessUnit', key: 'businessUnit' },
+    {
+      title: 'Client',
+      dataIndex: 'businessUnit',
+      key: 'businessUnit',
+      render: (name: string, row) =>
+        row.customerCode ? (
+          <Link to="/customer-management/customers">{name}</Link>
+        ) : (
+          name
+        ),
+    },
     { title: 'Total HC', dataIndex: 'totalHc', key: 'totalHc', align: 'right' },
     {
       title: 'Billable HC',

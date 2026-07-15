@@ -12,8 +12,11 @@ import {
 } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { HEADING_FONT } from '@/theme/antdTheme';
-import { fetchConcentrationRiskConfig, updateConcentrationRiskConfig } from './api';
-import type { ConcentrationRiskConfig } from './types';
+import {
+  fetchConcentrationRiskConfig,
+  updateConcentrationRiskConfig,
+} from '@/pages/customers/api';
+import type { ConcentrationRiskConfig } from '@/pages/customers/types';
 
 const { Text, Paragraph } = Typography;
 

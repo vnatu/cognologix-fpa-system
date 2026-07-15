@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { DateFormatProvider } from '@/context/DateFormatContext';
@@ -165,11 +165,10 @@ describe('RateCardsSection', () => {
     const dialog = await screen.findByRole('dialog');
 
     // Scope to dialog to avoid collision with table column headers
-    const { getByText } = await import('@testing-library/dom');
-    expect(getByText(dialog, 'Rate Card Name')).toBeInTheDocument();
-    expect(getByText(dialog, 'Rate Card Type')).toBeInTheDocument();
-    expect(getByText(dialog, 'Currency')).toBeInTheDocument();
-    expect(getByText(dialog, 'Effective From')).toBeInTheDocument();
+    expect(within(dialog).getByText('Rate Card Name')).toBeInTheDocument();
+    expect(within(dialog).getByText('Rate Card Type')).toBeInTheDocument();
+    expect(within(dialog).getByText('Currency')).toBeInTheDocument();
+    expect(within(dialog).getByText('Effective From')).toBeInTheDocument();
   });
 
   it('shows Blended Rate label for FLAT type (default)', async () => {
