@@ -816,4 +816,78 @@ Module 2 §6 and the original `no_overlapping_rate_cards` exclusion constraint a
 - (–) Active project-code exclusivity depends on service validation; concurrent inserts without locking could race (acceptable at Finance-user scale).
 ---
  
+ ## ADR-036: Rate Card to Project Code — Many-to-Many via Join Table
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+ADR-035/V16 added a single `project_code_id` nullable FK on `rate_card`. In practice, a single rate card often covers multiple project codes for the same customer (e.g. Icertis has 4 project codes — ENGN, CLOUD_OPS, DEV_OPS, AI_ML — all on one rate card). One-to-one is too restrictive.
+ 
+**Decision**
+Replace `rate_card.project_code_id` with a `rate_card_project_code` join table (V17 migration). Many-to-many: one rate card → many project codes; one project code → one active rate card per customer at a time (enforced at application layer, not DB constraint, since active state lives on `rate_card.effective_to`). Conflict validation in `CustomerService`: creating/versioning a rate card returns 409 if any requested project code is already assigned to another active rate card for that customer. `findActiveRateCardForProjectCode()` queries via join. Blended rate cards = no join rows. Export/import: project codes as semicolon-separated list per rate card row. Frontend: multi-select for project codes; rate cards grouped by card (not by project code); project codes shown as tags.
+ 
+**Three rate card types:**
+- **Multi-project** — associated with 2+ project codes
+- **Single-project** — associated with exactly 1 project code
+- **Blended** — no project codes (one active per customer)
+**Revenue lookup (for future Revenue module):**
+`employee.project_code → rate_card_project_code → rate_card (active on period date)`. If no project-scoped card found → fall back to blended rate card for that customer.
+ 
+**Consequences**
+- (+) Correctly models real-world billing where one rate applies across multiple projects.
+- (+) Revenue module has a clean, unambiguous lookup path.
+- (+) 409 conflict detection prevents accidental dual-assignment of a project code.
+- (–) Application-layer enforcement (not DB constraint) means concurrent writes could theoretically bypass it — acceptable at current scale and user count.
+---
+ 
+## ADR-037: Budgeting & Forecasting — Core Model (Financial Year Plan, Forecast Types, Versioned Baseline, Rolling Forecast, Delta)
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Budgeting & Forecasting is the original goal of the system — the downstream consumer of People & Payroll and Revenue actuals, replacing the manual Excel AOP model (Cognologix_FY2627_v9.xlsx, 14 sheets). Requirements were derived from a detailed review of the Excel model and a structured discovery session.
+ 
+**Decision**
+One `financial_year_plan` per Indian Financial Year (April–March). Three forecast types seeded: NORMAL (primary), AGGRESSIVE, CONSERVATIVE — Finance can add more. Each forecast type has versioned plan inputs: DRAFT → ACTIVE → SUPERSEDED. Only one ACTIVE version per forecast type at any time.
+ 
+**Baseline** = current ACTIVE version of NORMAL forecast (not "April v1 forever" — when Finance supersedes with a revision, the Delta resets to Rolling Forecast − new active version). This answers "how are we tracking against our current plan" rather than an outdated April commitment.
+ 
+**Rolling Forecast** = Actuals (from PeriodFinalisedEvent for HC/Salary; manual for Revenue/Overhead until respective modules exist) + current ACTIVE Normal forecast for future months. Computed on demand, not stored.
+ 
+**Delta** = Rolling Forecast − Baseline. All six dimensions tracked: Revenue, HC, Salary Cost, Overhead, Gross Margin, EBITDA. Traffic-light color coding on the Delta panel.
+ 
+**Plan inputs per forecast version:** HC Plan (hires, exits, HC by category), Client Revenue Plan (Finance enters T&M and Fixed-Bid manually per client per month — no rate card auto-calculation), Salary Budget (per category, can vary month-to-month), Overhead Budget (23 line items across 6 categories matching Excel Budget sheet).
+ 
+**Actuals:** HC + Salary via PeriodFinalisedEvent (ADR-022, authoritative, not overridable). Revenue actuals: Finance enters manually as placeholder until Revenue module is built. Overhead actuals: Finance enters manually (Tally Prime deferred).
+ 
+**General Settings additions:** Working days per month, annual attrition rate, target billable ratio, opening HC per FY — owned by General config (ADR-012).
+ 
+**Consequences**
+- (+) Baseline versioning matches real-world planning — Finance revises mid-year when assumptions change, Delta always reflects current expectations.
+- (+) Manual T&M Revenue Plan removes rate card dependency from planning workflow entirely.
+- (+) PeriodFinalisedEvent actuals are automatic and authoritative — no monthly manual copy from PeopleData workbook.
+- (–) Revenue actuals placeholder (manual entry) until Revenue module is built.
+---
+ 
+## ADR-038: Budgeting & Forecasting — BU Analysis, Cost per Employee, Single Dashboard UI
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Two analytical features were added during requirements discovery: BU-level profitability drill-down (including employee-level salary visibility), and a cost-per-employee calculation Finance uses as the baseline for client rate negotiation. Additionally, the UI structure was decided: single scrollable dashboard vs separate sub-section pages.
+ 
+**Decision**
+**BU Analysis (Option A — link, not duplicate):** Budgeting & Forecasting BU Metrics panel shows per-BU aggregated figures (Revenue, Salary Cost, Gross Margin, Avg Salary per Head, Billable HC — Plan vs Actual). Employee-level drill-down navigates to People & Payroll → Master Data filtered by BU and period, rather than duplicating employee records in this module. Consistent with ADR-008 cross-module boundary rule.
+ 
+**Cost per Employee — Full Absorption Costing (Model 1):** All shared overhead allocated to billable employees only (they fund all fixed costs via revenue). Three layers: Layer 1 = Direct Salary + Statutory Benefits (13%); Layer 2 = Direct Overhead per head (medical, welfare, consumables, software, training); Layer 3 = Allocated Shared Overhead ÷ billable HC only. Bench/Support/Leadership carry Layers 1 + 2 only (no Layer 3). Total Cost per Billable Head = the minimum billing rate Finance needs to break even. A "Target Billing Rate" calculator (enter margin % → see resulting rate) aids rate card validation. Model 1 chosen over ABC (too complex at this scale) and Marginal Costing (doesn't give the negotiation baseline needed). Phase 2 refinement: split overhead allocation by Practice Unit if needed.
+ 
+**Dashboard UI (Option A — single scrollable page):** Analysis views consolidated into one scrollable Dashboard page with 9 panels (Headline KPIs, Rolling Forecast trend, Plan vs Actual Revenue/HC/Costs, BU Metrics, P&L Summary, Cost per Employee, Delta View). Plan Setup and Scenario Comparison remain as separate pages (data entry / side-by-side layout respectively). Panel order to be iterated once tested with real data.
+ 
+**Consequences**
+- (+) BU drill-down via link keeps module boundaries clean — no data duplication.
+- (+) Full Absorption gives Finance a single defensible number for rate negotiation — "true loaded cost per billable head."
+- (+) Single dashboard reduces navigation overhead for Finance's monthly review workflow.
+- (–) Dashboard panel order is a first-pass assumption — real usage patterns may suggest reordering.
+---
+
 *(Further ADRs to be added as decisions are finalized.)*
