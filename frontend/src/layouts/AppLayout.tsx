@@ -8,6 +8,7 @@ import {
   TeamOutlined,
   ShopOutlined,
   FundProjectionScreenOutlined,
+  DollarOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import AppLogo from '@/components/AppLogo';
@@ -28,6 +29,7 @@ const NAV_ITEMS = [
     icon: <FundProjectionScreenOutlined />,
     label: 'Budgeting & Forecasting',
   },
+  { key: '/revenue', icon: <DollarOutlined />, label: 'Revenue' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -45,6 +47,10 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
     title: 'Budgeting & Forecasting',
     subtitle: 'AOP plan, rolling forecast & Plan vs Actual',
   },
+  '/revenue': {
+    title: 'Revenue',
+    subtitle: 'Zoho Books imports, invoices & revenue vs plan',
+  },
   '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
 };
 
@@ -55,6 +61,7 @@ function resolveTopbarMeta(pathname: string) {
     return TOPBAR_META['/customer-management'];
   }
   if (pathname.startsWith('/budgeting')) return TOPBAR_META['/budgeting'];
+  if (pathname.startsWith('/revenue')) return TOPBAR_META['/revenue'];
   return { title: '', subtitle: '' };
 }
 
@@ -62,6 +69,7 @@ function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/people-payroll')) return '/people-payroll';
   if (pathname.startsWith('/customer-management')) return '/customer-management';
   if (pathname.startsWith('/budgeting')) return '/budgeting';
+  if (pathname.startsWith('/revenue')) return '/revenue';
   return pathname;
 }
 
@@ -164,6 +172,8 @@ export default function AppLayout() {
                 navigate('/customer-management/customers');
               } else if (key === '/budgeting') {
                 navigate('/budgeting/dashboard');
+              } else if (key === '/revenue') {
+                navigate('/revenue/imports/zoho-books-invoices');
               } else {
                 navigate(key);
               }

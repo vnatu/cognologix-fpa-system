@@ -326,8 +326,20 @@ public class PeoplePayrollService {
 
     // ── Import mappings ──────────────────────────────────────────────────────
 
+    private static final Set<ImportType> PEOPLE_IMPORT_TYPES = EnumSet.of(
+            ImportType.ZOHO_PEOPLE,
+            ImportType.ZOHO_PAYROLL,
+            ImportType.ZOHO_PAYROLL_FNF,
+            ImportType.ZOHO_PEOPLE_EXITED);
+
+    private static final Set<ImportType> REVENUE_IMPORT_TYPES = EnumSet.of(
+            ImportType.ZOHO_BOOKS_INVOICES,
+            ImportType.ZOHO_BOOKS_CREDIT_NOTES);
+
     public List<ImportColumnMapping> findActiveMappings() {
-        List<ImportColumnMapping> mappings = importColumnMappingRepository.findByActiveTrue();
+        List<ImportColumnMapping> mappings = importColumnMappingRepository.findByActiveTrue().stream()
+                .filter(m -> PEOPLE_IMPORT_TYPES.contains(m.getImportType()))
+                .toList();
         mappings.forEach(m -> Hibernate.initialize(m.getLines()));
         return mappings;
     }
@@ -344,6 +356,38 @@ public class PeoplePayrollService {
         return findActiveMapping(importType)
                 .orElseThrow(() -> new NotFoundException(
                         "No active mapping template for import type: " + importType));
+    }
+
+    /** Cross-module public API — Revenue (ADR-039) reads templates without touching people.domain. */
+    public List<MappingTemplateApi> findActiveMappingApis(Set<String> importTypeNames) {
+        return importTypeNames.stream()
+                .map(MappingTemplateApi::requireKnownType)
+                .flatMap(type -> findActiveMapping(type).stream())
+                .map(MappingTemplateApi::from)
+                .toList();
+    }
+
+    public Optional<MappingTemplateApi> findActiveMappingApi(String importTypeName) {
+        return findActiveMapping(MappingTemplateApi.requireKnownType(importTypeName))
+                .map(MappingTemplateApi::from);
+    }
+
+    public Optional<MappingTemplateApi> findMappingApiById(UUID mappingId) {
+        return importColumnMappingRepository.findById(mappingId)
+                .map(mapping -> {
+                    Hibernate.initialize(mapping.getLines());
+                    return MappingTemplateApi.from(mapping);
+                });
+    }
+
+    @Transactional
+    public MappingTemplateApi saveMappingTemplateApi(
+            String importTypeName, String templateName, List<MappingLineInput> lines) {
+        ImportType importType = MappingTemplateApi.requireKnownType(importTypeName);
+        if (!REVENUE_IMPORT_TYPES.contains(importType) && !PEOPLE_IMPORT_TYPES.contains(importType)) {
+            throw new BadRequestException("Unsupported import type: " + importTypeName);
+        }
+        return MappingTemplateApi.from(saveMappingTemplate(importType, templateName, lines));
     }
 
     @Transactional
@@ -487,6 +531,9 @@ public class PeoplePayrollService {
                 snapshotUploadRepository.save(upload);
                 applyExitedEmployees(rows, upload);
             }
+            case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES ->
+                    throw new BadRequestException(
+                            "Revenue import types must be uploaded via /api/revenue/imports");
         }
 
         upload.setUnrecognizedBuCodes(joinCsv(unrecognizedBus));
@@ -569,6 +616,9 @@ public class PeoplePayrollService {
                                 .map(ExitedRegistryDetailResponse::from)
                                 .toList());
             }
+            case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES ->
+                    throw new BadRequestException(
+                            "Revenue import types do not have people snapshot detail");
         };
     }
 
@@ -1000,6 +1050,7 @@ public class PeoplePayrollService {
             case ZOHO_PAYROLL, ZOHO_PAYROLL_FNF ->
                     payrollSnapshotRepository.existsByPeriodVersionIdAndImportType(periodVersionId, importType);
             case ZOHO_PEOPLE_EXITED -> false;
+            case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES -> false;
         };
     }
 
