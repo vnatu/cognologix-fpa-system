@@ -125,9 +125,9 @@ public class CustomerController {
 
     @PostMapping("/{id}/rate-cards")
     @Operation(summary = "Create a new rate card with name, type, currency, and effective date. " +
-            "Currency applies to all lines in the card (ADR-020). " +
-            "Automatically closes the current active rate card. " +
-            "No PUT — effective-dated model: supersede by creating a new card (spec §6).")
+            "Optional projectCodeIds associates the card with one or more projects; empty = blended (ADR-035). " +
+            "Does not auto-close existing cards — Finance manages effective dates. " +
+            "Currency applies to all lines in the card (ADR-020).")
     public ResponseEntity<RateCardResponse> createRateCard(
             @PathVariable UUID id,
             @Valid @RequestBody CreateRateCardRequest req) {
@@ -138,8 +138,29 @@ public class CustomerController {
                         .build())
                 .toList();
         var card = customerService.createRateCard(
-                id, req.name(), req.rateCardType(), req.currency(), req.effectiveFrom(), lines);
+                id, req.name(), req.rateCardType(), req.currency(), req.effectiveFrom(),
+                lines, req.projectCodeIds());
         return ResponseEntity.status(HttpStatus.CREATED).body(RateCardResponse.from(card));
+    }
+
+    @PutMapping("/{id}/rate-cards/{rateCardId}")
+    @Operation(summary = "Edit rate card via versioning — closes current at effectiveTo, " +
+            "creates a new version from effectiveFrom (ADR-035). Both dates required. " +
+            "projectCodeIds null inherits current associations; empty = blended.")
+    public ResponseEntity<RateCardResponse> updateRateCard(
+            @PathVariable UUID id,
+            @PathVariable UUID rateCardId,
+            @Valid @RequestBody UpdateRateCardRequest req) {
+        var lines = req.lines().stream()
+                .map(l -> RateCardLine.builder()
+                        .jobLevel(l.jobLevel())
+                        .rateAmount(l.rateAmount())
+                        .build())
+                .toList();
+        var card = customerService.updateRateCard(
+                id, rateCardId, req.effectiveTo(), req.effectiveFrom(),
+                req.name(), req.rateCardType(), req.currency(), lines, req.projectCodeIds());
+        return ResponseEntity.ok(RateCardResponse.from(card));
     }
 
     // ── Project Codes (bulk) ─────────────────────────────────────────────────

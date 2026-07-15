@@ -15,12 +15,23 @@ public record RateCardResponse(
         RateCurrency currency,
         LocalDate effectiveFrom,
         LocalDate effectiveTo,
+        List<ProjectCodeSummary> projectCodes,
         List<RateCardLineResponse> lines
 ) {
     public static RateCardResponse from(RateCard rc) {
+        List<ProjectCodeSummary> codes = rc.getProjectCodeSummaries() == null
+                ? List.of()
+                : rc.getProjectCodeSummaries().stream()
+                        .map(s -> new ProjectCodeSummary(s.id(), s.projectCode(), s.description()))
+                        .toList();
         return new RateCardResponse(
-                rc.getId(), rc.getName(), rc.getRateCardType(), rc.getCurrency(),
-                rc.getEffectiveFrom(), rc.getEffectiveTo(),
+                rc.getId(),
+                rc.getName(),
+                rc.getRateCardType(),
+                rc.getCurrency(),
+                rc.getEffectiveFrom(),
+                rc.getEffectiveTo(),
+                codes,
                 rc.getLines().stream().map(RateCardLineResponse::from).toList());
     }
 }

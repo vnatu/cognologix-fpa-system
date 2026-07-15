@@ -84,20 +84,27 @@ class CustomerExportImportIntegrationTest {
                 zLast.getId(), "Z Card Old", RateCardType.FLAT, RateCurrency.INR,
                 LocalDate.of(2025, 1, 1),
                 List.of(com.cognologix.fpa.customer.domain.RateCardLine.builder()
-                        .rateAmount(new BigDecimal("100000")).build()));
-        var closedOld = rateCardRepository.findByCustomerIdAndEffectiveToIsNull(zLast.getId()).orElseThrow();
+                        .rateAmount(new BigDecimal("100000")).build()),
+                List.of());
+        var closedOld = rateCardRepository
+                .findByCustomerIdAndEffectiveToIsNull(zLast.getId()).stream()
+                .filter(rc -> rc.getName().equals("Z Card Old"))
+                .findFirst()
+                .orElseThrow();
         closedOld.setEffectiveTo(LocalDate.of(2025, 12, 31));
         rateCardRepository.save(closedOld);
         customerService.createRateCard(
                 zLast.getId(), "Z Card New", RateCardType.FLAT, RateCurrency.INR,
                 LocalDate.of(2026, 1, 1),
                 List.of(com.cognologix.fpa.customer.domain.RateCardLine.builder()
-                        .rateAmount(new BigDecimal("120000")).build()));
+                        .rateAmount(new BigDecimal("120000")).build()),
+                List.of());
         customerService.createRateCard(
                 aFirst.getId(), "A Card", RateCardType.FLAT, RateCurrency.USD,
                 LocalDate.of(2026, 6, 1),
                 List.of(com.cognologix.fpa.customer.domain.RateCardLine.builder()
-                        .rateAmount(new BigDecimal("90000")).build()));
+                        .rateAmount(new BigDecimal("90000")).build()),
+                List.of());
 
         byte[] content = mockMvc.perform(get("/api/customers/rate-cards/export"))
                 .andExpect(status().isOk())
@@ -107,7 +114,8 @@ class CustomerExportImportIntegrationTest {
 
         List<List<String>> rows = readDataRows(content);
         List<String> customerCodes = rows.stream().map(r -> r.get(0)).toList();
-        List<String> effectiveFroms = rows.stream().map(r -> r.get(4)).toList();
+        // Customer Code | Project Code | Rate Card Name | Type | Currency | Effective From | ...
+        List<String> effectiveFroms = rows.stream().map(r -> r.get(5)).toList();
 
         assertThat(customerCodes.indexOf("AATEST")).isLessThan(customerCodes.indexOf("ZZLAST"));
         int zFirst = customerCodes.indexOf("ZZLAST");

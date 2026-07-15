@@ -1,7 +1,7 @@
 package com.cognologix.fpa.customer.dto;
 
-import com.cognologix.fpa.customer.domain.RateCurrency;
 import com.cognologix.fpa.customer.domain.RateCardType;
+import com.cognologix.fpa.customer.domain.RateCurrency;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -12,12 +12,21 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
-public record CreateRateCardRequest(
+/**
+ * Edit via versioning: closes the current card at {@code effectiveTo} and creates
+ * a new version starting at {@code effectiveFrom} (ADR-035). Both dates required —
+ * no defaults.
+ */
+public record UpdateRateCardRequest(
+        @NotNull LocalDate effectiveTo,
+        @NotNull LocalDate effectiveFrom,
         @NotBlank @Size(max = 255) String name,
         @NotNull RateCardType rateCardType,
         @NotNull RateCurrency currency,
-        @NotNull LocalDate effectiveFrom,
         @NotEmpty @Valid List<RateCardLineRequest> lines,
-        /** Optional — empty/null = customer-level blended rate card (ADR-035). */
+        /**
+         * Optional — null inherits current associations; empty list = blended;
+         * non-empty replaces associations for the new version.
+         */
         List<UUID> projectCodeIds
 ) {}

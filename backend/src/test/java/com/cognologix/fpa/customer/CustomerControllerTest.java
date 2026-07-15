@@ -126,7 +126,7 @@ class CustomerControllerTest {
         card.setCurrency(RateCurrency.INR);
         card.setEffectiveFrom(LocalDate.of(2026, 4, 1));
         card.setLines(List.of());
-        when(customerService.createRateCard(eq(id), any(), any(), any(), any(), any())).thenReturn(card);
+        when(customerService.createRateCard(eq(id), any(), any(), any(), any(), any(), any())).thenReturn(card);
         var body = """
                 {"name":"FY2526 Standard","rateCardType":"FLAT","currency":"INR",
                  "effectiveFrom":"2026-04-01","lines":[{"rateAmount":150000}]}

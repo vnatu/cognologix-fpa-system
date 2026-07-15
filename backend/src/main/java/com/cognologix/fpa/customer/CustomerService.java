@@ -37,6 +37,7 @@ public class CustomerService {
     private final CustomerRepository customerRepository;
     private final CustomerProjectCodeRepository projectCodeRepository;
     private final RateCardRepository rateCardRepository;
+    private final RateCardProjectCodeRepository rateCardProjectCodeRepository;
     private final CommercialTermsRepository commercialTermsRepository;
     private final ConcentrationWatchGroupRepository concentrationWatchGroupRepository;
     private final CustomerImportParser customerImportParser;
@@ -177,21 +178,40 @@ public class CustomerService {
     public List<RateCard> findRateCardsByCustomer(UUID customerId) {
         customerRepository.findById(customerId)
                 .orElseThrow(() -> new IllegalArgumentException("Customer not found: " + customerId));
-        return rateCardRepository.findByCustomerIdOrderByEffectiveFromDesc(customerId);
+        List<RateCard> cards = rateCardRepository.findByCustomerIdOrderByEffectiveFromDesc(customerId);
+        enrichProjectCodeDisplay(cards);
+        return cards;
     }
 
+    /** Active blended (no project-code associations) rate card — open-ended. */
     public Optional<RateCard> findActiveRateCard(UUID customerId) {
-        return rateCardRepository.findByCustomerIdAndEffectiveToIsNull(customerId);
+        return findActiveBlendedRateCard(customerId, LocalDate.now());
     }
 
     public Optional<RateCard> findRateCardOnDate(UUID customerId, LocalDate asOf) {
-        return rateCardRepository.findActiveOnDate(customerId, asOf);
+        return findActiveBlendedRateCard(customerId, asOf);
     }
 
     /**
-     * Creates a new rate card. Automatically closes any existing open rate card by setting
-     * its effective_to = newCard.effectiveFrom - 1 day (effective-dated model, spec §6).
-     * No PUT on rate cards — supersede by creating a new card.
+     * Project-scoped rate card covering {@code projectCodeId} on {@code asOf} (ADR-035).
+     */
+    public Optional<RateCard> findActiveRateCardForProjectCode(
+            UUID customerId, UUID projectCodeId, LocalDate asOf) {
+        return rateCardRepository.findActiveForProjectOnDate(customerId, projectCodeId, asOf)
+                .map(this::enrichProjectCodeDisplay);
+    }
+
+    /**
+     * Blended rate card (no join-table rows) active on {@code asOf}. Revenue fallback (ADR-035).
+     */
+    public Optional<RateCard> findActiveBlendedRateCard(UUID customerId, LocalDate asOf) {
+        return rateCardRepository.findActiveBlendedOnDate(customerId, asOf)
+                .map(this::enrichProjectCodeDisplay);
+    }
+
+    /**
+     * Creates a new rate card. Empty/null {@code projectCodeIds} = blended.
+     * Does not auto-close existing cards (ADR-035).
      */
     @Transactional
     public RateCard createRateCard(UUID customerId,
@@ -199,13 +219,18 @@ public class CustomerService {
                                    RateCardType type,
                                    RateCurrency currency,
                                    LocalDate effectiveFrom,
-                                   List<RateCardLine> lines) {
+                                   List<RateCardLine> lines,
+                                   List<UUID> projectCodeIds) {
         var customer = customerRepository.findById(customerId)
                 .orElseThrow(() -> new IllegalArgumentException("Customer not found: " + customerId));
-        rateCardRepository.findByCustomerIdAndEffectiveToIsNull(customerId).ifPresent(existing -> {
-            existing.setEffectiveTo(effectiveFrom.minusDays(1));
-            rateCardRepository.save(existing);
-        });
+        List<UUID> codes = normalizeProjectCodeIds(projectCodeIds);
+        validateProjectCodesBelongToCustomer(customerId, codes);
+        if (codes.isEmpty()) {
+            assertNoActiveBlendedCard(customerId);
+        } else {
+            assertProjectCodesNotOnActiveCards(customerId, codes);
+        }
+
         var card = RateCard.builder()
                 .customer(customer)
                 .name(name)
@@ -215,12 +240,76 @@ public class CustomerService {
                 .lines(lines)
                 .build();
         lines.forEach(l -> l.setRateCard(card));
-        return rateCardRepository.save(card);
+        RateCard saved = rateCardRepository.save(card);
+        attachProjectCodes(saved.getId(), codes);
+        return enrichProjectCodeDisplay(saved);
     }
 
     /**
-     * Creates a rate card only when the customer has no active card (effective_to IS NULL).
-     * Used by bulk import — import skips groups when an active card already exists (spec §6).
+     * Edit via versioning: close current at {@code effectiveTo}, create new from {@code effectiveFrom}.
+     * {@code projectCodeIds} null = inherit current associations; empty = blended.
+     */
+    @Transactional
+    public RateCard updateRateCard(UUID customerId,
+                                   UUID rateCardId,
+                                   LocalDate effectiveTo,
+                                   LocalDate effectiveFrom,
+                                   String name,
+                                   RateCardType type,
+                                   RateCurrency currency,
+                                   List<RateCardLine> lines,
+                                   List<UUID> projectCodeIds) {
+        if (effectiveFrom == null) {
+            throw new CustomerBadRequestException("effectiveFrom is required");
+        }
+        if (effectiveTo == null) {
+            throw new CustomerBadRequestException("effectiveTo is required");
+        }
+        if (!effectiveTo.isBefore(effectiveFrom)) {
+            throw new CustomerBadRequestException(
+                    "effectiveTo must be before effectiveFrom");
+        }
+        var current = rateCardRepository.findByIdAndCustomerId(rateCardId, customerId)
+                .orElseThrow(() -> new CustomerBadRequestException(
+                        "Rate card not found or does not belong to this customer"));
+
+        List<UUID> codes;
+        if (projectCodeIds == null) {
+            codes = rateCardProjectCodeRepository.findByRateCardId(rateCardId).stream()
+                    .map(RateCardProjectCode::getProjectCodeId)
+                    .toList();
+        } else {
+            codes = normalizeProjectCodeIds(projectCodeIds);
+        }
+        validateProjectCodesBelongToCustomer(customerId, codes);
+
+        current.setEffectiveTo(effectiveTo);
+        rateCardRepository.saveAndFlush(current);
+
+        if (codes.isEmpty()) {
+            assertNoActiveBlendedCard(customerId);
+        } else {
+            assertProjectCodesNotOnActiveCards(customerId, codes);
+        }
+
+        var newCard = RateCard.builder()
+                .customer(current.getCustomer())
+                .name(name)
+                .rateCardType(type)
+                .currency(currency)
+                .effectiveFrom(effectiveFrom)
+                .lines(lines)
+                .build();
+        lines.forEach(l -> l.setRateCard(newCard));
+        RateCard saved = rateCardRepository.save(newCard);
+        attachProjectCodes(saved.getId(), codes);
+        return enrichProjectCodeDisplay(saved);
+    }
+
+    /**
+     * Creates a rate card only when no conflicting active scope exists (ADR-028 / ADR-035).
+     * Blended: skips if an active blended card exists. Project-scoped: skips if any
+     * requested project code is already on an active card.
      */
     @Transactional
     public Optional<RateCard> createRateCardIfNoActive(UUID customerId,
@@ -228,22 +317,120 @@ public class CustomerService {
                                                        RateCardType type,
                                                        RateCurrency currency,
                                                        LocalDate effectiveFrom,
-                                                       List<RateCardLine> lines) {
-        if (rateCardRepository.findByCustomerIdAndEffectiveToIsNull(customerId).isPresent()) {
+                                                       List<RateCardLine> lines,
+                                                       List<UUID> projectCodeIds) {
+        List<UUID> codes = normalizeProjectCodeIds(projectCodeIds);
+        if (codes.isEmpty()) {
+            boolean hasBlended = rateCardRepository.findByCustomerIdAndEffectiveToIsNull(customerId).stream()
+                    .anyMatch(rc -> rateCardProjectCodeRepository.findByRateCardId(rc.getId()).isEmpty());
+            if (hasBlended) {
+                return Optional.empty();
+            }
+        } else if (!rateCardProjectCodeRepository
+                .findActiveLinksForCustomerAndProjectCodes(customerId, codes).isEmpty()) {
             return Optional.empty();
         }
-        var customer = customerRepository.findById(customerId)
-                .orElseThrow(() -> new IllegalArgumentException("Customer not found: " + customerId));
-        var card = RateCard.builder()
-                .customer(customer)
-                .name(name)
-                .rateCardType(type)
-                .currency(currency)
-                .effectiveFrom(effectiveFrom)
-                .lines(lines)
-                .build();
-        lines.forEach(l -> l.setRateCard(card));
-        return Optional.of(rateCardRepository.save(card));
+        try {
+            return Optional.of(createRateCard(
+                    customerId, name, type, currency, effectiveFrom, lines, codes));
+        } catch (CustomerConflictException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static List<UUID> normalizeProjectCodeIds(List<UUID> projectCodeIds) {
+        if (projectCodeIds == null || projectCodeIds.isEmpty()) {
+            return List.of();
+        }
+        return projectCodeIds.stream().filter(Objects::nonNull).distinct().toList();
+    }
+
+    private void validateProjectCodesBelongToCustomer(UUID customerId, List<UUID> projectCodeIds) {
+        for (UUID projectCodeId : projectCodeIds) {
+            projectCodeRepository.findByIdAndCustomerId(projectCodeId, customerId)
+                    .orElseThrow(() -> new CustomerBadRequestException(
+                            "Project code does not belong to this customer"));
+        }
+    }
+
+    private void assertNoActiveBlendedCard(UUID customerId) {
+        List<RateCard> active = rateCardRepository.findByCustomerIdAndEffectiveToIsNull(customerId);
+        for (RateCard rc : active) {
+            if (rateCardProjectCodeRepository.findByRateCardId(rc.getId()).isEmpty()) {
+                throw new CustomerConflictException(
+                        "An active blended rate card already exists: " + rc.getName()
+                                + ". Close that rate card first.");
+            }
+        }
+    }
+
+    private void assertProjectCodesNotOnActiveCards(UUID customerId, List<UUID> projectCodeIds) {
+        List<RateCardProjectCode> conflicts =
+                rateCardProjectCodeRepository.findActiveLinksForCustomerAndProjectCodes(
+                        customerId, projectCodeIds);
+        if (conflicts.isEmpty()) {
+            return;
+        }
+        RateCardProjectCode conflict = conflicts.getFirst();
+        CustomerProjectCode pc = projectCodeRepository.findById(conflict.getProjectCodeId())
+                .orElse(null);
+        RateCard other = rateCardRepository.findById(conflict.getRateCardId()).orElse(null);
+        String codeLabel = pc != null ? pc.getProjectCode() : conflict.getProjectCodeId().toString();
+        String cardLabel = other != null ? other.getName() : conflict.getRateCardId().toString();
+        throw new CustomerConflictException(
+                "Project code [" + codeLabel + "] is already assigned to active rate card ["
+                        + cardLabel + "]. Close that rate card first or remove this project code "
+                        + "from the request.");
+    }
+
+    private void attachProjectCodes(UUID rateCardId, List<UUID> projectCodeIds) {
+        for (UUID projectCodeId : projectCodeIds) {
+            rateCardProjectCodeRepository.save(RateCardProjectCode.builder()
+                    .rateCardId(rateCardId)
+                    .projectCodeId(projectCodeId)
+                    .build());
+        }
+    }
+
+    private RateCard enrichProjectCodeDisplay(RateCard card) {
+        enrichProjectCodeDisplay(List.of(card));
+        return card;
+    }
+
+    private void enrichProjectCodeDisplay(List<RateCard> cards) {
+        if (cards.isEmpty()) {
+            return;
+        }
+        Set<UUID> cardIds = cards.stream().map(RateCard::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        List<RateCardProjectCode> links = rateCardProjectCodeRepository.findByRateCardIdIn(cardIds);
+        Set<UUID> projectIds = links.stream()
+                .map(RateCardProjectCode::getProjectCodeId)
+                .collect(Collectors.toSet());
+        Map<UUID, CustomerProjectCode> byId = projectIds.isEmpty()
+                ? Map.of()
+                : projectCodeRepository.findAllById(projectIds).stream()
+                        .collect(Collectors.toMap(CustomerProjectCode::getId, pc -> pc));
+        Map<UUID, List<RateCardProjectCode>> linksByCard = links.stream()
+                .collect(Collectors.groupingBy(RateCardProjectCode::getRateCardId));
+
+        for (RateCard card : cards) {
+            List<RateCardProjectCode> cardLinks = linksByCard.getOrDefault(card.getId(), List.of());
+            List<RateCard.ProjectCodeSummary> summaries = new ArrayList<>();
+            List<String> codeStrings = new ArrayList<>();
+            for (RateCardProjectCode link : cardLinks) {
+                CustomerProjectCode pc = byId.get(link.getProjectCodeId());
+                if (pc == null) {
+                    continue;
+                }
+                summaries.add(new RateCard.ProjectCodeSummary(
+                        pc.getId(), pc.getProjectCode(), pc.getDescription()));
+                codeStrings.add(pc.getProjectCode());
+            }
+            summaries.sort(Comparator.comparing(RateCard.ProjectCodeSummary::projectCode));
+            codeStrings.sort(String::compareTo);
+            card.setProjectCodeSummaries(summaries);
+            card.setProjectCodes(codeStrings);
+        }
     }
 
     public byte[] buildRateCardImportSample() {
@@ -327,7 +514,8 @@ public class CustomerService {
 
         Map<RateCardGroupKey, List<ValidatedRateCardRow>> groups = validRows.stream()
                 .collect(Collectors.groupingBy(
-                        r -> new RateCardGroupKey(r.customerCode(), r.rateCardName(), r.effectiveFrom()),
+                        r -> new RateCardGroupKey(
+                                r.customerCode(), r.projectCodesKey(), r.rateCardName(), r.effectiveFrom()),
                         LinkedHashMap::new,
                         Collectors.toList()));
 
@@ -342,7 +530,8 @@ public class CustomerService {
 
         Map<RateCardGroupKey, List<ValidatedRateCardRow>> importGroups = rowsToImport.stream()
                 .collect(Collectors.groupingBy(
-                        r -> new RateCardGroupKey(r.customerCode(), r.rateCardName(), r.effectiveFrom()),
+                        r -> new RateCardGroupKey(
+                                r.customerCode(), r.projectCodesKey(), r.rateCardName(), r.effectiveFrom()),
                         LinkedHashMap::new,
                         Collectors.toList()));
 
@@ -375,7 +564,8 @@ public class CustomerService {
                     header.rateCardType(),
                     header.currency(),
                     header.effectiveFrom(),
-                    lines);
+                    lines,
+                    header.projectCodeIds());
 
             if (createdCard.isPresent()) {
                 created++;
@@ -396,6 +586,7 @@ public class CustomerService {
             RateCardImportParser.ParsedRateCardImportRow row,
             List<RateCardImportRowError> errors) {
         String customerCode = blankToNull(row.customerCode());
+        String projectCode = blankToNull(row.projectCode());
         String rateCardName = blankToNull(row.rateCardName());
         String typeRaw = blankToNull(row.rateCardType());
         String currencyRaw = blankToNull(row.currency());
@@ -460,15 +651,39 @@ public class CustomerService {
         if (rateCardType == RateCardType.FLAT) {
             jobLevel = null;
         }
-        if (!customerRepository.existsByCustomerCode(customerCode)) {
+        var customerOpt = customerRepository.findByCustomerCode(customerCode);
+        if (customerOpt.isEmpty()) {
             errors.add(error(row, customerCode, rateCardName,
                     "Customer Code not found: " + customerCode));
             return Optional.empty();
+        }
+        List<UUID> projectCodeIds = new ArrayList<>();
+        String projectCodesKey = "";
+        if (projectCode != null) {
+            List<String> tokens = Arrays.stream(projectCode.split(";"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+            List<String> sortedTokens = new ArrayList<>(tokens);
+            sortedTokens.sort(String::compareTo);
+            projectCodesKey = String.join(";", sortedTokens);
+            for (String token : tokens) {
+                var pcOpt = projectCodeRepository.findByCustomerIdAndProjectCode(
+                        customerOpt.get().getId(), token);
+                if (pcOpt.isEmpty()) {
+                    errors.add(error(row, customerCode, rateCardName,
+                            "Project Code not found for customer: " + token));
+                    return Optional.empty();
+                }
+                projectCodeIds.add(pcOpt.get().getId());
+            }
         }
 
         return Optional.of(new ValidatedRateCardRow(
                 row.rowNumber(),
                 customerCode,
+                projectCodesKey,
+                projectCodeIds,
                 rateCardName,
                 rateCardType,
                 currency,
@@ -567,11 +782,18 @@ public class CustomerService {
         }
     }
 
-    private record RateCardGroupKey(String customerCode, String rateCardName, LocalDate effectiveFrom) {}
+    private record RateCardGroupKey(
+            String customerCode,
+            String projectCodesKey,
+            String rateCardName,
+            LocalDate effectiveFrom
+    ) {}
 
     private record ValidatedRateCardRow(
             int rowNumber,
             String customerCode,
+            String projectCodesKey,
+            List<UUID> projectCodeIds,
             String rateCardName,
             RateCardType rateCardType,
             RateCurrency currency,

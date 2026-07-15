@@ -797,5 +797,23 @@ Final nav: Dashboard → People & Payroll → Customer Management → Settings.
 - (+) Bundle note: 2.1MB uncompressed / 657KB gzipped — acceptable for current scale, monitor as modules are added; lazy loading by route is the mitigation if bundle grows past ~3MB.
 - (+) ADR-021 now fully applied to Customer Management — operational screens in correct domain-first location.
 ---
+
+## ADR-035: Project-Scoped Rate Cards Alongside Customer-Level Blended Cards
+
+**Status:** Accepted — July 2026 (revised July 2026 — many-to-many)
+
+**Context**
+Module 2 §6 and the original `no_overlapping_rate_cards` exclusion constraint assumed a client has exactly one active rate card at a time. Real contracts often quote different rates per engagement/project, and a single commercial rate card frequently covers several project codes under one customer (e.g. ENGN, CLOUD_OPS, DEV_OPS). Revenue needs to resolve a project-specific card when available, falling back to the customer-level blended card. ADR-015 (single currency per card) and ADR-028 (import skip-when-active) remain in force but must apply per scope.
+
+**Decision**
+- **V16 (initial):** nullable `rate_card.project_code_id` — one project per card.
+- **V17 (revised):** drop `project_code_id`; introduce `rate_card_project_code` join table (many-to-many). Empty associations = blended (customer-level) card. A project code may belong to at most one *active* rate card per customer — enforced in `CustomerService` (returns HTTP 409), not a DB exclusion, because active/inactive is `rate_card.effective_to`. Soft UUID references on the join entity (no JPA associations to keep joins optional). Manual create does not auto-close existing cards; edit uses versioning. Export Project Code column is semicolon-separated codes; import splits on `;`. Cross-module lookups: `findActiveRateCardForProjectCode` (join + effective dates) and `findActiveBlendedRateCard` (card with no join rows).
+
+**Consequences**
+- (+) One rate card can cover many project codes; multiple active project-scoped cards allowed when project sets do not overlap.
+- (+) Contradicts Module 2 §6 literal “exactly one active rate card” — superseded for project scope; blended uniqueness retained in application layer (DB exclusion for blended removed with V17 column drop).
+- (+) Edit-via-versioning preserves point-in-time history (Module 1 §6.1 / rate card effective dating).
+- (–) Active project-code exclusivity depends on service validation; concurrent inserts without locking could race (acceptable at Finance-user scale).
+---
  
 *(Further ADRs to be added as decisions are finalized.)*

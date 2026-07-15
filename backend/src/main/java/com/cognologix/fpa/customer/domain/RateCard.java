@@ -12,10 +12,9 @@ import java.util.UUID;
 /**
  * Effective-dated rate card header for a customer.
  *
- * Spec §6: a client has exactly one active rate card at a time (enforced by the
- * no_overlapping_rate_cards exclusion constraint in V2 migration).
- * A rate change creates a new row with a new effective_from rather than
- * overwriting the prior one — point-in-time principle from Module 1 §6.1.
+ * ADR-035 / V17: project associations live in {@code rate_card_project_code}.
+ * Empty associations = customer-level blended card. Soft list of project codes
+ * for display is populated on read.
  */
 @Entity
 @Table(name = "rate_card")
@@ -33,6 +32,21 @@ public class RateCard {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)
     private Customer customer;
+
+    /**
+     * Display only — project code strings associated via rate_card_project_code,
+     * populated on read.
+     */
+    @Transient
+    @Builder.Default
+    private List<String> projectCodes = new ArrayList<>();
+
+    /**
+     * Display only — full project code summaries for API responses, populated on read.
+     */
+    @Transient
+    @Builder.Default
+    private List<ProjectCodeSummary> projectCodeSummaries = new ArrayList<>();
 
     @Column(name = "name", nullable = false, length = 255)
     private String name;
@@ -63,4 +77,7 @@ public class RateCard {
     private void prePersist() {
         createdAt = Instant.now();
     }
+
+    /** Lightweight display DTO embedded transiently on RateCard (not a JPA entity). */
+    public record ProjectCodeSummary(UUID id, String projectCode, String description) {}
 }
