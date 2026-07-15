@@ -36,6 +36,7 @@ export interface RateCard {
   currency: RateCurrency;
   effectiveFrom: string;
   effectiveTo?: string;
+  projectCodes?: ProjectCode[];
   lines: RateCardLine[];
 }
 

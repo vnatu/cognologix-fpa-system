@@ -117,11 +117,29 @@ export const createRateCard = (
     rateCardType: RateCardType;
     currency: RateCurrency;
     effectiveFrom: string;
+    projectCodeIds?: string[];
     lines: Array<{ jobLevel?: string; rateAmount: number }>;
   },
 ): Promise<RateCard> =>
   axios
     .post<RateCard>(`/api/customers/${customerId}/rate-cards`, payload)
+    .then((r) => r.data);
+
+export const updateRateCard = (
+  customerId: string,
+  rateCardId: string,
+  payload: {
+    effectiveTo: string;
+    effectiveFrom: string;
+    name: string;
+    rateCardType: RateCardType;
+    currency: RateCurrency;
+    projectCodeIds?: string[];
+    lines: Array<{ jobLevel?: string; rateAmount: number }>;
+  },
+): Promise<RateCard> =>
+  axios
+    .put<RateCard>(`/api/customers/${customerId}/rate-cards/${rateCardId}`, payload)
     .then((r) => r.data);
 
 // ── Project Codes ─────────────────────────────────────────────────────────────

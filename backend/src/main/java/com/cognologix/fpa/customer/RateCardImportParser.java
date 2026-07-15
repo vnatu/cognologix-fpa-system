@@ -17,6 +17,7 @@ import java.util.*;
 public class RateCardImportParser {
 
     static final String COL_CUSTOMER_CODE = "Customer Code";
+    static final String COL_PROJECT_CODE = "Project Code";
     static final String COL_RATE_CARD_NAME = "Rate Card Name";
     static final String COL_RATE_CARD_TYPE = "Rate Card Type";
     static final String COL_CURRENCY = "Currency";
@@ -58,6 +59,7 @@ public class RateCardImportParser {
                 rows.add(new ParsedRateCardImportRow(
                         r + 1,
                         cellValue(row, columnIndex.get(normalizeHeader(COL_CUSTOMER_CODE))),
+                        optionalCell(row, columnIndex, COL_PROJECT_CODE),
                         cellValue(row, columnIndex.get(normalizeHeader(COL_RATE_CARD_NAME))),
                         cellValue(row, columnIndex.get(normalizeHeader(COL_RATE_CARD_TYPE))),
                         cellValue(row, columnIndex.get(normalizeHeader(COL_CURRENCY))),
@@ -80,6 +82,7 @@ public class RateCardImportParser {
             Row headerRow = sheet.createRow(0);
             String[] headers = {
                     COL_CUSTOMER_CODE,
+                    COL_PROJECT_CODE,
                     COL_RATE_CARD_NAME,
                     COL_RATE_CARD_TYPE,
                     COL_CURRENCY,
@@ -197,6 +200,7 @@ public class RateCardImportParser {
     public record ParsedRateCardImportRow(
             int rowNumber,
             String customerCode,
+            String projectCode,
             String rateCardName,
             String rateCardType,
             String currency,

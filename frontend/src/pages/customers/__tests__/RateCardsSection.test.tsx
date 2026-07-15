@@ -50,6 +50,7 @@ const TIERED_CARD: RateCard = {
 
 const mockFetchCustomers = vi.mocked(api.fetchCustomers);
 const mockFetchRateCards = vi.mocked(api.fetchRateCards);
+const mockFetchProjectCodes = vi.mocked(api.fetchProjectCodes);
 const mockCreateRateCard = vi.mocked(api.createRateCard);
 
 const noop = () => {};
@@ -67,11 +68,17 @@ beforeEach(() => {
   localStorage.setItem('fpa_token', 'test-token');
   mockFetchCustomers.mockResolvedValue(MOCK_CUSTOMERS);
   mockFetchRateCards.mockResolvedValue([ACTIVE_FLAT_CARD, TIERED_CARD]);
+  mockFetchProjectCodes.mockResolvedValue([]);
   mockCreateRateCard.mockResolvedValue(ACTIVE_FLAT_CARD);
 });
 
 /** Wait until rate cards have loaded */
-const waitForCards = () => waitFor(() => screen.getByText('FY2526 Standard'));
+const waitForCards = () => waitFor(() => screen.getByText(/FY2526 Standard/));
+
+async function expandHistory() {
+  const historyToggle = screen.getByText(/Prior versions/);
+  await userEvent.click(historyToggle);
+}
 
 describe('RateCardsSection', () => {
   it('shows empty state when no customer is selected', async () => {
@@ -85,7 +92,9 @@ describe('RateCardsSection', () => {
     renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitFor(() => expect(mockFetchRateCards).toHaveBeenCalledWith('uuid-1'));
     await waitForCards();
-    expect(screen.getByText('FY2526 Tiered')).toBeInTheDocument();
+    expect(mockFetchProjectCodes).toHaveBeenCalledWith('uuid-1');
+    expect(screen.getByText('FY2526 Standard')).toBeInTheDocument();
+    expect(screen.getByText('Blended')).toBeInTheDocument();
   });
 
   it('displays card names and effective dates', async () => {
@@ -93,13 +102,40 @@ describe('RateCardsSection', () => {
     await waitForCards();
     // Dates use configured format (default DD MMM YYYY)
     expect(screen.getByText(/01 Jan 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/01 Jan 2025/)).toBeInTheDocument();
+    await expandHistory();
+    expect(await screen.findByText(/01 Jan 2025/)).toBeInTheDocument();
   });
 
   it('shows Active tag for the card with no effectiveTo', async () => {
     renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
     expect(screen.getByText('Active')).toBeInTheDocument();
+  });
+
+  it('shows project code tags on project-scoped cards', async () => {
+    mockFetchRateCards.mockResolvedValue([
+      {
+        ...ACTIVE_FLAT_CARD,
+        projectCodes: [
+          { id: 'pc-1', projectCode: 'ENGN', description: 'Engineering' },
+          { id: 'pc-2', projectCode: 'CLOUD_OPS' },
+        ],
+      },
+    ]);
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    await waitForCards();
+    expect(screen.getByText('ENGN')).toBeInTheDocument();
+    expect(screen.getByText('CLOUD_OPS')).toBeInTheDocument();
+    expect(screen.queryByText('Blended')).not.toBeInTheDocument();
+  });
+
+  it('collapses prior versions below active cards', async () => {
+    renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
+    await waitForCards();
+    expect(screen.getByText('FY2526 Standard')).toBeInTheDocument();
+    expect(screen.getByText(/Prior versions \(1\)/)).toBeInTheDocument();
+    await expandHistory();
+    expect(await screen.findByText('FY2526 Tiered')).toBeInTheDocument();
   });
 
   it('renders flat rate card with rate column and currency in header', async () => {
@@ -113,7 +149,8 @@ describe('RateCardsSection', () => {
   it('renders tiered rate card with job level column', async () => {
     renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
-    expect(screen.getByText('L3')).toBeInTheDocument();
+    await expandHistory();
+    expect(await screen.findByText('L3')).toBeInTheDocument();
     expect(screen.getByText('L4')).toBeInTheDocument();
     expect(screen.getByText('Job Level')).toBeInTheDocument();
   });
@@ -122,6 +159,7 @@ describe('RateCardsSection', () => {
     mockFetchRateCards.mockResolvedValue([
       {
         ...TIERED_CARD,
+        effectiveTo: undefined,
         lines: [
           { id: 'line-3', jobLevel: 'L4', rateAmount: 150000 },
           { id: 'line-2', jobLevel: 'L3', rateAmount: 120000 },
@@ -129,7 +167,7 @@ describe('RateCardsSection', () => {
       },
     ]);
     renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
-    await waitFor(() => screen.getByText('FY2526 Tiered'));
+    await waitFor(() => screen.getByText(/FY2526 Tiered/));
 
     const rows = screen.getAllByRole('row');
     const tieredRowText = rows.map((r) => r.textContent).join('\n');
@@ -156,7 +194,7 @@ describe('RateCardsSection', () => {
     expect(dialog).toBeInTheDocument();
   });
 
-  it('modal has Name, Type, Currency, and Effective From fields', async () => {
+  it('modal has Name, Type, Currency, Project Codes, and Effective From fields', async () => {
     const user = userEvent.setup();
     renderWithDateFormat(<RateCardsSection selectedCustomerId="uuid-1" onSelectCustomer={noop} />);
     await waitForCards();
@@ -168,6 +206,9 @@ describe('RateCardsSection', () => {
     expect(within(dialog).getByText('Rate Card Name')).toBeInTheDocument();
     expect(within(dialog).getByText('Rate Card Type')).toBeInTheDocument();
     expect(within(dialog).getByText('Currency')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Project Codes (leave empty for blended rate)'),
+    ).toBeInTheDocument();
     expect(within(dialog).getByText('Effective From')).toBeInTheDocument();
   });
 

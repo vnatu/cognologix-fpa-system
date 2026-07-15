@@ -4,6 +4,7 @@ import com.cognologix.fpa.customer.domain.*;
 import com.cognologix.fpa.customer.repository.CommercialTermsRepository;
 import com.cognologix.fpa.customer.repository.CustomerProjectCodeRepository;
 import com.cognologix.fpa.customer.repository.CustomerRepository;
+import com.cognologix.fpa.customer.repository.RateCardProjectCodeRepository;
 import com.cognologix.fpa.customer.repository.RateCardRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
@@ -29,6 +30,7 @@ public class CustomerExcelExporter {
     private final CustomerRepository customerRepository;
     private final CommercialTermsRepository commercialTermsRepository;
     private final RateCardRepository rateCardRepository;
+    private final RateCardProjectCodeRepository rateCardProjectCodeRepository;
     private final CustomerProjectCodeRepository projectCodeRepository;
 
     public byte[] exportCustomers() {
@@ -77,6 +79,12 @@ public class CustomerExcelExporter {
             Hibernate.initialize(card.getCustomer());
             Hibernate.initialize(card.getLines());
         });
+        Map<UUID, String> projectCodeById = projectCodeRepository.findAll().stream()
+                .collect(Collectors.toMap(CustomerProjectCode::getId, CustomerProjectCode::getProjectCode));
+        Map<UUID, List<UUID>> projectIdsByRateCard = rateCardProjectCodeRepository.findAll().stream()
+                .collect(Collectors.groupingBy(
+                        RateCardProjectCode::getRateCardId,
+                        Collectors.mapping(RateCardProjectCode::getProjectCodeId, Collectors.toList())));
         cards.sort(Comparator
                 .comparing((RateCard rc) -> rc.getCustomer().getCustomerCode())
                 .thenComparing(RateCard::getEffectiveFrom));
@@ -86,6 +94,7 @@ public class CustomerExcelExporter {
             Sheet sheet = workbook.createSheet("Rate Cards");
             String[] headers = {
                     RateCardImportParser.COL_CUSTOMER_CODE,
+                    RateCardImportParser.COL_PROJECT_CODE,
                     RateCardImportParser.COL_RATE_CARD_NAME,
                     RateCardImportParser.COL_RATE_CARD_TYPE,
                     RateCardImportParser.COL_CURRENCY,
@@ -101,10 +110,17 @@ public class CustomerExcelExporter {
                         .sorted(Comparator.comparing(
                                 l -> l.getJobLevel() == null ? "" : l.getJobLevel()))
                         .toList();
+                List<String> codes = projectIdsByRateCard.getOrDefault(card.getId(), List.of()).stream()
+                        .map(projectCodeById::get)
+                        .filter(c -> c != null && !c.isBlank())
+                        .sorted()
+                        .toList();
+                String projectCodeCell = codes.isEmpty() ? null : String.join(";", codes);
                 for (RateCardLine line : lines) {
                     Row row = sheet.createRow(rowIdx++);
                     int col = 0;
                     row.createCell(col++).setCellValue(card.getCustomer().getCustomerCode());
+                    setOptionalString(row, col++, projectCodeCell);
                     row.createCell(col++).setCellValue(card.getName());
                     row.createCell(col++).setCellValue(card.getRateCardType().name());
                     row.createCell(col++).setCellValue(card.getCurrency().name());

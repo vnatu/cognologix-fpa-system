@@ -58,9 +58,9 @@ class RateCardImportIntegrationTest {
     @Test
     void importAllNew_createsFlatAndTieredRateCards() throws Exception {
         var file = xlsx(List.of(
-                List.of("ICERTI", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "150000"),
-                List.of("CADENT", "FY2526 Tiered", "TIERED", "USD", "2026-04-01", "L3", "120000"),
-                List.of("CADENT", "FY2526 Tiered", "TIERED", "USD", "2026-04-01", "L4", "150000")));
+                List.of("ICERTI", "", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "150000"),
+                List.of("CADENT", "", "FY2526 Tiered", "TIERED", "USD", "2026-04-01", "L3", "120000"),
+                List.of("CADENT", "", "FY2526 Tiered", "TIERED", "USD", "2026-04-01", "L4", "150000")));
 
         mockMvc.perform(multipart("/api/customers/rate-cards/import").file(file))
                 .andExpect(status().isOk())
@@ -95,10 +95,11 @@ class RateCardImportIntegrationTest {
                 LocalDate.of(2025, 1, 1),
                 List.of(com.cognologix.fpa.customer.domain.RateCardLine.builder()
                         .rateAmount(new BigDecimal("100000"))
-                        .build()));
+                        .build()),
+                List.of());
 
         var file = xlsx(List.of(
-                List.of("ICERTI", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "150000")));
+                List.of("ICERTI", "", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "150000")));
 
         mockMvc.perform(multipart("/api/customers/rate-cards/import").file(file))
                 .andExpect(status().isOk())
@@ -114,7 +115,7 @@ class RateCardImportIntegrationTest {
     @Test
     void import_unknownCustomerCode_returnsRowError() throws Exception {
         var file = xlsx(List.of(
-                List.of("UNKNOWN", "FY2526", "FLAT", "INR", "2026-01-01", "", "150000")));
+                List.of("UNKNOWN", "", "FY2526", "FLAT", "INR", "2026-01-01", "", "150000")));
 
         mockMvc.perform(multipart("/api/customers/rate-cards/import").file(file))
                 .andExpect(status().isOk())
@@ -126,8 +127,8 @@ class RateCardImportIntegrationTest {
     @Test
     void import_flatWithMultipleLines_returnsGroupErrors() throws Exception {
         var file = xlsx(List.of(
-                List.of("ICERTI", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "150000"),
-                List.of("ICERTI", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "160000")));
+                List.of("ICERTI", "", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "150000"),
+                List.of("ICERTI", "", "FY2526 Standard", "FLAT", "INR", "2026-01-01", "", "160000")));
 
         mockMvc.perform(multipart("/api/customers/rate-cards/import").file(file))
                 .andExpect(status().isOk())
@@ -153,7 +154,7 @@ class RateCardImportIntegrationTest {
             var sheet = workbook.createSheet("Rate Cards");
             var headerRow = sheet.createRow(0);
             String[] headers = {
-                    "Customer Code", "Rate Card Name", "Rate Card Type", "Currency",
+                    "Customer Code", "Project Code", "Rate Card Name", "Rate Card Type", "Currency",
                     "Effective From", "Job Level", "Rate Amount"
             };
             for (int c = 0; c < headers.length; c++) {
