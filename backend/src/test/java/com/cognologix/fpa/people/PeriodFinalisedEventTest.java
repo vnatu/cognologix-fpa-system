@@ -33,8 +33,11 @@ class PeriodFinalisedEventTest extends PeopleModuleIntegrationTest {
 
         assertThat(events.stream(PeriodFinalisedEvent.class))
                 .singleElement()
-                .extracting(PeriodFinalisedEvent::periodVersionId)
-                .isEqualTo(version.getId());
+                .satisfies(event -> {
+                    assertThat(event.periodVersionId()).isEqualTo(version.getId());
+                    assertThat(event.periodMonth()).isEqualTo(4);
+                    assertThat(event.periodYear()).isEqualTo(2026);
+                });
 
         var reloaded = periodVersionRepository.findById(version.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(PeriodStatus.FINALISED);

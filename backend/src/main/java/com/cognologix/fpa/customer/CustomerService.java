@@ -854,11 +854,28 @@ public class CustomerService {
         }
         String key = customerCodeOrName.trim();
         return customerRepository.findByCustomerCodeOrCustomerName(key, key)
-                .map(c -> new BuCustomerRef(c.getCustomerCode(), c.getCustomerName(), c.isInternal()));
+                .map(c -> new BuCustomerRef(c.getId(), c.getCustomerCode(), c.getCustomerName(), c.isInternal()));
+    }
+
+    /**
+     * Lightweight customer list for cross-module callers (ADR-008) — avoids exposing Customer entity.
+     */
+    public List<CustomerRef> listCustomerRefs(boolean includeInternal) {
+        return findAllCustomers(includeInternal).stream()
+                .map(c -> new CustomerRef(c.getId(), c.getCustomerCode(), c.getCustomerName(), c.isInternal()))
+                .toList();
+    }
+
+    public Optional<CustomerRef> findCustomerRef(UUID id) {
+        return customerRepository.findById(id)
+                .map(c -> new CustomerRef(c.getId(), c.getCustomerCode(), c.getCustomerName(), c.isInternal()));
     }
 
     /** Lightweight cross-module BU identity — avoids exposing Customer entity (ADR-008). */
-    public record BuCustomerRef(String customerCode, String customerName, boolean internal) {}
+    public record BuCustomerRef(UUID id, String customerCode, String customerName, boolean internal) {}
+
+    /** Lightweight cross-module customer identity for plan/revenue inputs (ADR-008). */
+    public record CustomerRef(UUID id, String customerCode, String customerName, boolean internal) {}
 
     /**
      * Resolves a Zoho People project code to the parent customer's customer_code (Module 2 §9).

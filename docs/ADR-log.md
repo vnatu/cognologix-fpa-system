@@ -890,4 +890,61 @@ Two analytical features were added during requirements discovery: BU-level profi
 - (–) Dashboard panel order is a first-pass assumption — real usage patterns may suggest reordering.
 ---
 
+## ADR-039: Revenue Module — Core Model (Zoho Books Import, Invoice Level, Client-Level Aggregation, Direct Query)
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Revenue is the last major module needed to replace the manual revenue actuals placeholder in Budgeting & Forecasting. Requirements discovered through a structured discovery session covering billing models, Zoho Books integration approach, data granularity, payment tracking, revenue recognition, and Budgeting & Forecasting consumption pattern.
+ 
+**Decision**
+**Ingestion:** File upload (Zoho Books export) for Phase 1, API later — same phased approach as People & Payroll (ADR-019). One import type: `ZOHO_BOOKS_INVOICES`. Same column mapping template pattern as People & Payroll — Finance maps Zoho Books export headers to system attributes; template saved per import type, pre-fills on subsequent uploads; unmapped/missing columns surfaced as warnings, non-blocking.
+ 
+**Period attribution:** Finance explicitly selects the period (month/year) at upload time — same as People & Payroll. `Invoice Month` field in Zoho Books export is deprecated (replaced by Service Month/Service Year custom fields in newer exports) — not reliable for auto-attribution. Manual period selection is consistent and explicit.
+ 
+**Data granularity:** Individual invoice records stored (Invoice Number, Customer Code, Invoice Date, Status, Amount, Balance, Due Date, Project Code — optional) + monthly summaries computed from individual records. Client-level only — multiple project codes under one client can share one invoice; project-level revenue breakdown deferred to Phase 2.
+ 
+**Credit notes:** Stored as negative-amount invoice records (same import, negative Total value in Zoho Books export) — reduce net revenue for the tagged period automatically. If credit notes appear as a separate export, a second import sub-type `ZOHO_BOOKS_CREDIT_NOTES` handles them with the same flow.
+ 
+**Payment status:** Imported passively from Zoho Books Status column (Paid/Partially Paid/Sent/Overdue/Void) and Balance column (outstanding amount). No active collections workflow built — Zoho Books remains the system of record for collections. DSO informational only — displayed on Revenue Dashboard, not tracked as a workflow.
+ 
+**Revenue recognition:** Net Revenue per client per period = Sum of invoice Amounts (positive) + credit note Amounts (negative) for that customer_code and tagged period.
+ 
+**Budgeting & Forecasting consumption:** Direct query via `RevenueService.getMonthlyRevenueSummary(customerId, month, year)` — no event (ADR-022 event pattern not used here because revenue actuals aren't "finalised" the way People & Payroll periods are; invoices can be corrected until Finance explicitly closes the period). Budgeting & Forecasting replaces its `actual_revenue_manual` placeholder with this query.
+ 
+**System attributes for column mapping template:**
+InvoiceNumber (required), CustomerName (reference), CustomerCode (required — join key), InvoiceDate (required), Status (required), Amount (required), Balance (optional — DSO), DueDate (optional), ProjectCode (optional — stored, not aggregated), ServiceMonth/ServiceYear (optional — ignored if Finance uses manual period).
+ 
+**Navigation (ADR-021):** Revenue top-level nav → Imports (Zoho Books Invoices) → Invoice List → Revenue Dashboard (Revenue vs Plan per client, Invoice Status Summary, DSO informational).
+ 
+**Consequences**
+- (+) Same import/template pattern as People & Payroll — Finance already knows the workflow.
+- (+) Individual invoice storage gives full audit trail and enables future project-level analysis.
+- (+) Direct query (no event) correctly handles mid-month corrections without re-publishing.
+- (+) Passive payment status import removes need for a collections workflow while still surfacing DSO.
+- (–) Revenue period must be manually tagged — minor operational overhead, offset by consistency and reliability.
+- (–) Project-level revenue breakdown deferred — acceptable since invoices often span multiple projects.
+---
+ 
+ ## ADR-040: Revenue — Separate Credit Notes Import Type (ZOHO_BOOKS_CREDIT_NOTES)
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Credit notes in Zoho Books reduce invoiced revenue for a period. Two options considered: (1) include credit notes in the same ZOHO_BOOKS_INVOICES export as negative-amount records, or (2) treat credit notes as a separate import type with its own export and column mapping template.
+ 
+**Decision**
+Separate import type: `ZOHO_BOOKS_CREDIT_NOTES`. Credit notes are exported from Zoho Books as a separate report and uploaded via a distinct import flow, identical in structure to ZOHO_BOOKS_INVOICES but with credit-note-specific column names (Credit Note#, Credit Note Date, etc.). Credit note amounts stored as positive values; treated as negative in all net revenue calculations. Net Revenue per client per period = Sum(invoice amounts) − Sum(credit note amounts).
+ 
+This mirrors the ZOHO_PAYROLL vs ZOHO_PAYROLL_FNF pattern established in ADR-026 — a distinct sub-type with different semantics handled cleanly rather than mixed into the primary import with sign-based disambiguation.
+ 
+**Consequences**
+- (+) Clear separation of invoices and credit notes in the audit trail — Finance can see what was invoiced and what was credited independently.
+- (+) Consistent with the established pattern of separate import types for related-but-distinct record types (ADR-026).
+- (+) Each import type has its own saved column mapping template — Finance maps once, reuses every month.
+- (−) Finance must run two separate Zoho Books exports and two uploads per period rather than one — minor operational overhead, offset by audit clarity.
+**Alternatives considered**
+- Single import with negative Total values for credit notes — rejected: mixes record types in one upload, makes the audit trail less clear, and requires Finance to know to look for negative values in the same file.
+---
+ 
 *(Further ADRs to be added as decisions are finalized.)*
