@@ -7,6 +7,7 @@ import DashboardPage from '@/pages/DashboardPage';
 import PeoplePayrollRoutes from '@/pages/people/PeoplePayrollRoutes';
 import CustomerManagementRoutes from '@/pages/customers/CustomerManagementRoutes';
 import BudgetingRoutes from '@/pages/budgeting/BudgetingRoutes';
+import RevenueRoutes from '@/pages/revenue/RevenueRoutes';
 import SettingsPage from '@/pages/settings/SettingsPage';
 
 function ProtectedRoute({ element }: { element: React.ReactNode }) {
@@ -36,6 +37,7 @@ export default function App() {
                 element={<CustomerManagementRoutes />}
               />
               <Route path="budgeting/*" element={<BudgetingRoutes />} />
+              <Route path="revenue/*" element={<RevenueRoutes />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>

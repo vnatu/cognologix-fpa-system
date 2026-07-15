@@ -1323,4 +1323,49 @@ public class BudgetingService {
     private int nullSafeInt(Integer value) {
         return value != null ? value : 0;
     }
+
+    /**
+     * Public API for Revenue Dashboard — planned revenue for a client/period from the
+     * active primary baseline covering that calendar month (ADR-039).
+     */
+    public Optional<ClientRevenuePlanView> getClientRevenuePlan(UUID customerId, int month, int year) {
+        if (customerId == null) {
+            throw new IllegalArgumentException("customerId is required");
+        }
+        if (month < 1 || month > 12) {
+            throw new IllegalArgumentException("month must be between 1 and 12");
+        }
+        LocalDate asOf = LocalDate.of(year, month, 1);
+        Optional<FinancialYearPlan> planOpt = financialYearPlanRepository
+                .findByFiscalYearStartLessThanEqualAndFiscalYearEndGreaterThanEqual(asOf, asOf);
+        if (planOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<ForecastVersion> baseline = getActiveBaseline(planOpt.get().getId());
+        if (baseline.isEmpty()) {
+            return Optional.empty();
+        }
+        return clientRevenuePlanRepository
+                .findByForecastVersionIdAndPlanMonthAndPlanYear(baseline.get().getId(), month, year)
+                .stream()
+                .filter(p -> customerId.equals(p.getCustomerId()))
+                .findFirst()
+                .map(p -> new ClientRevenuePlanView(
+                        p.getCustomerId(),
+                        p.getPlanMonth(),
+                        p.getPlanYear(),
+                        nullSafe(p.getPlannedTmRevenue()),
+                        nullSafe(p.getPlannedFixedBidRevenue()),
+                        nullSafe(p.getPlannedTmRevenue()).add(nullSafe(p.getPlannedFixedBidRevenue()))));
+    }
+
+    /** Cross-module view of planned client revenue (Revenue module — ADR-039). */
+    public record ClientRevenuePlanView(
+            UUID customerId,
+            int planMonth,
+            int planYear,
+            BigDecimal plannedTmRevenue,
+            BigDecimal plannedFixedBidRevenue,
+            BigDecimal plannedTotal
+    ) {}
 }

@@ -946,5 +946,28 @@ This mirrors the ZOHO_PAYROLL vs ZOHO_PAYROLL_FNF pattern established in ADR-026
 **Alternatives considered**
 - Single import with negative Total values for credit notes — rejected: mixes record types in one upload, makes the audit trail less clear, and requires Finance to know to look for negative values in the same file.
 ---
- 
+
+## ADR-041: Revenue Module Implementation — Shared Mapping Table + Direct Plan Lookup
+
+**Status:** Accepted — July 2026
+
+**Context**
+Implementing Module 4 (Revenue) required deciding how to reuse the existing `import_column_mapping` table (ADR-019) from a new Spring Modulith module without violating package boundaries, and how the Revenue Dashboard obtains planned figures from Budgeting & Forecasting.
+
+**Decision**
+1. **Shared mapping table, people-owned JPA, revenue via public API.** V20 extends `import_column_mapping.import_type` CHECK with `ZOHO_BOOKS_INVOICES` / `ZOHO_BOOKS_CREDIT_NOTES`. People `ImportType` enum gains the same values so Hibernate can deserialize shared rows. People keeps JPA ownership of the table; Revenue calls `PeoplePayrollService` mapping methods that return `MappingTemplateApi` (people root package) — never `people.domain` types. People `findActiveMappings()` excludes books types so Settings → People is not polluted.
+
+2. **Revenue upload versioning on `revenue_upload`.** SUPERSEDED version-bump (ADR-033) applies per `import_type` + period on `revenue_upload` itself (not people `period_version`) — mark prior ACTIVE as SUPERSEDED, insert version_number+1.
+
+3. **`BudgetingService.getClientRevenuePlan(customerId, month, year)`.** New public method resolves the financial year covering that calendar month, loads the active primary baseline, and returns planned TM + fixed-bid total (or empty). Revenue Dashboard uses this for revenue-vs-plan variance (ADR-039), replacing reliance on `actual_revenue_manual` for the plan side.
+
+**Consequences**
+- (+) No duplicate mapping schema; Finance reuse of ADR-019 templates.
+- (+) Modulith boundaries preserved (revenue → people/budgeting/customer/general root APIs only).
+- (–) Revenue mapping storage remains people-owned at the DB/JPA layer — acceptable reuse; extract to general only if a third consumer appears.
+
+**Clarification (frontend, July 2026):** Revenue Dashboard DSO informational panel uses average of `(today − Invoice Date)` for unpaid / non-void invoices and surfaces the oldest outstanding invoice date per client — operational DSO age, not contractual due-window length. Spec §7 / ADR-039 wording on Due Date − Invoice Date remains the conceptual payment-window view; UI follows the operational aging definition used by Finance for collections visibility.
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*
