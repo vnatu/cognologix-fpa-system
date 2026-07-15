@@ -1,11 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import * as api from '../api';
-import type { ConcentrationRiskConfig } from '../types';
+import * as api from '@/pages/customers/api';
+import type { ConcentrationRiskConfig } from '@/pages/customers/types';
 import ConcentrationRiskSection from '../ConcentrationRiskSection';
 
-vi.mock('../api');
+vi.mock('@/pages/customers/api');
 vi.mock('antd', async (importOriginal) => {
   const actual = await importOriginal<typeof import('antd')>();
   return {

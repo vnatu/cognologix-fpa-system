@@ -740,4 +740,62 @@ Add Apache POI Excel exports: `GET /api/customers/export`, `GET /api/customers/r
 
 ---
 
+## ADR-032: Customer Management Export/Import Symmetry
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Manual data entry for Customers, Rate Cards, and Project Codes is slow for initial setup and testing. Export/import symmetry needed for bulk load and environment reset.
+ 
+**Decision**
+Export endpoints for all three Customer Management entities (GET /api/customers/export, GET /api/customers/rate-cards/export, GET /api/customers/project-codes/export) return Excel in the same format as their corresponding import endpoints. Rate card export sorts by Customer Code ASC + Effective From ASC so historical re-import processes cards in correct chronological order. Customer export includes internal BUs (is_internal=true). Rate card export includes full history (all effective_to values). Project codes import skips existing codes (no conflict resolution needed — always skip). Rate card import updated to process groups sorted by Effective From ASC.
+ 
+**Consequences**
+- (+) Finance can export current state, reset DB, and restore via import — full round-trip fidelity.
+- (+) Initial data load from existing spreadsheets is self-service.
+---
+ 
+## ADR-033: Period Version Re-upload — SUPERSEDED Status + Per-Import-Type Version Bump
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Re-uploading a snapshot file against a period version that already has rows for that import type caused a unique constraint violation. Two approaches considered: delete-then-insert (transaction risk) and auto-version-bump.
+ 
+**Decision**
+Re-upload triggers an automatic version bump using the existing period_version model. Rules:
+- Upload import type X against a version that has NO existing rows of type X → normal insert into current version (first upload for this type).
+- Upload import type X against a version that ALREADY HAS rows of type X → current version status set to SUPERSEDED, new version created (version_number + 1, status OPEN), new snapshot rows inserted under the new version.
+- Upload against a FINALISED version → rejected with HTTP 400. Finance must use "New Version" button explicitly.
+- SUPERSEDED versions retained for full audit trail but excluded from Master build and all operational views.
+- This rule applies to ALL current and future upload types (ZOHO_PEOPLE, ZOHO_PAYROLL, ZOHO_PEOPLE_EXITED, ZOHO_PAYROLL_FNF, and any subsequently added types). Documented as a standing contract on the upload method.
+Period version status values updated: OPEN / SNAPSHOTS_UPLOADED / MASTER_BUILT / FINALISED / SUPERSEDED (V15 migration).
+ 
+**Consequences**
+- (+) No transaction risk — old rows stay, new rows inserted fresh under a new version.
+- (+) Full audit trail — SUPERSEDED versions visible in Period Management in muted style.
+- (+) Consistent with the versioning model philosophy — never mutate, always append.
+- (+) Master always uses the latest non-superseded version.
+---
+ 
+## ADR-034: Frontend — pnpm Migration + Customer Management Top-Level Nav
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+npm was the default package manager from project setup. pnpm offers faster installs, disk efficiency via hard-linking, and stricter dependency resolution. Separately, Customer Management operational screens were in Settings, violating ADR-021's domain-first navigation principle.
+ 
+**Decision**
+Two changes applied together:
+ 
+1. **pnpm migration** — `pnpm-lock.yaml` replaces `package-lock.json`. `packageManager: pnpm@11.13.0` in package.json (explicit version for Corepack compatibility — `latest` is invalid). `pnpm-workspace.yaml` with `allowBuilds.esbuild: true` (required by pnpm v11). Dockerfile updated to use `pnpm install --frozen-lockfile` + `pnpm build`. `.gitignore` updated for `.pnpm-store/` and `pnpm-debug.log*`.
+2. **Customer Management nav refactor (ADR-021 applied)** — Customer Management moves to top-level nav alongside Dashboard, People & Payroll, and Settings. Three sub-sections: Customers, Rate Cards, Project Codes at routes `/customer-management/customers|rate-cards|project-codes`. Settings → Customer Management tab becomes config-only (Concentration Risk thresholds + Watch Groups). Move note added to Settings tab. Dashboard client BU links updated to `/customer-management/customers`.
+Final nav: Dashboard → People & Payroll → Customer Management → Settings.
+ 
+**Consequences**
+- (+) pnpm: faster installs, disk-efficient, stricter dependency resolution.
+- (+) Bundle note: 2.1MB uncompressed / 657KB gzipped — acceptable for current scale, monitor as modules are added; lazy loading by route is the mitigation if bundle grows past ~3MB.
+- (+) ADR-021 now fully applied to Customer Management — operational screens in correct domain-first location.
+---
+ 
 *(Further ADRs to be added as decisions are finalized.)*

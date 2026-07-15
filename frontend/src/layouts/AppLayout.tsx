@@ -6,6 +6,7 @@ import {
   SettingOutlined,
   LogoutOutlined,
   TeamOutlined,
+  ShopOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import AppLogo from '@/components/AppLogo';
@@ -16,6 +17,11 @@ const { Header, Sider, Content } = Layout;
 const NAV_ITEMS = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
   { key: '/people-payroll', icon: <TeamOutlined />, label: 'People & Payroll' },
+  {
+    key: '/customer-management',
+    icon: <ShopOutlined />,
+    label: 'Customer Management',
+  },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -25,17 +31,25 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
     title: 'People & Payroll',
     subtitle: 'Imports, periods, master data & analytics',
   },
+  '/customer-management': {
+    title: 'Customer Management',
+    subtitle: 'Customers, rate cards & project codes',
+  },
   '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
 };
 
 function resolveTopbarMeta(pathname: string) {
   if (TOPBAR_META[pathname]) return TOPBAR_META[pathname];
   if (pathname.startsWith('/people-payroll')) return TOPBAR_META['/people-payroll'];
+  if (pathname.startsWith('/customer-management')) {
+    return TOPBAR_META['/customer-management'];
+  }
   return { title: '', subtitle: '' };
 }
 
 function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/people-payroll')) return '/people-payroll';
+  if (pathname.startsWith('/customer-management')) return '/customer-management';
   return pathname;
 }
 
@@ -137,7 +151,15 @@ export default function AppLayout() {
             mode="inline"
             selectedKeys={[selectedNavKey(pathname)]}
             items={NAV_ITEMS}
-            onClick={({ key }) => navigate(key)}
+            onClick={({ key }) => {
+              if (key === '/people-payroll') {
+                navigate('/people-payroll/imports/zoho-people');
+              } else if (key === '/customer-management') {
+                navigate('/customer-management/customers');
+              } else {
+                navigate(key);
+              }
+            }}
             style={{ border: 'none', marginTop: 8 }}
           />
 

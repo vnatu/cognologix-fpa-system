@@ -1,71 +1,15 @@
-import { useState } from 'react';
-import { Tabs } from 'antd';
-import {
-  TeamOutlined,
-  FileTextOutlined,
-  TagsOutlined,
-  WarningOutlined,
-} from '@ant-design/icons';
+import { Alert, Tabs } from 'antd';
+import { WarningOutlined } from '@ant-design/icons';
+import { Link } from 'react-router-dom';
 import { HEADING_FONT } from '@/theme/antdTheme';
-import CustomersSection from './customer/CustomersSection';
-import RateCardsSection from './customer/RateCardsSection';
-import ProjectCodesSection from './customer/ProjectCodesSection';
 import ConcentrationRiskSection from './customer/ConcentrationRiskSection';
 
+/**
+ * Settings → Customer Management — config only (ADR-021).
+ * Operational screens live under top-level Customer Management nav.
+ */
 export default function CustomerManagementTab() {
-  // Shared selected customer — set from the Customers list, consumed by
-  // Rate Cards and Project Codes sections as their default context.
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
-
   const tabs = [
-    {
-      key: 'customers',
-      label: (
-        <span>
-          <TeamOutlined style={{ marginRight: 6 }} />
-          Customers
-        </span>
-      ),
-      children: (
-        <div style={{ padding: '0 0 0 24px' }}>
-          <CustomersSection onSelectCustomer={setSelectedCustomerId} />
-        </div>
-      ),
-    },
-    {
-      key: 'rate-cards',
-      label: (
-        <span>
-          <FileTextOutlined style={{ marginRight: 6 }} />
-          Rate Cards
-        </span>
-      ),
-      children: (
-        <div style={{ padding: '0 0 0 24px' }}>
-          <RateCardsSection
-            selectedCustomerId={selectedCustomerId}
-            onSelectCustomer={setSelectedCustomerId}
-          />
-        </div>
-      ),
-    },
-    {
-      key: 'project-codes',
-      label: (
-        <span>
-          <TagsOutlined style={{ marginRight: 6 }} />
-          Project Codes
-        </span>
-      ),
-      children: (
-        <div style={{ padding: '0 0 0 24px' }}>
-          <ProjectCodesSection
-            selectedCustomerId={selectedCustomerId}
-            onSelectCustomer={setSelectedCustomerId}
-          />
-        </div>
-      ),
-    },
     {
       key: 'concentration-risk',
       label: (
@@ -83,15 +27,29 @@ export default function CustomerManagementTab() {
   ];
 
   return (
-    <Tabs
-      tabPosition="left"
-      items={tabs}
-      style={{ minHeight: 520 }}
-      tabBarStyle={{
-        fontFamily: HEADING_FONT,
-        fontWeight: 600,
-        minWidth: 190,
-      }}
-    />
+    <div>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={
+          <>
+            Customer, Rate Card, and Project Code management has moved to the{' '}
+            <Link to="/customer-management/customers">Customer Management</Link>{' '}
+            section in the main navigation.
+          </>
+        }
+      />
+      <Tabs
+        tabPosition="left"
+        items={tabs}
+        style={{ minHeight: 520 }}
+        tabBarStyle={{
+          fontFamily: HEADING_FONT,
+          fontWeight: 600,
+          minWidth: 190,
+        }}
+      />
+    </div>
   );
 }

@@ -42,7 +42,7 @@ const STATUS_OPTIONS: { label: string; value: LifecycleStatus }[] = [
 ];
 
 interface Props {
-  onSelectCustomer: (id: string) => void;
+  onSelectCustomer?: (id: string) => void;
 }
 
 interface FormValues {
@@ -262,7 +262,7 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
               ...(row.internal ? { background: token.colorBgLayout } : {}),
             },
             onClick: () => {
-              onSelectCustomer(row.id);
+              onSelectCustomer?.(row.id);
               openEdit(row.id, row.internal === true);
             },
           })}
