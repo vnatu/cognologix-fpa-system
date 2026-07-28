@@ -64,10 +64,38 @@ class CustomerExportImportIntegrationTest {
                 .getResponse()
                 .getContentAsByteArray();
 
+        assertThat(readHeaders(content)).containsExactly(
+                "Customer Code", "Customer Name", "Zoho Books Customer Ref",
+                "Lifecycle Status", "Is Internal", "Relationship Owner Employee ID", "DSO Days");
+
         List<List<String>> rows = readDataRows(content);
         assertThat(rows).hasSize((int) (internalCount + 2));
         assertThat(rows.stream().map(r -> r.getFirst()).toList())
                 .contains("EXPORT1", "EXPORT2", "MGMT");
+        // Column order: … Lifecycle Status | Is Internal | Relationship Owner | DSO Days
+        List<String> export1 = rows.stream().filter(r -> "EXPORT1".equals(r.getFirst())).findFirst().orElseThrow();
+        assertThat(export1.get(4)).isEqualTo("false");
+        assertThat(export1.get(5)).isEqualTo("EMP1");
+        assertThat(export1.get(6)).isEqualTo("45");
+    }
+
+    @Test
+    void importCustomers_acceptsSnakeCaseHeaders_viaNormalizeHeader() throws Exception {
+        var file = xlsx(
+                List.of("customer_code", "customer_name", "zoho_books_customer_ref",
+                        "lifecycle_status", "is_internal", "relationship_owner_employee_id", "dso_days"),
+                List.of(List.of("SNAKE1", "Snake Client", "ZB-S1", "ACTIVE", "false", "EMP9", "60")));
+
+        mockMvc.perform(multipart("/api/customers/import")
+                        .file(file)
+                        .param("conflictResolution", "SKIP"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(1))
+                .andExpect(jsonPath("$.errors").isEmpty());
+
+        var customer = customerRepository.findByCustomerCode("SNAKE1").orElseThrow();
+        assertThat(customer.getCustomerName()).isEqualTo("Snake Client");
+        assertThat(customer.isInternal()).isFalse();
     }
 
     @Test
@@ -122,6 +150,31 @@ class CustomerExportImportIntegrationTest {
         int zSecond = customerCodes.lastIndexOf("ZZLAST");
         assertThat(effectiveFroms.get(zFirst)).isEqualTo("2025-01-01");
         assertThat(effectiveFroms.get(zSecond)).isEqualTo("2026-01-01");
+        // Must include every customer that has rate cards — never scoped to UI selection.
+        assertThat(customerCodes).contains("AATEST", "ZZLAST");
+        assertThat(customerCodes.stream().distinct().count()).isGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    void exportProjectCodes_includesAllCustomers() throws Exception {
+        var clientA = customerService.createCustomer(
+                "PCAAAA", "PC A", null, null, LifecycleStatus.ACTIVE, 30);
+        var clientZ = customerService.createCustomer(
+                "PCZZZZ", "PC Z", null, null, LifecycleStatus.ACTIVE, 30);
+        customerService.addProjectCode(clientA.getId(), "PROJ-A", "A project");
+        customerService.addProjectCode(clientZ.getId(), "PROJ-Z", "Z project");
+
+        byte[] content = mockMvc.perform(get("/api/customers/project-codes/export"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsByteArray();
+
+        List<List<String>> rows = readDataRows(content);
+        List<String> customerCodes = rows.stream().map(r -> r.get(0)).toList();
+        assertThat(customerCodes).contains("PCAAAA", "PCZZZZ");
+        assertThat(customerCodes.indexOf("PCAAAA")).isLessThan(customerCodes.indexOf("PCZZZZ"));
+        assertThat(rows.stream().map(r -> r.get(1)).toList()).contains("PROJ-A", "PROJ-Z");
     }
 
     @Test
@@ -149,6 +202,35 @@ class CustomerExportImportIntegrationTest {
         assertThat(projectCodeRepository.findByCustomerId(client.getId())).hasSize(2);
         assertThat(projectCodeRepository.findByCustomerIdAndProjectCode(client.getId(), "NEWCODE"))
                 .isPresent();
+    }
+
+    @Test
+    void importProjectCodes_acceptsSnakeCaseHeaders() throws Exception {
+        customerService.createCustomer(
+                "PCSNAKE", "PC Snake", null, null, LifecycleStatus.ACTIVE, 30);
+        var file = xlsx(
+                List.of("customer_code", "project_code", "description"),
+                List.of(List.of("PCSNAKE", "SNAKE-PROJ", "From snake headers")));
+
+        mockMvc.perform(multipart("/api/customers/project-codes/import").file(file))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(1))
+                .andExpect(jsonPath("$.errors").isEmpty());
+
+        var client = customerRepository.findByCustomerCode("PCSNAKE").orElseThrow();
+        assertThat(projectCodeRepository.findByCustomerIdAndProjectCode(client.getId(), "SNAKE-PROJ"))
+                .isPresent();
+    }
+
+    private static List<String> readHeaders(byte[] content) throws Exception {
+        try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(content))) {
+            var header = workbook.getSheetAt(0).getRow(0);
+            List<String> headers = new ArrayList<>();
+            for (int c = 0; c < header.getLastCellNum(); c++) {
+                headers.add(header.getCell(c).getStringCellValue());
+            }
+            return headers;
+        }
     }
 
     private static List<List<String>> readDataRows(byte[] content) throws Exception {

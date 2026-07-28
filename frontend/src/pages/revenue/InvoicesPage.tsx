@@ -15,13 +15,17 @@ import {
 } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
-import * as XLSX from 'xlsx';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import { useDateFormat } from '@/context/DateFormatContext';
 import { formatCurrency } from '@/utils/formatDate';
 import { fetchCustomers } from '@/pages/customers/api';
 import type { CustomerSummary } from '@/pages/customers/types';
-import { fetchInvoices, fetchUploadsForPeriod } from './api';
+import {
+  exportCreditNotes,
+  exportInvoices,
+  fetchInvoices,
+  fetchUploadsForPeriod,
+} from './api';
 import {
   IMPORT_TYPE_LABELS,
   INVOICE_STATUS_OPTIONS,
@@ -128,36 +132,21 @@ export default function InvoicesPage() {
     loadUploads();
   }, [loadUploads]);
 
-  const exportExcel = async () => {
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    const params = { customerId, periodMonth, periodYear, status };
+    setExporting(true);
     try {
-      const data = await fetchInvoices({
-        customerId,
-        periodMonth,
-        periodYear,
-        status,
-        importType,
-        page: 0,
-        size: Math.max(total, 1),
-      });
-      const sheetRows = data.content.map((r) => ({
-        Type:
-          r.importType === 'ZOHO_BOOKS_INVOICES' ? 'Invoice' : 'Credit Note',
-        'Document #': r.documentNumber,
-        Client: r.customerId,
-        Period: periodLabel(r.periodMonth, r.periodYear),
-        Date: r.documentDate ?? '',
-        Currency: r.currency,
-        Amount: r.amount,
-        'INR Equivalent': r.amountInr ?? '',
-        Status: r.status ?? '',
-        Balance: r.balance ?? '',
-      }));
-      const ws = XLSX.utils.json_to_sheet(sheetRows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
-      XLSX.writeFile(wb, 'revenue_invoices_export.xlsx');
+      if (importType === 'ZOHO_BOOKS_CREDIT_NOTES') {
+        await exportCreditNotes(params);
+      } else {
+        await exportInvoices(params);
+      }
     } catch {
       notification.error({ message: 'Export failed' });
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -272,7 +261,7 @@ export default function InvoicesPage() {
         <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
           Invoice List
         </Title>
-        <Button icon={<DownloadOutlined />} onClick={exportExcel}>
+        <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
           Export
         </Button>
       </Space>

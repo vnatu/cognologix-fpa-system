@@ -28,18 +28,24 @@ public record DashboardSummaryResponse(
             BigDecimal billableRatioPct
     ) {}
 
+    /**
+     * Per-classification payroll cost metrics (ADR-045).
+     * Primary figure is {@code totalPayrollCost} (= grossPay + employer contributions).
+     */
     public record SalaryMetrics(
-            BigDecimal totalGrossPay,
-            BigDecimal billableGrossPay,
-            BigDecimal benchGrossPay,
-            BigDecimal supportGrossPay,
-            BigDecimal leadershipGrossPay,
-            BigDecimal managementGrossPay,
-            BigDecimal avgPerHeadBillable,
-            BigDecimal avgPerHeadBench,
-            BigDecimal avgPerHeadSupport,
-            BigDecimal avgPerHeadLeadership,
-            BigDecimal avgPerHeadManagement
+            ClassificationSalaryMetrics total,
+            ClassificationSalaryMetrics billable,
+            ClassificationSalaryMetrics bench,
+            ClassificationSalaryMetrics support,
+            ClassificationSalaryMetrics leadership,
+            ClassificationSalaryMetrics management
+    ) {}
+
+    public record ClassificationSalaryMetrics(
+            BigDecimal grossPay,
+            BigDecimal totalEmployerContributions,
+            BigDecimal totalPayrollCost,
+            BigDecimal avgTotalPayrollCostPerHead
     ) {}
 
     public record PuBreakdown(

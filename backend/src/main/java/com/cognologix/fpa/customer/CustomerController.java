@@ -15,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.UUID;
+import com.cognologix.fpa.general.AdminOnly;
 
 @RestController
 @RequestMapping("/api/customers")
@@ -35,6 +36,7 @@ public class CustomerController {
                 .toList();
     }
 
+    @AdminOnly
     @PostMapping
     @Operation(summary = "Create a new customer")
     public ResponseEntity<CustomerSummaryResponse> createCustomer(
@@ -54,6 +56,7 @@ public class CustomerController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @AdminOnly
     @PutMapping("/{id}")
     @Operation(summary = "Update customer — name, lifecycle status, relationship owner, DSO. " +
             "No DELETE: use lifecycleStatus=CHURNED to retire a customer (historical data preserved).")
@@ -73,12 +76,14 @@ public class CustomerController {
         return excelAttachment(customerService.exportCustomers(), "customers_export.xlsx");
     }
 
+    @AdminOnly
     @PostMapping(value = "/import/conflicts", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Pre-flight check — which Customer Codes in the file already exist")
     public CustomerImportConflictsResponse detectImportConflicts(@RequestPart("file") MultipartFile file) {
         return customerService.detectImportConflicts(file);
     }
 
+    @AdminOnly
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Import customers from Excel with SKIP or REPLACE conflict resolution")
     public CustomerImportResponse importCustomers(
@@ -90,7 +95,7 @@ public class CustomerController {
     // ── Rate Card Import ─────────────────────────────────────────────────────
 
     @GetMapping("/rate-cards/export")
-    @Operation(summary = "Export all rate cards (including historical) as Excel")
+    @Operation(summary = "Export ALL rate cards for ALL customers (including historical) as Excel — not scoped to a selected customer")
     public ResponseEntity<byte[]> exportRateCards() {
         return excelAttachment(customerService.exportRateCards(), "rate_cards_export.xlsx");
     }
@@ -106,6 +111,7 @@ public class CustomerController {
                 .body(content);
     }
 
+    @AdminOnly
     @PostMapping(value = "/rate-cards/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Import rate cards from Excel — one row per rate card line")
     public RateCardImportResponse importRateCards(@RequestPart("file") MultipartFile file) {
@@ -123,6 +129,7 @@ public class CustomerController {
         return ResponseEntity.ok(cards);
     }
 
+    @AdminOnly
     @PostMapping("/{id}/rate-cards")
     @Operation(summary = "Create a new rate card with name, type, currency, and effective date. " +
             "Optional projectCodeIds associates the card with one or more projects; empty = blended (ADR-035). " +
@@ -143,6 +150,7 @@ public class CustomerController {
         return ResponseEntity.status(HttpStatus.CREATED).body(RateCardResponse.from(card));
     }
 
+    @AdminOnly
     @PutMapping("/{id}/rate-cards/{rateCardId}")
     @Operation(summary = "Edit rate card via versioning — closes current at effectiveTo, " +
             "creates a new version from effectiveFrom (ADR-035). Both dates required. " +
@@ -166,7 +174,7 @@ public class CustomerController {
     // ── Project Codes (bulk) ─────────────────────────────────────────────────
 
     @GetMapping("/project-codes/export")
-    @Operation(summary = "Export all project codes as Excel")
+    @Operation(summary = "Export ALL project codes for ALL customers as Excel — not scoped to a selected customer")
     public ResponseEntity<byte[]> exportProjectCodes() {
         return excelAttachment(customerService.exportProjectCodes(), "project_codes_export.xlsx");
     }
@@ -179,6 +187,7 @@ public class CustomerController {
                 "project_codes_import_template.xlsx");
     }
 
+    @AdminOnly
     @PostMapping(value = "/project-codes/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Import project codes from Excel — skips existing codes per customer")
     public ProjectCodeImportResponse importProjectCodes(@RequestPart("file") MultipartFile file) {
@@ -196,6 +205,7 @@ public class CustomerController {
         return ResponseEntity.ok(codes);
     }
 
+    @AdminOnly
     @PostMapping("/{id}/project-codes")
     @Operation(summary = "Add a project code to a customer")
     public ResponseEntity<ProjectCodeResponse> addProjectCode(
@@ -205,6 +215,7 @@ public class CustomerController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ProjectCodeResponse.from(pc));
     }
 
+    @AdminOnly
     @DeleteMapping("/{id}/project-codes/{codeId}")
     @Operation(summary = "Remove a project code from a customer")
     public ResponseEntity<Void> removeProjectCode(

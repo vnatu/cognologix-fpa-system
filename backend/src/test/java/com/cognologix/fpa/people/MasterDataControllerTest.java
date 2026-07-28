@@ -61,12 +61,13 @@ class MasterDataControllerTest {
         var versionId = UUID.randomUUID();
         when(peoplePayrollService.summarizeMaster(versionId))
                 .thenReturn(new PeoplePayrollService.MasterSummary(
-                        1, new BigDecimal("100000"),
-                        0, BigDecimal.ZERO,
-                        0, BigDecimal.ZERO,
-                        0, BigDecimal.ZERO,
-                        0, BigDecimal.ZERO,
-                        List.of(new PeoplePayrollService.BuBreakdown("Icertis", 1, new BigDecimal("100000")))));
+                        1, new BigDecimal("100000"), BigDecimal.ZERO, new BigDecimal("100000"),
+                        0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        List.of(new PeoplePayrollService.BuBreakdown(
+                                "Icertis", 1, new BigDecimal("100000"), BigDecimal.ZERO, new BigDecimal("100000")))));
 
         mockMvc.perform(get("/api/people/master/{id}/summary", versionId))
                 .andExpect(status().isOk())

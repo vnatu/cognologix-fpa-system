@@ -8,7 +8,9 @@ import PeoplePayrollRoutes from '@/pages/people/PeoplePayrollRoutes';
 import CustomerManagementRoutes from '@/pages/customers/CustomerManagementRoutes';
 import BudgetingRoutes from '@/pages/budgeting/BudgetingRoutes';
 import RevenueRoutes from '@/pages/revenue/RevenueRoutes';
+import ExpensesRoutes from '@/pages/expenses/ExpensesRoutes';
 import SettingsPage from '@/pages/settings/SettingsPage';
+import AccountPage from '@/pages/AccountPage';
 
 function ProtectedRoute({ element }: { element: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -38,7 +40,9 @@ export default function App() {
               />
               <Route path="budgeting/*" element={<BudgetingRoutes />} />
               <Route path="revenue/*" element={<RevenueRoutes />} />
+              <Route path="expenses/*" element={<ExpensesRoutes />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="account" element={<AccountPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

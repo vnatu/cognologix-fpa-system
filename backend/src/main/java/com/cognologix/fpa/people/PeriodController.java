@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.cognologix.fpa.general.AdminOnly;
 
 @RestController
 @RequestMapping("/api/people/periods")
@@ -30,6 +31,7 @@ public class PeriodController {
                 .toList();
     }
 
+    @AdminOnly
     @PostMapping
     @Operation(summary = "Create a new period (auto-creates version 1 OPEN). Returns 409 if month/year exists.")
     public ResponseEntity<PeriodResponse> createPeriod(@Valid @RequestBody CreatePeriodRequest req) {
@@ -50,6 +52,7 @@ public class PeriodController {
                 peoplePayrollService.countMasterByReconciliationStatus(versionId));
     }
 
+    @AdminOnly
     @PostMapping("/{periodId}/versions")
     @Operation(summary = "Create a new version (post-finalisation correction). Requires latest version FINALISED.")
     public ResponseEntity<PeriodVersionSummary> createVersion(
@@ -60,6 +63,7 @@ public class PeriodController {
         return ResponseEntity.status(HttpStatus.CREATED).body(PeriodVersionSummary.from(version));
     }
 
+    @AdminOnly
     @PostMapping("/{periodId}/versions/{versionId}/build-master")
     @Operation(summary = "Trigger Master record build. Only when status is SNAPSHOTS_UPLOADED.")
     public List<MasterRecordResponse> buildMaster(
@@ -71,6 +75,7 @@ public class PeriodController {
                 .toList();
     }
 
+    @AdminOnly
     @PostMapping("/{periodId}/versions/{versionId}/finalise")
     @Operation(summary = "Finalise version. Only when MASTER_BUILT. Publishes PeriodFinalisedEvent.")
     public ResponseEntity<Void> finalise(

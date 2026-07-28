@@ -34,8 +34,9 @@ const TEMPLATE_HEADERS = [
   'Customer Name',
   'Zoho Books Customer Ref',
   'Lifecycle Status',
-  'DSO Days',
+  'Is Internal',
   'Relationship Owner Employee ID',
+  'DSO Days',
 ];
 
 type ImportStep = 1 | 2 | 3 | 4;

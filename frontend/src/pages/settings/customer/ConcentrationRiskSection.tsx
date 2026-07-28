@@ -17,10 +17,12 @@ import {
   updateConcentrationRiskConfig,
 } from '@/pages/customers/api';
 import type { ConcentrationRiskConfig } from '@/pages/customers/types';
+import { useIsAdmin } from '@/components/AdminGate';
 
 const { Text, Paragraph } = Typography;
 
 export default function ConcentrationRiskSection() {
+  const isAdmin = useIsAdmin();
   const [config, setConfig] = useState<ConcentrationRiskConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -105,17 +107,20 @@ export default function ConcentrationRiskSection() {
                   precision={2}
                   addonAfter="%"
                   style={{ width: 140 }}
+                  disabled={!isAdmin}
                 />
               </Form.Item>
               <Form.Item>
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  icon={<SaveOutlined />}
-                  loading={saving}
-                >
-                  Save
-                </Button>
+                {isAdmin && (
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    icon={<SaveOutlined />}
+                    loading={saving}
+                  >
+                    Save
+                  </Button>
+                )}
               </Form.Item>
             </Form>
           </Card>

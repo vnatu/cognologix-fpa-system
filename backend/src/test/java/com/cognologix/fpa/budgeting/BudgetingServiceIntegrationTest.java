@@ -2,11 +2,22 @@ package com.cognologix.fpa.budgeting;
 
 import com.cognologix.fpa.budgeting.domain.ForecastType;
 import com.cognologix.fpa.budgeting.domain.ForecastVersionStatus;
+import com.cognologix.fpa.budgeting.domain.HcPlan;
+import com.cognologix.fpa.budgeting.domain.OverheadBudget;
+import com.cognologix.fpa.budgeting.domain.SalaryBudget;
+import com.cognologix.fpa.budgeting.repository.ClientRevenuePlanRepository;
 import com.cognologix.fpa.budgeting.repository.FinancialYearPlanRepository;
 import com.cognologix.fpa.budgeting.repository.ForecastTypeRepository;
 import com.cognologix.fpa.budgeting.repository.ForecastVersionRepository;
+import com.cognologix.fpa.budgeting.repository.HcPlanRepository;
+import com.cognologix.fpa.budgeting.repository.OverheadActualsRepository;
+import com.cognologix.fpa.budgeting.repository.OverheadBudgetRepository;
 import com.cognologix.fpa.budgeting.repository.PeriodActualsRepository;
+import com.cognologix.fpa.budgeting.repository.SalaryBudgetRepository;
 import com.cognologix.fpa.config.TestSecurityConfig;
+import com.cognologix.fpa.expenses.ExpenseService;
+import com.cognologix.fpa.expenses.dto.ExpenseDtos.ExpenseEntryRequest;
+import com.cognologix.fpa.expenses.repository.ExpenseActualRepository;
 import com.cognologix.fpa.people.PeriodFinalisedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,13 +59,26 @@ class BudgetingServiceIntegrationTest {
     @Autowired ForecastVersionRepository forecastVersionRepository;
     @Autowired PeriodActualsRepository periodActualsRepository;
     @Autowired FinancialYearPlanRepository financialYearPlanRepository;
+    @Autowired HcPlanRepository hcPlanRepository;
+    @Autowired SalaryBudgetRepository salaryBudgetRepository;
+    @Autowired ClientRevenuePlanRepository clientRevenuePlanRepository;
+    @Autowired OverheadBudgetRepository overheadBudgetRepository;
+    @Autowired OverheadActualsRepository overheadActualsRepository;
+    @Autowired ExpenseService expenseService;
+    @Autowired ExpenseActualRepository expenseActualRepository;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired PlatformTransactionManager transactionManager;
 
     @BeforeEach
     void cleanAll() {
         // period_bu_actuals cascades from period_actuals via ON DELETE CASCADE
+        overheadActualsRepository.deleteAll();
+        expenseActualRepository.deleteAll();
         periodActualsRepository.deleteAll();
+        hcPlanRepository.deleteAll();
+        salaryBudgetRepository.deleteAll();
+        clientRevenuePlanRepository.deleteAll();
+        overheadBudgetRepository.deleteAll();
         forecastVersionRepository.deleteAll();
         forecastTypeRepository.deleteAll();
         financialYearPlanRepository.deleteAll();
@@ -124,6 +148,91 @@ class BudgetingServiceIntegrationTest {
     }
 
     @Test
+    void upsertPlanInputs_secondSaveUpdatesWithoutDuplicateKey() {
+        var plan = budgetingService.createFinancialYearPlan("FY2627", 100);
+        var normal = forecastTypeRepository
+                .findByFinancialYearPlanIdAndTypeName(plan.getId(), ForecastType.NORMAL)
+                .orElseThrow();
+        var draft = forecastVersionRepository
+                .findByForecastTypeIdAndVersionNumber(normal.getId(), 1)
+                .orElseThrow();
+
+        var hcFirst = List.of(HcPlan.builder()
+                .planMonth(4).planYear(2026)
+                .plannedHires(2).plannedExits(1)
+                .plannedBillableHc(50).plannedBenchHc(10)
+                .plannedSupportHc(8).plannedLeadershipHc(6).plannedManagementHc(4)
+                .build());
+        budgetingService.upsertHcPlan(plan.getId(), normal.getId(), draft.getId(), hcFirst);
+
+        var hcSecond = List.of(HcPlan.builder()
+                .planMonth(4).planYear(2026)
+                .plannedHires(5).plannedExits(2)
+                .plannedBillableHc(55).plannedBenchHc(8)
+                .plannedSupportHc(8).plannedLeadershipHc(6).plannedManagementHc(4)
+                .build());
+        budgetingService.upsertHcPlan(plan.getId(), normal.getId(), draft.getId(), hcSecond);
+
+        var savedHc = hcPlanRepository.findByForecastVersionId(draft.getId());
+        assertThat(savedHc).hasSize(1);
+        assertThat(savedHc.getFirst().getPlannedHires()).isEqualTo(5);
+        assertThat(savedHc.getFirst().getPlannedBillableHc()).isEqualTo(55);
+
+        budgetingService.upsertSalaryBudget(plan.getId(), normal.getId(), draft.getId(), List.of(
+                SalaryBudget.builder()
+                        .planMonth(4).planYear(2026)
+                        .billableSalaries(new BigDecimal("100000"))
+                        .benchSalaries(new BigDecimal("20000"))
+                        .supportSalaries(new BigDecimal("15000"))
+                        .cofoundersSalaries(new BigDecimal("30000"))
+                        .seniorMgmtSalaries(new BigDecimal("25000"))
+                        .build()));
+        budgetingService.upsertSalaryBudget(plan.getId(), normal.getId(), draft.getId(), List.of(
+                SalaryBudget.builder()
+                        .planMonth(4).planYear(2026)
+                        .billableSalaries(new BigDecimal("110000"))
+                        .benchSalaries(new BigDecimal("21000"))
+                        .supportSalaries(new BigDecimal("16000"))
+                        .cofoundersSalaries(new BigDecimal("31000"))
+                        .seniorMgmtSalaries(new BigDecimal("26000"))
+                        .build()));
+        assertThat(budgetingService.getSalaryBudget(plan.getId(), normal.getId(), draft.getId()))
+                .hasSize(1);
+        assertThat(budgetingService.getSalaryBudget(plan.getId(), normal.getId(), draft.getId())
+                .getFirst().getBillableSalaries()).isEqualByComparingTo("110000");
+
+        budgetingService.upsertOverheadBudget(plan.getId(), normal.getId(), draft.getId(), List.of(
+                OverheadBudget.builder()
+                        .planMonth(4).planYear(2026)
+                        .overheadLine("office_rent")
+                        .amount(new BigDecimal("50000"))
+                        .build()));
+        budgetingService.upsertOverheadBudget(plan.getId(), normal.getId(), draft.getId(), List.of(
+                OverheadBudget.builder()
+                        .planMonth(4).planYear(2026)
+                        .overheadLine("office_rent")
+                        .amount(new BigDecimal("55000"))
+                        .build()));
+        assertThat(budgetingService.getOverheadBudget(plan.getId(), normal.getId(), draft.getId()))
+                .hasSize(1);
+        assertThat(budgetingService.getOverheadBudget(plan.getId(), normal.getId(), draft.getId())
+                .getFirst().getAmount()).isEqualByComparingTo("55000");
+
+        UUID officeRentId = expenseService.listAllCategories().stream()
+                .filter(c -> "office_rent".equals(c.lineCode()))
+                .findFirst()
+                .orElseThrow()
+                .id();
+        expenseService.saveMonthlyExpenses(4, 2026, List.of(
+                new ExpenseEntryRequest(officeRentId, new BigDecimal("48000"), null)), "test");
+        expenseService.saveMonthlyExpenses(4, 2026, List.of(
+                new ExpenseEntryRequest(officeRentId, new BigDecimal("49000"), null)), "test");
+        var actuals = expenseService.getMonthlyExpenseActuals(4, 2026);
+        assertThat(actuals).containsKey("office_rent");
+        assertThat(actuals.get("office_rent")).isEqualByComparingTo("49000");
+    }
+
+    @Test
     void applicationModuleListener_writesPeriodActualsFromPeriodFinalisedEvent() {
         var plan = budgetingService.createFinancialYearPlan("FY2627", 100);
         UUID periodVersionId = UUID.randomUUID();
@@ -138,7 +247,14 @@ class BudgetingServiceIntegrationTest {
                 new BigDecimal("60000.00"),
                 new BigDecimal("90000.00"),
                 new BigDecimal("120000.00"),
-                List.of(new PeriodFinalisedEvent.BuPeriodActual("BU-A", 20, new BigDecimal("200000.00"))));
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("500000.00"),
+                new BigDecimal("80000.00"),
+                new BigDecimal("60000.00"),
+                new BigDecimal("90000.00"),
+                new BigDecimal("120000.00"),
+                List.of(new PeriodFinalisedEvent.BuPeriodActual(
+                        "BU-A", 20, new BigDecimal("200000.00"), BigDecimal.ZERO, new BigDecimal("200000.00"))));
 
         new TransactionTemplate(transactionManager).executeWithoutResult(
                 status -> eventPublisher.publishEvent(event));

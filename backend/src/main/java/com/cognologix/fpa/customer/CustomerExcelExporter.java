@@ -8,12 +8,12 @@ import com.cognologix.fpa.customer.repository.RateCardProjectCodeRepository;
 import com.cognologix.fpa.customer.repository.RateCardRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
-import org.hibernate.Hibernate;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -43,15 +43,7 @@ public class CustomerExcelExporter {
         try (Workbook workbook = WorkbookFactory.create(true);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Customers");
-            String[] headers = {
-                    CustomerImportParser.COL_CUSTOMER_CODE,
-                    CustomerImportParser.COL_CUSTOMER_NAME,
-                    CustomerImportParser.COL_ZOHO_BOOKS_REF,
-                    CustomerImportParser.COL_LIFECYCLE_STATUS,
-                    CustomerImportParser.COL_DSO_DAYS,
-                    CustomerImportParser.COL_RELATIONSHIP_OWNER
-            };
-            writeHeaderRow(sheet, headers);
+            writeHeaderRow(sheet, CustomerImportParser.IMPORT_EXPORT_HEADERS);
 
             int rowIdx = 1;
             for (Customer customer : customers) {
@@ -61,9 +53,10 @@ public class CustomerExcelExporter {
                 row.createCell(col++).setCellValue(customer.getCustomerName());
                 setOptionalString(row, col++, customer.getZohoBooksCustomerRef());
                 row.createCell(col++).setCellValue(customer.getLifecycleStatus().name());
+                row.createCell(col++).setCellValue(customer.isInternal() ? "true" : "false");
+                setOptionalString(row, col++, customer.getRelationshipOwnerEmployeeId());
                 int dsoDays = dsoByCustomerId.getOrDefault(customer.getId(), 0);
-                row.createCell(col++).setCellValue(dsoDays);
-                setOptionalString(row, col, customer.getRelationshipOwnerEmployeeId());
+                row.createCell(col).setCellValue(dsoDays);
             }
 
             workbook.write(out);
@@ -73,21 +66,24 @@ public class CustomerExcelExporter {
         }
     }
 
+    /**
+     * Export every rate card for every customer (no UI/customer filter).
+     * Rows expand rate_card → rate_card_line; project codes come from
+     * rate_card_project_code → customer_project_code. Sorted by Customer Code ASC,
+     * Effective From ASC for stable re-import.
+     */
     public byte[] exportRateCards() {
-        List<RateCard> cards = rateCardRepository.findAllForExport();
-        cards.forEach(card -> {
-            Hibernate.initialize(card.getCustomer());
-            Hibernate.initialize(card.getLines());
-        });
+        List<RateCard> cards = new ArrayList<>(rateCardRepository.findAllForExport());
+        cards.sort(Comparator
+                .comparing((RateCard rc) -> rc.getCustomer().getCustomerCode(), String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(RateCard::getEffectiveFrom));
+
         Map<UUID, String> projectCodeById = projectCodeRepository.findAll().stream()
                 .collect(Collectors.toMap(CustomerProjectCode::getId, CustomerProjectCode::getProjectCode));
         Map<UUID, List<UUID>> projectIdsByRateCard = rateCardProjectCodeRepository.findAll().stream()
                 .collect(Collectors.groupingBy(
                         RateCardProjectCode::getRateCardId,
                         Collectors.mapping(RateCardProjectCode::getProjectCodeId, Collectors.toList())));
-        cards.sort(Comparator
-                .comparing((RateCard rc) -> rc.getCustomer().getCustomerCode())
-                .thenComparing(RateCard::getEffectiveFrom));
 
         try (Workbook workbook = WorkbookFactory.create(true);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -116,17 +112,15 @@ public class CustomerExcelExporter {
                         .sorted()
                         .toList();
                 String projectCodeCell = codes.isEmpty() ? null : String.join(";", codes);
+                // Flat/blended cards with no line rows still emit one data row so the card is not dropped.
+                if (lines.isEmpty()) {
+                    Row row = sheet.createRow(rowIdx++);
+                    writeRateCardRow(row, card, projectCodeCell, null, null);
+                    continue;
+                }
                 for (RateCardLine line : lines) {
                     Row row = sheet.createRow(rowIdx++);
-                    int col = 0;
-                    row.createCell(col++).setCellValue(card.getCustomer().getCustomerCode());
-                    setOptionalString(row, col++, projectCodeCell);
-                    row.createCell(col++).setCellValue(card.getName());
-                    row.createCell(col++).setCellValue(card.getRateCardType().name());
-                    row.createCell(col++).setCellValue(card.getCurrency().name());
-                    row.createCell(col++).setCellValue(card.getEffectiveFrom().toString());
-                    setOptionalString(row, col++, line.getJobLevel());
-                    setNumericCell(row, col, line.getRateAmount());
+                    writeRateCardRow(row, card, projectCodeCell, line.getJobLevel(), line.getRateAmount());
                 }
             }
 
@@ -137,9 +131,29 @@ public class CustomerExcelExporter {
         }
     }
 
+    private static void writeRateCardRow(
+            Row row, RateCard card, String projectCodeCell, String jobLevel, BigDecimal rateAmount) {
+        int col = 0;
+        row.createCell(col++).setCellValue(card.getCustomer().getCustomerCode());
+        setOptionalString(row, col++, projectCodeCell);
+        row.createCell(col++).setCellValue(card.getName());
+        row.createCell(col++).setCellValue(card.getRateCardType().name());
+        row.createCell(col++).setCellValue(card.getCurrency().name());
+        row.createCell(col++).setCellValue(card.getEffectiveFrom().toString());
+        setOptionalString(row, col++, jobLevel);
+        setNumericCell(row, col, rateAmount);
+    }
+
+    /**
+     * Export every project code for every customer (no UI/customer filter).
+     * Sorted by Customer Code ASC, Project Code ASC.
+     */
     public byte[] exportProjectCodes() {
-        List<CustomerProjectCode> codes = projectCodeRepository.findAllForExport();
-        codes.forEach(pc -> Hibernate.initialize(pc.getCustomer()));
+        List<CustomerProjectCode> codes = new ArrayList<>(projectCodeRepository.findAllForExport());
+        codes.sort(Comparator
+                .comparing((CustomerProjectCode pc) -> pc.getCustomer().getCustomerCode(),
+                        String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(CustomerProjectCode::getProjectCode, String.CASE_INSENSITIVE_ORDER));
 
         try (Workbook workbook = WorkbookFactory.create(true);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {

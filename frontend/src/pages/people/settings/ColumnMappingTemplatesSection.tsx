@@ -9,15 +9,28 @@ import {
   Typography,
   notification,
 } from 'antd';
-import { EditOutlined, PlusOutlined } from '@ant-design/icons';
+import {
+  DownloadOutlined,
+  EditOutlined,
+  ExportOutlined,
+  PlusOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { fetchMappingTemplatesByType } from '../api';
+import {
+  downloadMappingTemplatesImportSample,
+  exportMappingTemplates,
+  fetchMappingTemplatesByType,
+  importMappingTemplates,
+} from '../api';
 import ColumnMappingEditor from '../components/ColumnMappingEditor';
 import {
   IMPORT_TYPE_LABELS,
   SYSTEM_ATTRIBUTE_LABELS,
 } from '../constants';
 import type { ImportType, MappingLine, MappingTemplate } from '../types';
+import { AdminGate, useIsAdmin } from '@/components/AdminGate';
+import SimpleExcelImportModal from '@/components/SimpleExcelImportModal';
 
 const { Text } = Typography;
 
@@ -37,6 +50,7 @@ function TemplateSection({
   template: MappingTemplate | null;
   onTemplateChange: (importType: ImportType, template: MappingTemplate | null) => void;
 }) {
+  const isAdmin = useIsAdmin();
   const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editHeaders, setEditHeaders] = useState<string[]>([]);
@@ -110,21 +124,25 @@ function TemplateSection({
             pagination={false}
             size="small"
           />
+          {isAdmin && (
           <Space>
-            <Button icon={<EditOutlined />} onClick={startEdit}>
+            <Button icon={<EditOutlined />} onClick={startEdit} disabled={!template}>
               Edit
             </Button>
             <Button icon={<PlusOutlined />} onClick={startCreate}>
               Create New Template
             </Button>
           </Space>
+          )}
         </Space>
       ) : (
         <Space direction="vertical">
           <Empty description="No active template" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          {isAdmin && (
           <Button type="primary" icon={<PlusOutlined />} onClick={startCreate}>
             Create New Template
           </Button>
+          )}
         </Space>
       )}
     </Card>
@@ -136,6 +154,7 @@ export default function ColumnMappingTemplatesSection() {
     Partial<Record<ImportType, MappingTemplate[]>>
   >({});
   const [loading, setLoading] = useState(true);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -173,6 +192,34 @@ export default function ColumnMappingTemplatesSection() {
 
   return (
     <div>
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Button
+          icon={<ExportOutlined />}
+          onClick={() => {
+            exportMappingTemplates().catch(() =>
+              notification.error({ message: 'Failed to export mapping templates' }),
+            );
+          }}
+        >
+          Export
+        </Button>
+        <Button
+          icon={<DownloadOutlined />}
+          onClick={() => {
+            downloadMappingTemplatesImportSample().catch(() =>
+              notification.error({ message: 'Failed to download sample file' }),
+            );
+          }}
+        >
+          Download Sample File
+        </Button>
+        <AdminGate>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+            Import
+          </Button>
+        </AdminGate>
+      </Space>
+
       {IMPORT_TYPES.map((type) => (
         <TemplateSection
           key={type}
@@ -181,6 +228,14 @@ export default function ColumnMappingTemplatesSection() {
           onTemplateChange={handleTemplateChange}
         />
       ))}
+
+      <SimpleExcelImportModal
+        open={importOpen}
+        title="Import Mapping Templates"
+        onClose={() => setImportOpen(false)}
+        onImported={load}
+        importFile={importMappingTemplates}
+      />
     </div>
   );
 }

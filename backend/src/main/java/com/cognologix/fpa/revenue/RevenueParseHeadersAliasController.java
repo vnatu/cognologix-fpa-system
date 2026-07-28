@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import com.cognologix.fpa.general.AdminOnly;
 
 /**
  * Alias parse-headers for credit-notes path — same behaviour as invoices parse-headers.
@@ -23,6 +24,7 @@ class RevenueParseHeadersAliasController {
 
     private final RevenueService revenueService;
 
+    @AdminOnly
     @PostMapping(value = "/credit-notes/parse-headers", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Parse Excel column headers (credit notes) — no persist")
     public ParseHeadersResponse parseCreditNoteHeaders(@RequestPart("file") MultipartFile file) {

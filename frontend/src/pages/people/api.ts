@@ -207,6 +207,69 @@ export const deleteClassificationConfig = (id: string): Promise<void> =>
     .delete(`/api/people/config/classification/${id}`)
     .then(() => undefined);
 
+async function downloadBlob(url: string, filename: string): Promise<void> {
+  const response = await axios.get<Blob>(url, { responseType: 'blob' });
+  const objectUrl = window.URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+export interface SimpleImportResult {
+  totalRows: number;
+  created: number;
+  skipped: number;
+  errors: Array<{ rowNumber: number; reason: string }>;
+}
+
+export const exportClassificationConfig = (): Promise<void> =>
+  downloadBlob(
+    '/api/people/config/classification/export',
+    'classification_config_export.xlsx',
+  );
+
+export const downloadClassificationImportSample = (): Promise<void> =>
+  downloadBlob(
+    '/api/people/config/classification/import/sample',
+    'classification_config_import_template.xlsx',
+  );
+
+export const importClassificationConfig = (
+  file: File,
+): Promise<SimpleImportResult> => {
+  const form = new FormData();
+  form.append('file', file);
+  return axios
+    .post<SimpleImportResult>('/api/people/config/classification/import', form)
+    .then((r) => r.data);
+};
+
+export const exportMappingTemplates = (): Promise<void> =>
+  downloadBlob(
+    '/api/people/imports/mappings/export',
+    'mapping_templates_export.xlsx',
+  );
+
+export const downloadMappingTemplatesImportSample = (): Promise<void> =>
+  downloadBlob(
+    '/api/people/imports/mappings/import/sample',
+    'mapping_templates_import_template.xlsx',
+  );
+
+export const importMappingTemplates = (
+  file: File,
+): Promise<SimpleImportResult> => {
+  const form = new FormData();
+  form.append('file', file);
+  return axios
+    .post<SimpleImportResult>('/api/people/imports/mappings/import', form)
+    .then((r) => r.data);
+};
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 export const fetchDashboardPeriods = (): Promise<DashboardPeriod[]> =>

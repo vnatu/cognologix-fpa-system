@@ -36,6 +36,7 @@ import {
   latestVersionForPeriod,
   periodStatusBadgeColor,
 } from '../utils';
+import { AdminGate, useIsAdmin } from '@/components/AdminGate';
 
 const { Text } = Typography;
 
@@ -47,6 +48,7 @@ interface VersionRow extends PeriodVersionSummary {
 
 export default function PeriodManagementPage() {
   const { formatDateTime } = useDateFormat();
+  const isAdmin = useIsAdmin();
   const [periods, setPeriods] = useState<PeriodResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -264,7 +266,7 @@ export default function PeriodManagementPage() {
       title: 'Actions',
       key: 'actions',
       render: (_, version) =>
-        version.status === 'SUPERSEDED' ? null : (
+        !isAdmin || version.status === 'SUPERSEDED' ? null : (
         <Space wrap>
           <Button
             size="small"
@@ -347,9 +349,11 @@ export default function PeriodManagementPage() {
         <h2 style={{ fontFamily: HEADING_FONT, margin: 0, fontSize: 18 }}>
           Period Management
         </h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-          New Period
-        </Button>
+        <AdminGate fallback="hide">
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+            New Period
+          </Button>
+        </AdminGate>
       </Space>
 
       {periods.length === 0 ? (

@@ -4,6 +4,7 @@ import com.cognologix.fpa.budgeting.domain.*;
 import com.cognologix.fpa.budgeting.dto.BudgetingDtos.*;
 import com.cognologix.fpa.budgeting.dto.BudgetingRequests.*;
 import com.cognologix.fpa.budgeting.dto.BudgetingResponses.*;
+import com.cognologix.fpa.budgeting.dto.PlanInputImportResponse;
 import com.cognologix.fpa.customer.CustomerService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -11,13 +12,17 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
+import java.time.YearMonth;
 import java.util.List;
 import java.util.UUID;
+import com.cognologix.fpa.general.AdminOnly;
 
 @RestController
 @RequestMapping("/api/budgeting/plans")
@@ -28,13 +33,15 @@ public class BudgetingController {
     private final BudgetingService budgetingService;
     private final CustomerService customerService;
 
+    @AdminOnly
     @PostMapping
     @Operation(summary = "Create financial year plan with NORMAL/AGGRESSIVE/CONSERVATIVE DRAFT v1")
     public ResponseEntity<PlanDetailResponse> createPlan(
             @Valid @RequestBody CreatePlanRequest req,
             Authentication auth) {
         var plan = budgetingService.createFinancialYearPlan(
-                req.fiscalYear(), req.openingHc(), actor(auth));
+                req.fiscalYear(), req.openingHc(), actor(auth),
+                req.fiscalYearStart(), req.fiscalYearEnd());
         return ResponseEntity.status(HttpStatus.CREATED).body(PlanDetailResponse.from(plan));
     }
 
@@ -50,7 +57,13 @@ public class BudgetingController {
     @Operation(summary = "Get plan detail with forecast types and versions")
     public ResponseEntity<PlanDetailResponse> getPlan(@PathVariable UUID planId) {
         return budgetingService.getFinancialYearPlan(planId)
-                .map(PlanDetailResponse::from)
+                .map(plan -> {
+                    var latest = budgetingService.findLatestActualsMonth(plan.getId());
+                    return PlanDetailResponse.from(
+                            plan,
+                            latest.map(YearMonth::getMonthValue).orElse(null),
+                            latest.map(YearMonth::getYear).orElse(null));
+                })
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -66,6 +79,7 @@ public class BudgetingController {
         return ResponseEntity.ok(types.stream().map(ForecastTypeResponse::from).toList());
     }
 
+    @AdminOnly
     @PostMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/publish")
     @Operation(summary = "Publish DRAFT version (ACTIVE); prior ACTIVE → SUPERSEDED")
     public ForecastVersionResponse publishVersion(
@@ -77,6 +91,7 @@ public class BudgetingController {
                 budgetingService.publishForecastVersion(planId, typeId, versionId, actor(auth)));
     }
 
+    @AdminOnly
     @PostMapping("/{planId}/forecast-types/{typeId}/versions")
     @Operation(summary = "Create next DRAFT version as a copy of current ACTIVE inputs")
     public ResponseEntity<ForecastVersionResponse> createDraftVersion(
@@ -98,6 +113,7 @@ public class BudgetingController {
                 .toList();
     }
 
+    @AdminOnly
     @PutMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/hc-plan")
     @Operation(summary = "Upsert HC plan inputs (DRAFT only)")
     public ResponseEntity<Void> upsertHcPlan(
@@ -133,6 +149,7 @@ public class BudgetingController {
                 .toList();
     }
 
+    @AdminOnly
     @PutMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/salary-budget")
     @Operation(summary = "Upsert salary budget inputs (DRAFT only)")
     public ResponseEntity<Void> upsertSalaryBudget(
@@ -166,6 +183,7 @@ public class BudgetingController {
                 .toList();
     }
 
+    @AdminOnly
     @PutMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/revenue-plan")
     @Operation(summary = "Upsert client revenue plan (DRAFT only)")
     public ResponseEntity<Void> upsertRevenuePlan(
@@ -202,6 +220,7 @@ public class BudgetingController {
                 .toList();
     }
 
+    @AdminOnly
     @PutMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/overhead-budget")
     @Operation(summary = "Upsert overhead budget (DRAFT only)")
     public ResponseEntity<Void> upsertOverheadBudget(
@@ -221,49 +240,208 @@ public class BudgetingController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/hc-plan/export")
+    @Operation(summary = "Export HC plan inputs as Excel")
+    public ResponseEntity<byte[]> exportHcPlan(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId) {
+        return excelAttachment(
+                budgetingService.exportHcPlan(planId, typeId, versionId), "hc_plan_export.xlsx");
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/hc-plan/import/sample")
+    @Operation(summary = "Download HC plan import template (headers only)")
+    public ResponseEntity<byte[]> downloadHcPlanImportSample() {
+        return excelAttachment(budgetingService.buildHcPlanImportSample(), "hc_plan_import_template.xlsx");
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/{planId}/forecast-types/{typeId}/versions/{versionId}/hc-plan/import",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import HC plan inputs from Excel (DRAFT only, merge by month/year)")
+    public PlanInputImportResponse importHcPlan(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId,
+            @RequestPart("file") MultipartFile file) {
+        return budgetingService.importHcPlan(planId, typeId, versionId, file);
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/salary-budget/export")
+    @Operation(summary = "Export salary budget inputs as Excel")
+    public ResponseEntity<byte[]> exportSalaryBudget(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId) {
+        return excelAttachment(
+                budgetingService.exportSalaryBudget(planId, typeId, versionId), "salary_budget_export.xlsx");
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/salary-budget/import/sample")
+    @Operation(summary = "Download salary budget import template (headers only)")
+    public ResponseEntity<byte[]> downloadSalaryBudgetImportSample() {
+        return excelAttachment(
+                budgetingService.buildSalaryBudgetImportSample(), "salary_budget_import_template.xlsx");
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/{planId}/forecast-types/{typeId}/versions/{versionId}/salary-budget/import",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import salary budget inputs from Excel (DRAFT only, merge by month/year)")
+    public PlanInputImportResponse importSalaryBudget(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId,
+            @RequestPart("file") MultipartFile file) {
+        return budgetingService.importSalaryBudget(planId, typeId, versionId, file);
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/revenue-plan/export")
+    @Operation(summary = "Export client revenue plan as Excel")
+    public ResponseEntity<byte[]> exportRevenuePlan(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId) {
+        return excelAttachment(
+                budgetingService.exportRevenuePlan(planId, typeId, versionId), "client_revenue_plan_export.xlsx");
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/revenue-plan/import/sample")
+    @Operation(summary = "Download client revenue plan import template (headers only)")
+    public ResponseEntity<byte[]> downloadRevenuePlanImportSample() {
+        return excelAttachment(
+                budgetingService.buildRevenuePlanImportSample(), "client_revenue_plan_import_template.xlsx");
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/{planId}/forecast-types/{typeId}/versions/{versionId}/revenue-plan/import",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import client revenue plan from Excel (DRAFT only, merge by customer/month/year)")
+    public PlanInputImportResponse importRevenuePlan(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId,
+            @RequestPart("file") MultipartFile file) {
+        return budgetingService.importRevenuePlan(planId, typeId, versionId, file);
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/overhead-budget/export")
+    @Operation(summary = "Export overhead budget as Excel")
+    public ResponseEntity<byte[]> exportOverheadBudget(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId) {
+        return excelAttachment(
+                budgetingService.exportOverheadBudget(planId, typeId, versionId), "overhead_budget_export.xlsx");
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/overhead-budget/import/sample")
+    @Operation(summary = "Download overhead budget import template (headers only)")
+    public ResponseEntity<byte[]> downloadOverheadBudgetImportSample() {
+        return excelAttachment(
+                budgetingService.buildOverheadBudgetImportSample(), "overhead_budget_import_template.xlsx");
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/{planId}/forecast-types/{typeId}/versions/{versionId}/overhead-budget/import",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import overhead budget from Excel (DRAFT only, merge by month/year/line)")
+    public PlanInputImportResponse importOverheadBudget(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId,
+            @RequestPart("file") MultipartFile file) {
+        return budgetingService.importOverheadBudget(planId, typeId, versionId, file);
+    }
+
+    @GetMapping("/{planId}/forecast-types/{typeId}/versions/{versionId}/export-all")
+    @Operation(summary = "Export all plan inputs as a ZIP archive")
+    public ResponseEntity<byte[]> exportAllInputs(
+            @PathVariable UUID planId,
+            @PathVariable UUID typeId,
+            @PathVariable UUID versionId) {
+        return zipAttachment(
+                budgetingService.exportAllInputs(planId, typeId, versionId), "plan_inputs_export.zip");
+    }
+
     @GetMapping("/{planId}/rolling-forecast")
     @Operation(summary = "Rolling Forecast = actuals (finalised) + ACTIVE Normal plan (future)")
-    public RollingForecastResult rollingForecast(@PathVariable UUID planId) {
-        return budgetingService.getRollingForecast(planId);
+    public RollingForecastResult rollingForecast(
+            @PathVariable UUID planId,
+            @RequestParam(defaultValue = "ANNUAL") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter) {
+        return budgetingService.getRollingForecast(planId, granularity, month, year, quarter);
     }
 
     @GetMapping("/{planId}/delta")
     @Operation(summary = "Delta = Rolling Forecast − ACTIVE Normal Baseline")
-    public DeltaResult delta(@PathVariable UUID planId) {
-        return budgetingService.getDelta(planId);
+    public DeltaResult delta(
+            @PathVariable UUID planId,
+            @RequestParam(defaultValue = "ANNUAL") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter) {
+        return budgetingService.getDelta(planId, granularity, month, year, quarter);
     }
 
     @GetMapping("/{planId}/plan-vs-actual")
     @Operation(summary = "Plan vs Actual vs Variance with quarterly and FY totals (optional forecastTypeId for Plan side)")
     public PlanVsActualResult planVsActual(
             @PathVariable UUID planId,
-            @RequestParam(required = false) UUID forecastTypeId) {
-        return budgetingService.getPlanVsActual(planId, forecastTypeId);
+            @RequestParam(required = false) UUID forecastTypeId,
+            @RequestParam(defaultValue = "ANNUAL") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter) {
+        return budgetingService.getPlanVsActual(
+                planId, forecastTypeId, granularity, month, year, quarter);
     }
 
     @GetMapping("/{planId}/cost-per-employee")
-    @Operation(summary = "Cost per employee (Full Absorption Layer 1–3) for a month (optional forecastTypeId if no actuals)")
+    @Operation(summary = "Cost per employee (Full Absorption Layer 1–3) for a period (optional forecastTypeId if no actuals)")
     public CostPerEmployeeResult costPerEmployee(
             @PathVariable UUID planId,
-            @RequestParam int month,
-            @RequestParam int year,
+            @RequestParam(defaultValue = "ANNUAL") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter,
             @RequestParam(required = false) UUID forecastTypeId) {
-        return budgetingService.getCostPerEmployee(planId, month, year, forecastTypeId);
+        if (granularity == PeriodGranularity.MONTHLY) {
+            if (month == null || year == null) {
+                throw new IllegalArgumentException("month and year are required for MONTHLY granularity");
+            }
+            validateMonthYear(month, year);
+        }
+        return budgetingService.getCostPerEmployee(
+                planId, granularity, month, year, quarter, forecastTypeId);
     }
 
     @GetMapping("/{planId}/bu-metrics")
-    @Operation(summary = "Per-BU profitability metrics for a month (optional forecastTypeId for planned data)")
+    @Operation(summary = "Per-BU profitability metrics for a period (optional forecastTypeId for planned data)")
     public BuMetricsResult buMetrics(
             @PathVariable UUID planId,
-            @RequestParam int month,
-            @RequestParam int year,
+            @RequestParam(defaultValue = "ANNUAL") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter,
             @RequestParam(required = false) UUID forecastTypeId) {
-        return budgetingService.getBuMetrics(planId, month, year, forecastTypeId);
+        if (granularity == PeriodGranularity.MONTHLY) {
+            if (month == null || year == null) {
+                throw new IllegalArgumentException("month and year are required for MONTHLY granularity");
+            }
+            validateMonthYear(month, year);
+        }
+        return budgetingService.getBuMetrics(
+                planId, granularity, month, year, quarter, forecastTypeId);
     }
 
+    @AdminOnly
     @PutMapping("/{planId}/actuals/{month}/{year}/revenue")
-    @Operation(summary = "Enter revenue actuals manually (placeholder until Revenue module)")
-    public ResponseEntity<Void> upsertRevenueActuals(
+    @Operation(summary = "Manual Override — enter revenue actuals when Zoho Books data is unavailable for the period")
+    public PeriodActualsResponse upsertRevenueActuals(
             @PathVariable UUID planId,
             @PathVariable int month,
             @PathVariable int year,
@@ -293,10 +471,11 @@ public class BudgetingController {
         if (total == null) {
             throw new IllegalArgumentException("totalRevenue or byClient is required");
         }
-        budgetingService.upsertRevenueActuals(planId, month, year, total, byClient, actor(auth));
-        return ResponseEntity.noContent().build();
+        var saved = budgetingService.upsertRevenueActuals(planId, month, year, total, byClient, actor(auth));
+        return PeriodActualsResponse.from(saved);
     }
 
+    @AdminOnly
     @PutMapping("/{planId}/actuals/{month}/{year}/overhead")
     @Operation(summary = "Enter overhead actuals manually per line item")
     public ResponseEntity<Void> upsertOverheadActuals(
@@ -340,5 +519,20 @@ public class BudgetingController {
         if (year < 2000) {
             throw new IllegalArgumentException("year must be >= 2000");
         }
+    }
+
+    private static ResponseEntity<byte[]> excelAttachment(byte[] content, String filename) {
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(content);
+    }
+
+    private static ResponseEntity<byte[]> zipAttachment(byte[] content, String filename) {
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType("application/zip"))
+                .body(content);
     }
 }

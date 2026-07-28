@@ -970,4 +970,259 @@ Implementing Module 4 (Revenue) required deciding how to reuse the existing `imp
 
 ---
 
+
+## ADR-042: Authentication — Database Users with ADMIN / VIEWER Roles
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-005 established self-managed JWT auth with a single flat in-memory ADMIN role. Named users now need invite/deactivate/reset flows, and Finance needs a read-only VIEWER role for dashboards and list screens without write access.
+
+**Decision**
+1. **Store:** `app_user` (email, BCrypt `password_hash`, role `ADMIN|VIEWER`, `is_active`, `must_change_password`) plus `login_attempt` for rate limiting — Flyway V21. Seed one admin (`admin@cognologix.com`) with temporary password requiring change on first login.
+2. **Auth:** Keep JWT (ADR-005). Replace `InMemoryUserDetailsManager` with a DB-backed `UserDetailsService` loading from `app_user`. JWT claims include `role` and `mustChangePassword` so the UI can gate without an extra round-trip.
+3. **Authorization:** Method security via `@AdminOnly` in the General module (`@PreAuthorize("hasRole('ADMIN')")`) on all write endpoints (POST/PUT/DELETE) except `/api/auth/**` and `PUT /api/users/me/password`. GET remains available to both roles. Annotation lives in General (not Security) to avoid a Modulith cycle — Security depends on General's `UserService`, not the reverse.
+4. **Rate limit:** ≥5 `login_attempt` rows for an email in the last 15 minutes → HTTP 429 before authentication.
+5. **User management API:** Owned by the General module (`UserController` / `UserService`) — Settings → General Members + `/account` profile.
+
+**Consequences**
+- (+) Real invite/reset/deactivate without changing the JWT session model.
+- (+) VIEWER can use all read surfaces; write UI and APIs are Admin-only.
+- (–) Manual provisioning remains until SSO (still deferred per ADR-005).
+
+**Alternatives considered**
+- Keep single ADMIN flat role — rejected; Finance needs viewers for dashboards without mutation risk.
+- OAuth2/OIDC now — still premature; revisit when SSO is a stated requirement.
+
+---
+
+## ADR-043: Budgeting Actual Revenue — Prefer Revenue Module, Manual Override Fallback
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-039 directed Budgeting & Forecasting to replace `period_actuals.actual_revenue_manual` with a direct query to Revenue. Finance still needs a path for periods where Zoho Books uploads are not yet available. Revenue already called Budgeting for plan figures on the Dashboard (ADR-041), so a naive `BudgetingService → RevenueService` call would form a Modulith cycle.
+
+**Decision**
+1. **Actuals resolution in Budgeting:** `getRollingForecast`, `getPlanVsActual`, and `getBuMetrics` call `RevenueService.getAllClientsMonthlyRevenue(month, year)`. That method returns `null` when no active invoice/credit-note upload exists for the period; otherwise the per-client list. Non-null → use Revenue (INR net). Null → fall back to `client_revenue_actual` rows, then `actual_revenue_manual`. The column stays in schema as a **Manual Override**.
+2. **Plan vs Actual:** each month includes `revenueSource` = `REVENUE_MODULE` | `MANUAL_OVERRIDE` | null.
+3. **Manual Override API:** `PUT .../actuals/{month}/{year}/revenue` returns `PeriodActualsResponse` with `actualRevenueManualLabel = "Manual Override"`.
+4. **Cycle break:** Revenue Dashboard composition (actuals + planned) lives in the application composition module (`com.cognologix.fpa.application.RevenueDashboardController`) that injects both services. `RevenueService` no longer depends on `BudgetingService`. Budgeting declares `allowedDependencies` including `revenue`; Revenue module is OPEN for DTO access.
+
+**Consequences**
+- (+) Finance sees which source drives each month's actual revenue.
+- (+) Manual entry remains for gaps; Revenue is primary when uploads exist.
+- (+) Modulith DAG preserved: budgeting → revenue; revenue no longer → budgeting.
+
+---
+## ADR-044: Export/Import Completeness + Full Backup/Restore
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+Export/import was built for Customers, Rate Cards, and Project Codes (ADR-027, ADR-028, ADR-032) but not consistently across all sections. Additionally, a full backup/restore capability is needed for environment resets, testing, and data safety.
+ 
+**Decision**
+Two tiers of export/import:
+ 
+**Tier 1 — Per-section export/import (targeted updates)**
+Every section that has data Finance can configure or import gets its own export and import, in the same Excel format as its import template. Sections still missing export/import to be completed:
+- People & Payroll: classification config export/import (Delivery PU list, Management/Leadership BU list), column mapping template export/import
+- Budgeting & Forecasting: HC Plan export/import, Salary Budget export/import, Client Revenue Plan export/import, Overhead Budget export/import — all per forecast version
+- Revenue: invoice export (import already exists), credit note export (import already exists)
+- General: FX rate export/import, users export (no import — users managed via invite flow)
+**Tier 2 — Full backup/restore**
+Format: ZIP archive containing one Excel file per data type. Single download, single upload for full system backup/restore. Restore behaviour: full replace — system resets all data then reloads from the ZIP in dependency order (users → general config → customers → rate cards → project codes → classification config → FX rates → financial year plans → forecast versions → plan inputs → periods → snapshots → master records → invoices → credit notes). Restore requires ADMIN role and explicit confirmation ("This will delete all existing data and replace it with the backup. This cannot be undone.").
+ 
+Accessible from a new "Backup & Restore" section in Settings → General (Admin only).
+ 
+**ZIP contents (one Excel per file):**
+users.xlsx, general_config.xlsx, fx_rates.xlsx, customers.xlsx, rate_cards.xlsx, project_codes.xlsx, classification_config.xlsx, column_mapping_templates.xlsx, financial_year_plans.xlsx, forecast_versions.xlsx, hc_plan.xlsx, salary_budget.xlsx, client_revenue_plan.xlsx, overhead_budget.xlsx, period_actuals.xlsx, overhead_actuals.xlsx, zoho_people_snapshots.xlsx, zoho_payroll_snapshots.xlsx, employee_registry.xlsx, alternate_id_links.xlsx, master_records.xlsx, revenue_invoices.xlsx, revenue_credit_notes.xlsx.
+ 
+**Consequences**
+- (+) Finance can reset the test DB, restore from backup, and continue testing without manual re-entry.
+- (+) Per-section export/import allows targeted updates without touching unrelated data.
+- (+) ZIP format keeps backup as a single portable artifact while keeping individual files inspectable.
+- (−) Full restore with "everything including transactional snapshots" will be large for production use — acceptable at Cognologix's current scale (~100 employees, monthly cadence).
+- (−) Full replace restore is destructive — mitigated by the explicit confirmation step and Admin-only access.
+**Phase approach:** Per-section exports for missing sections first (quick wins, consistent with existing pattern). Full backup/restore second (more complex due to dependency ordering and volume).
+
+**Implementation note (July 2026):** ADR-044 Tier 1 per-section exports implemented:
+
+- **People:** `GET/POST /api/people/config/classification/export|import` (+ sample); `GET/POST /api/people/imports/mappings/export|import` (+ sample). Settings UI export/import on Classification Rules and Column Mapping Templates.
+- **Budgeting:** per-version Excel export/import for HC plan, salary budget, client revenue plan, overhead budget; sample downloads; `GET .../export-all` ZIP (`plan_inputs_export.zip`). Import merges by natural key then call existing upsert; DRAFT-only (409 if not DRAFT). Plan Setup panel toolbars + Export All Inputs.
+- **Revenue:** `GET /api/revenue/invoices/export` and `GET /api/revenue/credit-notes/export` (same filters as list, unpaginated). Invoice List Export uses server download.
+- **General:** `GET/POST /api/general/fx-rates/export|import` (+ sample); overlap/`exact-duplicate` validation. FX Rates section in Settings → General.
+
+**Tier 2 implementation (July 2026):**
+- Module portals expose `exportBackupSheets` / `wipeForRestore` / `restoreBackupSheets` (ADR-008: orchestrator never touches foreign repositories).
+- New OPEN Modulith module `com.cognologix.fpa.system` — `SystemBackupService` + `SystemBackupController`:
+  - `GET /api/system/backup` → ZIP of Excel files in dependency order; updates `general_config.last_backup_at`
+  - `POST /api/system/restore` → dry-run summary + time-limited token (no mutation)
+  - `POST /api/system/restore/confirm` → wipe in reverse dependency order (preserve logged-in admin), insert forward; restored users get temporary password `RestoreMe123!` + `must_change_password=true`
+- Settings → General → Backup & Restore (Admin only)
+
+**Implementation note (July 2026 — Tier 2 module portals):** Each bounded-context service exposes backup/restore portal methods (ADR-044 Tier 2) without the system orchestrator yet:
+- Shared types: `BackupSheet`, `BackupGridHelper`, `ExcelGrid` in `com.cognologix.fpa.general`.
+- **General:** `UserService.exportUsersBackupSheet()`, `wipeUsersExcept()`, `restoreUsers()`; `GeneralConfigService.exportBackupSheets()`, `wipeForRestore()`, `restoreBackupSheets()`, `getConfigValue()`, `setConfigValue()`, `LAST_BACKUP_AT_KEY`.
+- **Customer:** `CustomerService.exportBackupSheets()`, `wipeForRestore()`, `restoreBackupSheets()` — customers, rate_cards, project_codes sheets.
+- **People:** `PeoplePayrollService` — nine sheets (classification through master_records).
+- **Budgeting:** `BudgetingService` — ten sheets (overhead_line_items through overhead_actuals).
+- **Revenue:** `RevenueService` — revenue_invoices, revenue_credit_notes sheets.
+Orchestrator ZIP download/upload and Settings UI deferred.
+ 
+---
+
+## ADR-045: Payroll Cost = Gross Pay + Employer Benefit Contributions
+
+**Status:** Accepted — July 2026
+
+**Context**
+Module 1 §4.2 and §10 treat Gross Pay as the primary company-expense salary metric. In practice Zoho Payroll also exports employer contributions (EPF, EPS, EDLI, EPF Admin, VPF, NPS, Gratuity). Using Gross Pay alone understates true payroll cost for dashboards, Cost per Employee Layer 1, and BU Gross Margin. Budgeting previously applied a flat 13% statutory estimate on top of Gross Pay for Layer 1 / OpEx, which diverges from actual contribution amounts when available.
+
+**Decision**
+1. Persist optional employer contribution columns on `payroll_snapshot`; DB-generated `total_employer_contributions` sums them (null → 0).
+2. On Master build, copy `total_employer_contributions` to `master_record`; DB-generated `total_payroll_cost` = Gross Pay + employer contributions.
+3. Salary Metrics and Cost-per-Employee actuals use **Total Payroll Cost** as the primary figure, with Gross Pay and Employer Contributions shown as a breakdown.
+4. `PeriodFinalisedEvent` carries per-classification employer contributions and total payroll cost; Budgeting stores them on `period_actuals` / `period_bu_actuals`.
+5. Cost per Employee Layer 1: for months with actuals, use actual employer contributions ÷ HC; for plan months, retain the 13% estimate as a forward-looking proxy. Return gross and contributions per head separately.
+6. BU Gross Margin = Revenue − totalPayrollCost (not Gross Pay alone).
+7. ZOHO_PAYROLL mapping attributes for contributions are optional — unmapped columns remain null.
+
+**Consequences**
+- (+) Finance sees true employer cost when mapped from Zoho; plan months keep a simple proxy.
+- (+) Spec §4.2/§10 Gross-Pay-primary wording is superseded for operational cost metrics (flagged deviation).
+- (–) Historical periods without contribution mappings continue to show contributions as zero (total = gross) until re-imported with mappings.
+- (–) OpEx `statutoryBenefits` in monthly financials still uses the 13% estimate (unchanged in this ADR); may be aligned later.
+
+**Alternatives considered**
+- Keep Gross Pay primary and show contributions only as informational — rejected: understates cost in margin and CPE calculations.
+- Always use 13% even when actuals exist — rejected: ignores available Zoho data.
+
+---
+
+## ADR-046: Zoho Import Amounts — Full Rupees → Rs Lakhs on Parse
+
+**Status:** Accepted — July 2026
+
+**Context**
+Zoho Books (invoices / credit notes) and Zoho Payroll export monetary columns in full rupees (or full currency units for non-INR invoices). Cognologix FP&A dashboards and budgeting treat all monetary figures as **Rs Lakhs** (People & Payroll salary metrics, Cost per Employee, BU Metrics, Budgeting overhead/salaries). Storing Zoho amounts without conversion made imported figures ~100,000× too large relative to plan and display conventions.
+
+**Decision**
+1. After `ExcelNumberParser.parseAmount()`, convert with `toRsLakhs(amount) = amount ÷ 100_000` (scale 2, `HALF_UP`) before persistence.
+2. **Revenue** (`RevenueExcelParser` required/optional decimal helpers): apply to Amount and Balance for `ZOHO_BOOKS_INVOICES` and `ZOHO_BOOKS_CREDIT_NOTES`. USD amounts are divided the same way so `amount_inr` (FX × stored amount) is also in Rs Lakhs.
+3. **People & Payroll** (`ExcelSnapshotParser` decimal helpers used by ZOHO_PAYROLL / ZOHO_PAYROLL_FNF): apply to Gross Pay, Net Pay, CTC Per Annum, and all employer contribution columns (EPF, EPS, EDLI, EPF Admin, VPF, NPS, Gratuity).
+4. Budgeting Excel I/O and manual entry already use Rs Lakhs — no change. Backup/restore reads already-stored values — no re-conversion.
+5. Existing imported data in full rupees is wrong until Finance **re-uploads** Zoho Payroll and Zoho Books files; re-upload SUPERSEDEs prior versions (ADR-033).
+
+**Consequences**
+- (+) Stored amounts align with dashboard/plan units (Rs Lakhs).
+- (–) Historical imports must be re-uploaded; superseded rows remain for audit but must not be used for metrics.
+- (–) Spec wording that described Amount as “in original currency” without naming the Lakhs storage unit is clarified by this ADR (flagged alignment).
+
+**Alternatives considered**
+- Convert only at display time — rejected: plan vs actual and cross-module events would still mix units.
+- Convert only INR currency rows — rejected: USD→INR path must produce Lakhs `amount_inr` consistently.
+
+---
+
+## ADR-047: Shared Excel Header Normalization (Import / Export / Mapping Templates)
+
+**Status:** Accepted — July 2026
+
+**Context**
+Export files and Zoho exports often use different header spellings than import parsers expect (Title Case vs snake_case, spaces vs underscores/hyphens, case drift). Fixed-column parsers each had a private `trim`+lowercase helper; People/Revenue Zoho imports and frontend mapping pre-fill used exact string equality — so a saved column-mapping template failed to pre-fill when Zoho renamed a header slightly (e.g. `Invoice #` vs `Invoice#`).
+
+**Decision**
+1. Shared `ExcelParserUtils.normalizeHeader` (backend) and `normalizeHeader` (frontend): trim → lowercase → collapse spaces/hyphens/underscores to `_` → strip other non-alphanumeric chars.
+2. Apply normalization to **both** sides of every header comparison in all import parsers (customers, rate cards, project codes, FX rates, classification config, mapping-template IO, budgeting plan inputs, Zoho People/Payroll, Zoho Books).
+3. Column-mapping template pre-fill (frontend `buildInitialMappings` and backend Zoho parse mapping lookup) normalizes saved `excel_column_name` and incoming file headers before match; UI/DB retain original header strings.
+4. User-facing Excel exports and import sample templates use consistent **Title Case** headers matching the import column constants (customers include `Is Internal`; order aligned with the sample). System backup ZIP grids remain snake_case + positional (ADR-044) and are out of scope.
+
+**Consequences**
+- (+) Export→re-import and Zoho header drift are tolerant without changing stored template display names.
+- (+) Single normalization contract across modules.
+- (–) Aggressive stripping means `Invoice#` and `Invoice` normalize identically — acceptable for Zoho; avoid two distinct columns that differ only by punctuation.
+
+**Alternatives considered**
+- Exact match only — rejected: brittle against Zoho/export formatting.
+- Fuzzy / Levenshtein match — rejected: unpredictable false positives.
+
+---
+
+## ADR-048: Revenue Import — FX Conversion Only for Explicit USD; Unmapped Currency Defaults to INR
+
+**Status:** Accepted — July 2026
+
+**Context**
+`RevenueService.parseCurrency` previously defaulted null/blank Currency (unmapped column) to **USD**, so every invoice without a Currency mapping received `amount_inr = amount × FX_rate`. INR invoices with Currency=INR were already correct (`amount_inr = amount`), but missing/unmapped Currency incorrectly applied FX. Spec originally said “defaults to customer's billing currency” — that was never implemented and caused the USD default bug.
+
+**Decision**
+1. Unmapped/blank Currency → **INR** (no FX; `amount_inr = amount`; `fx_rate_id` null).
+2. Explicit **INR** → same (`amount_inr = amount`).
+3. Explicit **USD** → `amount_inr = amount × USD_INR rate` (ADR-017); store `fx_rate_id`.
+4. Applies to both `ZOHO_BOOKS_INVOICES` and `ZOHO_BOOKS_CREDIT_NOTES`. Amounts remain Rs Lakhs after ÷100,000 (ADR-046).
+5. Entity defaults for `RevenueInvoice` / `RevenueCreditNote` currency = INR. Backup restore uses the same blank→INR default.
+
+**Consequences**
+- (+) INR and unmapped-currency imports no longer inflate `amount_inr` by FX.
+- (–) Finance must re-upload affected periods after deploy so SUPERSEDED versions replace wrong INR equivalents.
+- Spec Currency rows updated to document INR default (replacing unimplemented “customer billing currency” wording).
+
+**Alternatives considered**
+- Default to customer billing currency — deferred: Customer Management has no single billing-currency field on the customer today; INR default is the safe no-FX path.
+- Leave null currency as USD — rejected: caused incorrect FX on domestic invoices.
+
+---
+
+## ADR-049: Budgeting Dashboard — Period Granularity Selector (Monthly / Quarterly / Annual)
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-038's single scrollable dashboard showed full-FY totals in Headline KPIs and related panels. When only a few months of `period_actuals` exist, FY Actual is diluted by zero-filled future months and variance vs full-year Plan is misleading. Finance reviews the year monthly and quarterly as well as YTD.
+
+**Decision**
+1. **Dashboard period controls:** Granularity Segmented (Monthly / Quarterly / Annual) + Period Select (month or quarter). Default on load: Monthly + most recent month with `period_actuals` for the FY (else April = FY start).
+2. **API:** Optional query params on dashboard endpoints — `granularity` (`MONTHLY` | `QUARTERLY` | `ANNUAL`, default `ANNUAL` for backward compatibility), `month`+`year` (MONTHLY), `quarter`+`year` (QUARTERLY; Q1=Apr–Jun … Q4=Jan–Mar, Indian FY). `year` is the calendar year of the period's first month.
+3. **Aggregation:**
+   - Plan vs Actual / Headline / P&L selected-period card: MONTHLY = one month; QUARTERLY = sum of 3 months; ANNUAL = YTD only (months with actuals — Plan and Actual both scoped to those months), plus coverage note e.g. `Actuals: Apr–Jun 2026 (3 of 12 months)`.
+   - Rolling Forecast chart: always 12 monthly points; granularity only highlights the selected month/quarter.
+   - Delta: MONTHLY = that month; QUARTERLY = sum of 3 months; ANNUAL = sum of all 12 months.
+   - Cost per Employee: MONTHLY = one month; QUARTERLY/ANNUAL = average of per-head costs across months in scope (plan fallback when no actuals).
+   - BU Metrics: MONTHLY = one month; QUARTERLY = sum of 3 months; ANNUAL = sum of months with actuals only.
+4. **P&L column layout (UI):** Monthly → 12 months + highlight + summary card; Quarterly → Q1–Q4 + highlight + summary card; Annual → single FY/YTD column + coverage note.
+
+**Consequences**
+- (+) Variance is like-for-like for the period Finance is reviewing.
+- (+) Default Monthly + latest actuals matches the monthly close workflow.
+- (–) ANNUAL Headline/BU use YTD while Delta ANNUAL sums all 12 months — intentional (Delta vs full baseline year).
+
+**Alternatives considered**
+- Frontend-only filtering of full-FY payloads — rejected: Cost per Employee / BU Metrics need server-side multi-month average/sum; YTD Plan scoping must be consistent.
+- Default Annual — rejected for UX; API default remains ANNUAL for backward compatibility only.
+
+---
+
+## ADR-050: Expenses Module — Monthly Overhead Actuals Feed Budgeting
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-037 treated overhead actuals as manual entry into Budgeting (`overhead_actuals`) until a dedicated module existed. Finance needs a first-class place to capture monthly overhead spend by the 24 seeded line items (extensible), with month lock for close, Excel import/export, and Settings-managed categories. Budgeting & Forecasting (ADR-038 Cost per Employee, P&L, Plan vs Actual) must consume those actuals the same way Revenue feeds net revenue (ADR-043) — but without a manual override path: expenses always come from the Expenses module.
+
+**Decision**
+1. **New bounded context `expenses`** (`com.cognologix.fpa.expenses`), Spring Modulith OPEN module depending on `general` only. Public API: `ExpenseService` in the root package.
+2. **Schema:** `expense_category` (seeded from the same line codes as `overhead_line_item`), `expense_actual` (one row per category per month), `expense_month_lock` (unlock requires reason, audited).
+3. **Budgeting consumption:** `BudgetingService` calls `ExpenseService.getMonthlyExpenseActuals(month, year)` wherever it previously read `overhead_actuals` for actuals months. Empty/null map → zero overhead (no fallback to `overhead_actuals` / period manual entry).
+4. **Navigation (ADR-021):** top-level Expenses → Expense Entry + Expense History; Settings → Expenses tab for category admin.
+5. **Roles (ADR-042):** writes / lock / unlock / import / add-deactivate category are Admin-only; Viewers can read and export.
+
+**Consequences**
+- (+) Overhead actuals live in their domain; Budgeting stays a consumer.
+- (+) Month lock matches Finance close discipline.
+- (–) Legacy `overhead_actuals` table / upsert API remain for backup compatibility but are no longer used in Plan vs Actual calculations.
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*

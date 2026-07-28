@@ -11,13 +11,22 @@ import {
   Select,
   Skeleton,
   Space,
+  Spin,
   Table,
   Tabs,
   Tag,
   theme,
   Typography,
+  Upload,
 } from 'antd';
+import {
+  DownloadOutlined,
+  ExportOutlined,
+  InboxOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
 import { formatCurrency } from '@/utils/formatDate';
+import SimpleExcelImportModal from '@/components/SimpleExcelImportModal';
 import { useDateFormat } from '@/context/DateFormatContext';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import { fetchCustomers } from '@/pages/customers/api';
@@ -45,6 +54,15 @@ import type {
 import {
   createDraftVersion,
   createPlan,
+  downloadHcPlanImportSample,
+  downloadOverheadBudgetImportSample,
+  downloadRevenuePlanImportSample,
+  downloadSalaryBudgetImportSample,
+  exportAllPlanInputs,
+  exportHcPlan,
+  exportOverheadBudget,
+  exportRevenuePlan,
+  exportSalaryBudget,
   fetchHcPlan,
   fetchOverheadBudget,
   fetchOverheadLineItems,
@@ -52,18 +70,30 @@ import {
   fetchPlans,
   fetchRevenuePlan,
   fetchSalaryBudget,
+  importAllPlanInputs,
+  importHcPlan,
+  importOverheadBudget,
+  importRevenuePlan,
+  importSalaryBudget,
   publishVersion,
   saveHcPlan,
   saveOverheadBudget,
   saveRevenuePlan,
   saveSalaryBudget,
+  type PlanInputImportResult,
+  type PlanInputZipImportResult,
 } from './api';
+import { useIsAdmin } from '@/components/AdminGate';
+import type { FormInstance } from 'antd/es/form';
+import type { UploadFile } from 'antd/es/upload';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
+const { Dragger } = Upload;
 
 export default function PlanSetupPage() {
   const { token } = theme.useToken();
   const { formatDate } = useDateFormat();
+  const isAdmin = useIsAdmin();
   const [plans, setPlans] = useState<PlanSummary[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanDetail | null>(null);
@@ -116,6 +146,8 @@ export default function PlanSetupPage() {
       const newPlan = await createPlan({
         fiscalYear: values.fiscalYear,
         openingHc: values.openingHc,
+        fiscalYearStart: values.fiscalYearStart || undefined,
+        fiscalYearEnd: values.fiscalYearEnd || undefined,
       });
       await loadPlans();
       setSelectedPlanId(newPlan.id);
@@ -129,12 +161,6 @@ export default function PlanSetupPage() {
       });
     }
   }, [createForm, loadPlans]);
-
-  const fyDates = useMemo(() => {
-    const fy = createForm.getFieldValue('fiscalYear');
-    if (!fy) return null;
-    return parseFiscalYearDates(fy);
-  }, [createForm.getFieldValue('fiscalYear')]);
 
   const sortedTypes = useMemo(() => {
     if (!plan) return [];
@@ -153,53 +179,30 @@ export default function PlanSetupPage() {
             <Title level={3} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
               No Financial Year Plans
             </Title>
-            <Button
-              type="primary"
-              onClick={() => setCreateModalOpen(true)}
-            >
-              Create First Plan
-            </Button>
+            {isAdmin ? (
+              <Button
+                type="primary"
+                onClick={() => setCreateModalOpen(true)}
+              >
+                Create First Plan
+              </Button>
+            ) : (
+              <Text type="secondary">No plans have been created yet.</Text>
+            )}
           </Space>
         </Card>
 
-        <Modal
-          title="New Financial Year Plan"
-          open={createModalOpen}
-          onOk={handleCreatePlan}
-          onCancel={() => {
-            setCreateModalOpen(false);
-            createForm.resetFields();
-          }}
-        >
-          <Form form={createForm} layout="vertical">
-            <Form.Item
-              name="fiscalYear"
-              label="Fiscal Year"
-              rules={[
-                { required: true, message: 'Required' },
-                {
-                  pattern: /^FY\d{4}$/i,
-                  message: 'Must match FY#### format (e.g. FY2627)',
-                },
-              ]}
-            >
-              <Input placeholder="FY2627" />
-            </Form.Item>
-            <Form.Item
-              name="openingHc"
-              label="Opening HC"
-              rules={[{ required: true, message: 'Required' }]}
-            >
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item label="Fiscal Year Start">
-              <Input value={fyDates?.start ?? ''} disabled />
-            </Form.Item>
-            <Form.Item label="Fiscal Year End">
-              <Input value={fyDates?.end ?? ''} disabled />
-            </Form.Item>
-          </Form>
-        </Modal>
+        {isAdmin && (
+          <NewFinancialYearModal
+            open={createModalOpen}
+            form={createForm}
+            onOk={handleCreatePlan}
+            onCancel={() => {
+              setCreateModalOpen(false);
+              createForm.resetFields();
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -219,9 +222,11 @@ export default function PlanSetupPage() {
                 value: p.id,
               }))}
             />
-            <Button type="primary" onClick={() => setCreateModalOpen(true)}>
-              New Financial Year
-            </Button>
+            {isAdmin && (
+              <Button type="primary" onClick={() => setCreateModalOpen(true)}>
+                New Financial Year
+              </Button>
+            )}
           </Space>
         </Card>
 
@@ -238,6 +243,7 @@ export default function PlanSetupPage() {
                   forecastType={type}
                   token={token}
                   formatDate={formatDate}
+                  isAdmin={isAdmin}
                   onReload={() => loadPlan(plan.id)}
                 />
               ),
@@ -246,45 +252,90 @@ export default function PlanSetupPage() {
         )}
       </Space>
 
-      <Modal
-        title="New Financial Year Plan"
-        open={createModalOpen}
-        onOk={handleCreatePlan}
-        onCancel={() => {
-          setCreateModalOpen(false);
-          createForm.resetFields();
-        }}
-      >
-        <Form form={createForm} layout="vertical">
-          <Form.Item
-            name="fiscalYear"
-            label="Fiscal Year"
-            rules={[
-              { required: true, message: 'Required' },
-              {
-                pattern: /^FY\d{4}$/i,
-                message: 'Must match FY#### format (e.g. FY2627)',
-              },
-            ]}
-          >
-            <Input placeholder="FY2627" />
-          </Form.Item>
-          <Form.Item
-            name="openingHc"
-            label="Opening HC"
-            rules={[{ required: true, message: 'Required' }]}
-          >
-            <InputNumber min={0} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="Fiscal Year Start">
-            <Input value={fyDates?.start ?? ''} disabled />
-          </Form.Item>
-          <Form.Item label="Fiscal Year End">
-            <Input value={fyDates?.end ?? ''} disabled />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {isAdmin && (
+        <NewFinancialYearModal
+          open={createModalOpen}
+          form={createForm}
+          onOk={handleCreatePlan}
+          onCancel={() => {
+            setCreateModalOpen(false);
+            createForm.resetFields();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function NewFinancialYearModal({
+  open,
+  form,
+  onOk,
+  onCancel,
+}: {
+  open: boolean;
+  form: FormInstance;
+  onOk: () => void;
+  onCancel: () => void;
+}) {
+  const applyFyDates = (raw: string) => {
+    const dates = parseFiscalYearDates(raw);
+    if (dates) {
+      form.setFieldsValue({
+        fiscalYearStart: dates.start,
+        fiscalYearEnd: dates.end,
+      });
+    }
+  };
+
+  return (
+    <Modal
+      title="New Financial Year Plan"
+      open={open}
+      onOk={onOk}
+      onCancel={onCancel}
+      destroyOnClose
+    >
+      <Form form={form} layout="vertical">
+        <Form.Item
+          name="fiscalYear"
+          label="Fiscal Year"
+          rules={[
+            { required: true, message: 'Required' },
+            {
+              pattern: /^FY\d{4}$/i,
+              message: 'Must match FY#### format (e.g. FY2627)',
+            },
+          ]}
+        >
+          <Input
+            placeholder="FY2627"
+            onChange={(e) => applyFyDates(e.target.value)}
+          />
+        </Form.Item>
+        <Form.Item
+          name="openingHc"
+          label="Opening HC"
+          rules={[{ required: true, message: 'Required' }]}
+        >
+          <InputNumber min={0} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item
+          name="fiscalYearStart"
+          label="Fiscal Year Start"
+          extra="Auto-filled from FY code (editable)"
+        >
+          <Input placeholder="YYYY-MM-DD" />
+        </Form.Item>
+        <Form.Item
+          name="fiscalYearEnd"
+          label="Fiscal Year End"
+          extra="Auto-filled from FY code (editable)"
+        >
+          <Input placeholder="YYYY-MM-DD" />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }
 
@@ -293,6 +344,7 @@ interface ForecastTypePanelProps {
   forecastType: ForecastType;
   token: ReturnType<typeof theme.useToken>['token'];
   formatDate: (date: string | Date | null | undefined) => string;
+  isAdmin: boolean;
   onReload: () => void;
 }
 
@@ -301,6 +353,7 @@ function ForecastTypePanel({
   forecastType,
   token,
   formatDate,
+  isAdmin,
   onReload,
 }: ForecastTypePanelProps) {
   const currentVersion = useMemo(() => {
@@ -351,25 +404,55 @@ function ForecastTypePanel({
     );
   }
 
-  const isEditable = currentVersion.status === 'DRAFT';
+  const isDraft = currentVersion.status === 'DRAFT';
+  /** ADMIN + DRAFT may edit / save; VIEWER (and non-draft) see InputNumbers disabled. */
+  const canEdit = isAdmin && isDraft;
+  const [importAllOpen, setImportAllOpen] = useState(false);
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card>
-        <Space>
+        <Space wrap>
           <Text strong>Version {currentVersion.versionNumber}</Text>
           <Tag color={STATUS_COLOR[currentVersion.status]}>
             {currentVersion.status}
           </Tag>
-          {currentVersion.status === 'DRAFT' && (
+          {isAdmin && isDraft && (
             <Button type="primary" onClick={handlePublish}>
               Publish
             </Button>
           )}
-          {currentVersion.status === 'ACTIVE' &&
+          {isAdmin &&
+            currentVersion.status === 'ACTIVE' &&
             !forecastType.versions.some((v) => v.status === 'DRAFT') && (
               <Button onClick={handleCreateRevision}>Create Revision</Button>
             )}
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => {
+              exportAllPlanInputs(plan.id, forecastType.id, currentVersion.id).catch(
+                () =>
+                  notification.error({
+                    message: 'Failed to export all plan inputs',
+                  }),
+              );
+            }}
+          >
+            Export All Inputs
+          </Button>
+          {canEdit && (
+            <Button
+              icon={<UploadOutlined />}
+              onClick={() => setImportAllOpen(true)}
+            >
+              Import All Inputs
+            </Button>
+          )}
+          {!isDraft && isAdmin && (
+            <Text type="secondary">
+              Published versions are read-only — create a revision to edit.
+            </Text>
+          )}
         </Space>
 
         {supersededVersions.length > 0 && (
@@ -398,11 +481,20 @@ function ForecastTypePanel({
         )}
       </Card>
 
+      <ImportAllPlanInputsModal
+        open={importAllOpen}
+        onClose={() => setImportAllOpen(false)}
+        onImported={onReload}
+        importZip={(file) =>
+          importAllPlanInputs(plan.id, forecastType.id, currentVersion.id, file)
+        }
+      />
+
       <HcPlanPanel
         plan={plan}
         forecastType={forecastType}
         version={currentVersion}
-        isEditable={isEditable}
+        canEdit={canEdit}
         token={token}
       />
 
@@ -410,7 +502,7 @@ function ForecastTypePanel({
         plan={plan}
         forecastType={forecastType}
         version={currentVersion}
-        isEditable={isEditable}
+        canEdit={canEdit}
         token={token}
       />
 
@@ -418,7 +510,7 @@ function ForecastTypePanel({
         plan={plan}
         forecastType={forecastType}
         version={currentVersion}
-        isEditable={isEditable}
+        canEdit={canEdit}
         token={token}
       />
 
@@ -426,7 +518,7 @@ function ForecastTypePanel({
         plan={plan}
         forecastType={forecastType}
         version={currentVersion}
-        isEditable={isEditable}
+        canEdit={canEdit}
         token={token}
       />
     </Space>
@@ -437,15 +529,243 @@ interface PanelProps {
   plan: PlanDetail;
   forecastType: ForecastType;
   version: ForecastVersion;
-  isEditable: boolean;
+  canEdit: boolean;
   token: ReturnType<typeof theme.useToken>['token'];
+}
+
+interface PlanInputExcelToolbarProps {
+  canEdit: boolean;
+  exportFn: () => Promise<void>;
+  downloadSampleFn: () => Promise<void>;
+  importFn: (file: File) => Promise<PlanInputImportResult>;
+  onImported: () => void;
+  importTitle: string;
+}
+
+function PlanInputExcelToolbar({
+  canEdit,
+  exportFn,
+  downloadSampleFn,
+  importFn,
+  onImported,
+  importTitle,
+}: PlanInputExcelToolbarProps) {
+  const [importOpen, setImportOpen] = useState(false);
+
+  return (
+    <>
+      <Space wrap>
+        <Button
+          icon={<ExportOutlined />}
+          onClick={() => {
+            exportFn().catch(() =>
+              notification.error({ message: 'Export failed' }),
+            );
+          }}
+        >
+          Export
+        </Button>
+        <Button
+          icon={<DownloadOutlined />}
+          onClick={() => {
+            downloadSampleFn().catch(() =>
+              notification.error({ message: 'Failed to download sample file' }),
+            );
+          }}
+        >
+          Download Sample
+        </Button>
+        {canEdit && (
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+            Import
+          </Button>
+        )}
+      </Space>
+      <SimpleExcelImportModal
+        open={importOpen}
+        title={importTitle}
+        onClose={() => setImportOpen(false)}
+        onImported={onImported}
+        importFile={importFn}
+        accept=".xlsx"
+        hint="Supports .xlsx only"
+      />
+    </>
+  );
+}
+
+function ImportAllPlanInputsModal({
+  open,
+  onClose,
+  onImported,
+  importZip,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: () => void;
+  importZip: (file: File) => Promise<PlanInputZipImportResult>;
+}) {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [file, setFile] = useState<File | null>(null);
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState<PlanInputZipImportResult | null>(null);
+
+  const reset = useCallback(() => {
+    setStep(1);
+    setFile(null);
+    setFileList([]);
+    setImporting(false);
+    setResult(null);
+  }, []);
+
+  const handleClose = () => {
+    const hadResult = !!result;
+    reset();
+    onClose();
+    if (hadResult) onImported();
+  };
+
+  const handleImport = async () => {
+    if (!file) return;
+    setImporting(true);
+    setStep(2);
+    try {
+      const importResult = await importZip(file);
+      setResult(importResult);
+      setStep(3);
+    } catch {
+      notification.error({ message: 'Import All Inputs failed' });
+      setStep(1);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const footer =
+    step === 1
+      ? [
+          <Button key="cancel" onClick={handleClose}>
+            Cancel
+          </Button>,
+          <Button
+            key="import"
+            type="primary"
+            disabled={!file}
+            onClick={handleImport}
+          >
+            Import
+          </Button>,
+        ]
+      : step === 3
+        ? [
+            <Button key="close" type="primary" onClick={handleClose}>
+              Close
+            </Button>,
+          ]
+        : null;
+
+  return (
+    <Modal
+      title={
+        <span style={{ fontFamily: HEADING_FONT, fontWeight: 700 }}>
+          Import All Inputs
+        </span>
+      }
+      open={open}
+      onCancel={handleClose}
+      footer={footer}
+      destroyOnClose
+      width={640}
+    >
+      <Spin spinning={importing}>
+        {step === 1 && (
+          <>
+            <Paragraph type="secondary">
+              Upload the ZIP from Export All Inputs (
+              <Text code>hc_plan.xlsx</Text>,{' '}
+              <Text code>salary_budget.xlsx</Text>,{' '}
+              <Text code>client_revenue_plan.xlsx</Text>,{' '}
+              <Text code>overhead_budget.xlsx</Text>).
+            </Paragraph>
+            <Dragger
+              accept=".zip"
+              maxCount={1}
+              fileList={fileList}
+              beforeUpload={(f) => {
+                setFile(f);
+                setFileList([{ uid: f.name, name: f.name, status: 'done' }]);
+                return false;
+              }}
+              onRemove={() => {
+                setFile(null);
+                setFileList([]);
+              }}
+            >
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p className="ant-upload-text">Click or drag ZIP to upload</p>
+              <p className="ant-upload-hint">Supports .zip only</p>
+            </Dragger>
+          </>
+        )}
+
+        {step === 2 && <Paragraph>Importing plan inputs…</Paragraph>}
+
+        {step === 3 && result && (
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            {result.parts.map((part) => (
+              <Card key={part.fileName} size="small" title={part.label}>
+                {part.missing && (
+                  <Text type="warning">
+                    Missing {part.fileName} in ZIP — skipped
+                  </Text>
+                )}
+                {part.error && <Text type="danger">{part.error}</Text>}
+                {part.result && (
+                  <Text>
+                    <Text strong>{part.result.created}</Text> created,{' '}
+                    <Text strong>{part.result.skipped}</Text> skipped
+                    {part.result.errors.length > 0 && (
+                      <>
+                        , <Text strong>{part.result.errors.length}</Text> error
+                        {part.result.errors.length === 1 ? '' : 's'}
+                      </>
+                    )}
+                  </Text>
+                )}
+                {part.result && part.result.errors.length > 0 && (
+                  <Table
+                    style={{ marginTop: 8 }}
+                    size="small"
+                    pagination={false}
+                    rowKey={(r) => `${part.fileName}-${r.rowNumber}-${r.reason}`}
+                    dataSource={part.result.errors}
+                    columns={[
+                      {
+                        title: 'Row',
+                        dataIndex: 'rowNumber',
+                        width: 70,
+                      },
+                      { title: 'Reason', dataIndex: 'reason' },
+                    ]}
+                  />
+                )}
+              </Card>
+            ))}
+          </Space>
+        )}
+      </Spin>
+    </Modal>
+  );
 }
 
 function HcPlanPanel({
   plan,
   forecastType,
   version,
-  isEditable,
+  canEdit,
 }: PanelProps) {
   const [data, setData] = useState<HcPlanMonth[]>([]);
   const [loading, setLoading] = useState(false);
@@ -566,6 +886,7 @@ function HcPlanPanel({
     },
     ...cols.map((col) => ({
       title: col.label,
+      dataIndex: col.key,
       key: col.key,
       width: 100,
       align: 'right' as const,
@@ -610,18 +931,17 @@ function HcPlanPanel({
           getValue(col, 'plannedLeadershipHc') +
           getValue(col, 'plannedManagementHc');
         record[col.key] = billableRatio(billable, total).toFixed(1);
-      } else if (isEditable) {
+      } else {
         record[col.key] = (
           <InputNumber
             size="small"
             min={0}
+            disabled={!canEdit}
             value={getValue(col, row.field)}
             onChange={(v) => setValue(col, row.field!, v ?? 0)}
             style={{ width: '100%' }}
           />
         );
-      } else {
-        record[col.key] = getValue(col, row.field);
       }
     });
     return record;
@@ -639,6 +959,24 @@ function HcPlanPanel({
                 <Skeleton active />
               ) : (
                 <>
+                  <PlanInputExcelToolbar
+                    canEdit={canEdit}
+                    exportFn={() =>
+                      exportHcPlan(plan.id, forecastType.id, version.id)
+                    }
+                    downloadSampleFn={() =>
+                      downloadHcPlanImportSample(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                      )
+                    }
+                    importFn={(file) =>
+                      importHcPlan(plan.id, forecastType.id, version.id, file)
+                    }
+                    onImported={loadData}
+                    importTitle="Import HC Plan"
+                  />
                   <Table
                     dataSource={dataSource}
                     columns={columns}
@@ -646,7 +984,7 @@ function HcPlanPanel({
                     scroll={{ x: true }}
                     size="small"
                   />
-                  {isEditable && (
+                  {canEdit && (
                     <Button
                       type="primary"
                       onClick={handleSave}
@@ -669,7 +1007,7 @@ function ClientRevenuePlanPanel({
   plan,
   forecastType,
   version,
-  isEditable,
+  canEdit,
 }: PanelProps) {
   const [data, setData] = useState<ClientRevenuePlanEntry[]>([]);
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
@@ -808,6 +1146,7 @@ function ClientRevenuePlanPanel({
     },
     ...cols.map((col) => ({
       title: `${col.label} (Rs L)`,
+      dataIndex: col.key,
       key: col.key,
       width: 120,
       align: 'right' as const,
@@ -830,6 +1169,29 @@ function ClientRevenuePlanPanel({
                 <Skeleton active />
               ) : (
                 <>
+                  <PlanInputExcelToolbar
+                    canEdit={canEdit}
+                    exportFn={() =>
+                      exportRevenuePlan(plan.id, forecastType.id, version.id)
+                    }
+                    downloadSampleFn={() =>
+                      downloadRevenuePlanImportSample(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                      )
+                    }
+                    importFn={(file) =>
+                      importRevenuePlan(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                        file,
+                      )
+                    }
+                    onImported={loadData}
+                    importTitle="Import Client Revenue Plan"
+                  />
                   {customers.map((cust) => {
                     const rows = [
                       {
@@ -863,21 +1225,18 @@ function ClientRevenuePlanPanel({
                             'plannedFixedBidRevenue',
                           );
                           record[col.key] = formatCurrency(tm + fb);
-                        } else if (isEditable) {
+                        } else {
                           record[col.key] = (
                             <InputNumber
                               size="small"
                               min={0}
+                              disabled={!canEdit}
                               value={getValue(cust.id, col, row.field)}
                               onChange={(v) =>
                                 setValue(cust.id, col, row.field!, v ?? 0)
                               }
                               style={{ width: '100%' }}
                             />
-                          );
-                        } else {
-                          record[col.key] = formatCurrency(
-                            getValue(cust.id, col, row.field),
                           );
                         }
                       });
@@ -900,7 +1259,7 @@ function ClientRevenuePlanPanel({
                       </Card>
                     );
                   })}
-                  {isEditable && (
+                  {canEdit && (
                     <Button
                       type="primary"
                       onClick={handleSave}
@@ -923,7 +1282,7 @@ function SalaryBudgetPanel({
   plan,
   forecastType,
   version,
-  isEditable,
+  canEdit,
 }: PanelProps) {
   const [data, setData] = useState<SalaryBudgetMonth[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1044,6 +1403,7 @@ function SalaryBudgetPanel({
     },
     ...cols.map((col) => ({
       title: `${col.label} (Rs L)`,
+      dataIndex: col.key,
       key: col.key,
       width: 120,
       align: 'right' as const,
@@ -1085,18 +1445,17 @@ function SalaryBudgetPanel({
           getValue(col, 'cofoundersSalaries') +
           getValue(col, 'seniorMgmtSalaries');
         record[col.key] = formatCurrency(total);
-      } else if (isEditable) {
+      } else {
         record[col.key] = (
           <InputNumber
             size="small"
             min={0}
+            disabled={!canEdit}
             value={getValue(col, row.field)}
             onChange={(v) => setValue(col, row.field!, v ?? 0)}
             style={{ width: '100%' }}
           />
         );
-      } else {
-        record[col.key] = formatCurrency(getValue(col, row.field));
       }
     });
     return record;
@@ -1118,6 +1477,29 @@ function SalaryBudgetPanel({
                 <Skeleton active />
               ) : (
                 <>
+                  <PlanInputExcelToolbar
+                    canEdit={canEdit}
+                    exportFn={() =>
+                      exportSalaryBudget(plan.id, forecastType.id, version.id)
+                    }
+                    downloadSampleFn={() =>
+                      downloadSalaryBudgetImportSample(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                      )
+                    }
+                    importFn={(file) =>
+                      importSalaryBudget(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                        file,
+                      )
+                    }
+                    onImported={loadData}
+                    importTitle="Import Salary Budget"
+                  />
                   <Table
                     dataSource={dataSource}
                     columns={columns}
@@ -1125,7 +1507,7 @@ function SalaryBudgetPanel({
                     scroll={{ x: true }}
                     size="small"
                   />
-                  {isEditable && (
+                  {canEdit && (
                     <Button
                       type="primary"
                       onClick={handleSave}
@@ -1148,7 +1530,7 @@ function OverheadBudgetPanel({
   plan,
   forecastType,
   version,
-  isEditable,
+  canEdit,
 }: PanelProps) {
   const [data, setData] = useState<OverheadBudgetEntry[]>([]);
   const [lineItems, setLineItems] = useState<OverheadLineItem[]>([]);
@@ -1286,6 +1668,7 @@ function OverheadBudgetPanel({
     },
     ...cols.map((col) => ({
       title: `${col.label} (Rs L)`,
+      dataIndex: col.key,
       key: col.key,
       width: 120,
       align: 'right' as const,
@@ -1308,6 +1691,29 @@ function OverheadBudgetPanel({
                 <Skeleton active />
               ) : (
                 <>
+                  <PlanInputExcelToolbar
+                    canEdit={canEdit}
+                    exportFn={() =>
+                      exportOverheadBudget(plan.id, forecastType.id, version.id)
+                    }
+                    downloadSampleFn={() =>
+                      downloadOverheadBudgetImportSample(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                      )
+                    }
+                    importFn={(file) =>
+                      importOverheadBudget(
+                        plan.id,
+                        forecastType.id,
+                        version.id,
+                        file,
+                      )
+                    }
+                    onImported={loadData}
+                    importTitle="Import Overhead Budget"
+                  />
                   {Array.from(categoriesMap.entries()).map(
                     ([category, lines]) => {
                       const dataSource = lines.map((line) => {
@@ -1316,23 +1722,18 @@ function OverheadBudgetPanel({
                           lineItem: line.displayName,
                         };
                         cols.forEach((col) => {
-                          if (isEditable) {
-                            record[col.key] = (
-                              <InputNumber
-                                size="small"
-                                min={0}
-                                value={getValue(line.lineCode, col)}
-                                onChange={(v) =>
-                                  setValue(line.lineCode, col, v ?? 0)
-                                }
-                                style={{ width: '100%' }}
-                              />
-                            );
-                          } else {
-                            record[col.key] = formatCurrency(
-                              getValue(line.lineCode, col),
-                            );
-                          }
+                          record[col.key] = (
+                            <InputNumber
+                              size="small"
+                              min={0}
+                              disabled={!canEdit}
+                              value={getValue(line.lineCode, col)}
+                              onChange={(v) =>
+                                setValue(line.lineCode, col, v ?? 0)
+                              }
+                              style={{ width: '100%' }}
+                            />
+                          );
                         });
                         return record;
                       });
@@ -1402,7 +1803,7 @@ function OverheadBudgetPanel({
                     </Space>
                   </Card>
 
-                  {isEditable && (
+                  {canEdit && (
                     <Button
                       type="primary"
                       onClick={handleSave}

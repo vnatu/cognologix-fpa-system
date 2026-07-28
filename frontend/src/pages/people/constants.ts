@@ -77,6 +77,13 @@ export const SYSTEM_ATTRIBUTE_LABELS: Record<string, string> = {
   GrossPay: 'Gross Pay',
   NetPay: 'Net Pay',
   CtcPerAnnum: 'CTC Per Annum',
+  EpfContribution: 'EPF Contribution',
+  EpsContribution: 'EPS Contribution',
+  EdliContribution: 'EDLI Contribution',
+  EpfAdminCharges: 'EPF Admin Charges',
+  Vpf: 'VPF',
+  NpsDeduction: 'NPS Deduction',
+  Gratuity: 'Gratuity',
   LastWorkingDay: 'Last Working Day',
 };
 
@@ -86,6 +93,13 @@ const PAYROLL_ATTRIBUTES = [
   'GrossPay',
   'NetPay',
   'CtcPerAnnum',
+  'EpfContribution',
+  'EpsContribution',
+  'EdliContribution',
+  'EpfAdminCharges',
+  'Vpf',
+  'NpsDeduction',
+  'Gratuity',
 ] as const;
 
 /** Core attributes that must be mapped for a successful import. */

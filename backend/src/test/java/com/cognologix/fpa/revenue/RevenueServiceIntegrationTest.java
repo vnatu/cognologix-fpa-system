@@ -101,8 +101,9 @@ class RevenueServiceIntegrationTest {
                 xlsx(
                         List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
                                 "Total", "Balance", "Due Date", "Currency", "Project-Code"),
+                        // Zoho exports full currency units; stored as Rs Lakhs (÷100000).
                         List.of(List.of("INV-1", "ACME", "Acme Corp", "2026-06-15", "Sent",
-                                "1000.00", "1000.00", "2026-07-15", "USD", "PROJ1"))),
+                                "100000000.00", "100000000.00", "2026-07-15", "USD", "PROJ1"))),
                 invoiceMappingId,
                 "finance");
 
@@ -113,6 +114,7 @@ class RevenueServiceIntegrationTest {
         assertThat(invoices).hasSize(1);
         var inv = invoices.getFirst();
         assertThat(inv.getAmount()).isEqualByComparingTo("1000.00");
+        assertThat(inv.getBalance()).isEqualByComparingTo("1000.00");
         assertThat(inv.getAmountInr()).isEqualByComparingTo("83500.00");
         assertThat(inv.getFxRateId()).isNotNull();
         assertThat(inv.getCustomerId()).isEqualTo("ACME");
@@ -126,7 +128,7 @@ class RevenueServiceIntegrationTest {
                         List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
                                 "Total", "Balance", "Due Date", "Currency", "Project-Code"),
                         List.of(List.of("INV-10", "ACME", "Acme Corp", "2026-06-10", "Paid",
-                                "5000.00", "0", "2026-07-10", "USD", ""))),
+                                "500000000.00", "0", "2026-07-10", "USD", ""))),
                 invoiceMappingId,
                 "finance");
 
@@ -136,7 +138,7 @@ class RevenueServiceIntegrationTest {
                         List.of("Credit Note#", "Customer Code", "Customer Name", "Credit Note Date",
                                 "Status", "Total", "Currency"),
                         List.of(List.of("CN-1", "ACME", "Acme Corp", "2026-06-20", "Closed",
-                                "500.00", "USD"))),
+                                "50000000.00", "USD"))),
                 creditMappingId,
                 "finance");
 
@@ -155,7 +157,7 @@ class RevenueServiceIntegrationTest {
                         List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
                                 "Total", "Balance", "Due Date", "Currency", "Project-Code"),
                         List.of(List.of("INV-A", "ACME", "Acme Corp", "2026-07-01", "Sent",
-                                "100.00", "100", "2026-08-01", "USD", ""))),
+                                "10000000.00", "10000000", "2026-08-01", "USD", ""))),
                 invoiceMappingId,
                 "finance");
         assertThat(first.versionNumber()).isEqualTo(1);
@@ -166,7 +168,7 @@ class RevenueServiceIntegrationTest {
                         List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
                                 "Total", "Balance", "Due Date", "Currency", "Project-Code"),
                         List.of(List.of("INV-B", "ACME", "Acme Corp", "2026-07-02", "Sent",
-                                "200.00", "200", "2026-08-02", "USD", ""))),
+                                "20000000.00", "20000000", "2026-08-02", "USD", ""))),
                 invoiceMappingId,
                 "finance");
         assertThat(second.versionNumber()).isEqualTo(2);
@@ -188,13 +190,102 @@ class RevenueServiceIntegrationTest {
                         List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
                                 "Total", "Balance", "Due Date", "Currency", "Project-Code"),
                         List.of(List.of("INV-X", "UNKNOWN_CLIENT", "Ghost Co", "2026-08-01", "Sent",
-                                "50.00", "50", "2026-09-01", "USD", ""))),
+                                "5000000.00", "5000000", "2026-09-01", "USD", ""))),
                 invoiceMappingId,
                 "finance");
 
         assertThat(result.rowsImported()).isEqualTo(1);
         assertThat(result.unrecognizedCustomerCodes()).containsExactly("UNKNOWN_CLIENT");
         assertThat(revenueInvoiceRepository.findByRevenueUploadId(result.uploadId())).hasSize(1);
+    }
+
+    @Test
+    void uploadInvoices_inrAmountInrEqualsAmount_noFx() throws Exception {
+        // Three Icertis-style INR invoices (full rupees → Rs Lakhs). amount_inr must equal amount.
+        var result = revenueService.uploadInvoices(
+                4, 2026,
+                xlsx(
+                        List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
+                                "Total", "Balance", "Due Date", "Currency", "Project-Code"),
+                        List.of(
+                                List.of("INV-INR-1", "ACME", "Acme Corp", "2026-04-10", "Paid",
+                                        "956146.24", "0", "2026-05-10", "INR", ""),
+                                List.of("INV-INR-2", "ACME", "Acme Corp", "2026-05-10", "Paid",
+                                        "894603.60", "0", "2026-06-10", "INR", ""),
+                                List.of("INV-INR-3", "ACME", "Acme Corp", "2026-06-10", "Paid",
+                                        "1265571.60", "0", "2026-07-10", "INR", ""))),
+                invoiceMappingId,
+                "finance");
+
+        assertThat(result.rowsImported()).isEqualTo(3);
+        var invoices = revenueInvoiceRepository.findByRevenueUploadId(result.uploadId());
+        assertThat(invoices).hasSize(3);
+
+        BigDecimal amountSum = invoices.stream().map(i -> i.getAmount()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal amountInrSum = invoices.stream().map(i -> i.getAmountInr()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(amountSum).isEqualByComparingTo("31.17");
+        assertThat(amountInrSum).isEqualByComparingTo(amountSum);
+        assertThat(invoices).allSatisfy(inv -> {
+            assertThat(inv.getCurrency().name()).isEqualTo("INR");
+            assertThat(inv.getAmountInr()).isEqualByComparingTo(inv.getAmount());
+            assertThat(inv.getFxRateId()).isNull();
+        });
+    }
+
+    @Test
+    void uploadInvoices_nullCurrencyDefaultsToInr_noFx() throws Exception {
+        UUID mappingWithoutCurrency = revenueService.saveMappingTemplate(
+                RevenueImportType.ZOHO_BOOKS_INVOICES,
+                "Invoices No Currency",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Invoice#", RevenueSystemAttribute.INVOICE_NUMBER),
+                        new PeoplePayrollService.MappingLineInput("Customer Code", RevenueSystemAttribute.CUSTOMER_CODE),
+                        new PeoplePayrollService.MappingLineInput("Customer Name", RevenueSystemAttribute.CUSTOMER_NAME),
+                        new PeoplePayrollService.MappingLineInput("Invoice Date", RevenueSystemAttribute.INVOICE_DATE),
+                        new PeoplePayrollService.MappingLineInput("Status", RevenueSystemAttribute.STATUS),
+                        new PeoplePayrollService.MappingLineInput("Total", RevenueSystemAttribute.AMOUNT),
+                        new PeoplePayrollService.MappingLineInput("Balance", RevenueSystemAttribute.BALANCE),
+                        new PeoplePayrollService.MappingLineInput("Due Date", RevenueSystemAttribute.DUE_DATE)
+                )).id();
+
+        var result = revenueService.uploadInvoices(
+                5, 2026,
+                xlsx(
+                        List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
+                                "Total", "Balance", "Due Date"),
+                        List.of(List.of("INV-DEF", "ACME", "Acme Corp", "2026-05-15", "Sent",
+                                "1000000.00", "1000000.00", "2026-06-15"))),
+                mappingWithoutCurrency,
+                "finance");
+
+        var inv = revenueInvoiceRepository.findByRevenueUploadId(result.uploadId()).getFirst();
+        assertThat(inv.getCurrency().name()).isEqualTo("INR");
+        assertThat(inv.getAmount()).isEqualByComparingTo("10.00");
+        assertThat(inv.getAmountInr()).isEqualByComparingTo("10.00");
+        assertThat(inv.getFxRateId()).isNull();
+    }
+
+    @Test
+    void uploadCreditNotes_inrAmountInrEqualsAmount_noFx() throws Exception {
+        revenueService.uploadCreditNotes(
+                6, 2026,
+                xlsx(
+                        List.of("Credit Note#", "Customer Code", "Customer Name", "Credit Note Date",
+                                "Status", "Total", "Currency"),
+                        List.of(List.of("CN-INR", "ACME", "Acme Corp", "2026-06-20", "Closed",
+                                "250000.00", "INR"))),
+                creditMappingId,
+                "finance");
+
+        var notes = revenueCreditNoteRepository.findAll().stream()
+                .filter(n -> "CN-INR".equals(n.getCreditNoteNumber()))
+                .toList();
+        assertThat(notes).hasSize(1);
+        var cn = notes.getFirst();
+        assertThat(cn.getCurrency().name()).isEqualTo("INR");
+        assertThat(cn.getAmount()).isEqualByComparingTo("2.50");
+        assertThat(cn.getAmountInr()).isEqualByComparingTo("2.50");
+        assertThat(cn.getFxRateId()).isNull();
     }
 
     private static MockMultipartFile xlsx(List<String> headers, List<List<String>> rows) throws Exception {

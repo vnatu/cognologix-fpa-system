@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,7 +15,11 @@ public final class BudgetingRequests {
 
     public record CreatePlanRequest(
             @NotBlank @Size(max = 10) String fiscalYear,
-            @NotNull @Min(0) Integer openingHc
+            @NotNull @Min(0) Integer openingHc,
+            /** Optional override; when null, derived as Apr 1 of FYxx. */
+            LocalDate fiscalYearStart,
+            /** Optional override; when null, derived as Mar 31 of FYyy. */
+            LocalDate fiscalYearEnd
     ) {}
 
     public record UpsertHcPlanRequest(

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.cognologix.fpa.general.AdminOnly;
 
 @RestController
 @RequestMapping("/api/people/master")
@@ -35,6 +36,7 @@ public class MasterDataController {
         return MasterSummaryResponse.from(peoplePayrollService.summarizeMaster(periodVersionId));
     }
 
+    @AdminOnly
     @PostMapping("/{periodVersionId}/reconcile")
     @Operation(summary = "Manually map an unmatched payroll row to an employee registry entry")
     public MasterRecordResponse reconcile(

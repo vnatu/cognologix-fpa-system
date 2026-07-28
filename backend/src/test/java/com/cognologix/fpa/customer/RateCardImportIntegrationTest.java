@@ -149,16 +149,41 @@ class RateCardImportIntegrationTest {
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
     }
 
+    @Test
+    void import_acceptsSnakeCaseHeaders_andCreatesForEveryCustomer() throws Exception {
+        var file = xlsxWithHeaders(
+                List.of("customer_code", "project_code", "rate_card_name", "rate_card_type",
+                        "currency", "effective_from", "job_level", "rate_amount"),
+                List.of(
+                        List.of("ICERTI", "", "IC Card", "FLAT", "INR", "2026-01-01", "", "111000"),
+                        List.of("CADENT", "", "CA Card", "FLAT", "USD", "2026-02-01", "", "222000")));
+
+        mockMvc.perform(multipart("/api/customers/rate-cards/import").file(file))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRows").value(2))
+                .andExpect(jsonPath("$.rateCardsCreated").value(2))
+                .andExpect(jsonPath("$.rateCardsSkipped").value(0))
+                .andExpect(jsonPath("$.errors").isEmpty());
+
+        assertThat(rateCardRepository.findByCustomerIdOrderByEffectiveFromDesc(
+                customerRepository.findByCustomerCode("ICERTI").orElseThrow().getId())).hasSize(1);
+        assertThat(rateCardRepository.findByCustomerIdOrderByEffectiveFromDesc(
+                customerRepository.findByCustomerCode("CADENT").orElseThrow().getId())).hasSize(1);
+    }
+
     private static MockMultipartFile xlsx(List<List<String>> rows) throws Exception {
+        return xlsxWithHeaders(List.of(
+                "Customer Code", "Project Code", "Rate Card Name", "Rate Card Type", "Currency",
+                "Effective From", "Job Level", "Rate Amount"), rows);
+    }
+
+    private static MockMultipartFile xlsxWithHeaders(List<String> headers, List<List<String>> rows)
+            throws Exception {
         try (var workbook = new XSSFWorkbook(); var out = new ByteArrayOutputStream()) {
             var sheet = workbook.createSheet("Rate Cards");
             var headerRow = sheet.createRow(0);
-            String[] headers = {
-                    "Customer Code", "Project Code", "Rate Card Name", "Rate Card Type", "Currency",
-                    "Effective From", "Job Level", "Rate Amount"
-            };
-            for (int c = 0; c < headers.length; c++) {
-                headerRow.createCell(c).setCellValue(headers[c]);
+            for (int c = 0; c < headers.size(); c++) {
+                headerRow.createCell(c).setCellValue(headers.get(c));
             }
             for (int r = 0; r < rows.size(); r++) {
                 var row = sheet.createRow(r + 1);

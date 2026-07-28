@@ -26,6 +26,7 @@ import {
 } from './api';
 import type { CustomerSummary, CustomerDetail, LifecycleStatus } from './types';
 import CustomerImportModal, { downloadCustomerImportTemplate } from './CustomerImportModal';
+import { AdminGate, useIsAdmin } from '@/components/AdminGate';
 
 const STATUS_COLOR: Record<LifecycleStatus, string> = {
   ACTIVE: 'green',
@@ -56,6 +57,7 @@ interface FormValues {
 
 export default function CustomersSection({ onSelectCustomer }: Props) {
   const { token } = theme.useToken();
+  const isAdmin = useIsAdmin();
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -193,18 +195,19 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
       title: 'Actions',
       key: 'actions',
       width: 90,
-      render: (_: unknown, row: CustomerSummary) => (
-        <Button
-          size="small"
-          icon={<EditOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            openEdit(row.id, row.internal === true);
-          }}
-        >
-          Edit
-        </Button>
-      ),
+      render: (_: unknown, row: CustomerSummary) =>
+        isAdmin ? (
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+              openEdit(row.id, row.internal === true);
+            }}
+          >
+            Edit
+          </Button>
+        ) : null,
     },
   ];
 
@@ -239,12 +242,16 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
           <Button icon={<DownloadOutlined />} onClick={downloadCustomerImportTemplate}>
             Download Sample File
           </Button>
-          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
-            Import Customers
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
-            Add Customer
-          </Button>
+          <AdminGate>
+            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+              Import Customers
+            </Button>
+          </AdminGate>
+          <AdminGate fallback="hide">
+            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+              Add Customer
+            </Button>
+          </AdminGate>
         </Space>
       </div>
 

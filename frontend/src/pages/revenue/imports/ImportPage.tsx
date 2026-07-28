@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
+  Empty,
   Input,
   Modal,
   Select,
@@ -28,6 +29,7 @@ import ColumnMappingEditor, {
   importReviewWarnings,
   mappingsToLines,
 } from '../components/ColumnMappingEditor';
+import { useIsAdmin } from '@/components/AdminGate';
 import TemplateDrawer from '../components/TemplateDrawer';
 import {
   IMPORT_TYPE_LABELS,
@@ -46,6 +48,7 @@ interface Props {
 }
 
 export default function ImportPage({ importType }: Props) {
+  const isAdmin = useIsAdmin();
   const now = new Date();
   const [step, setStep] = useState(0);
   const [periodMonth, setPeriodMonth] = useState(now.getMonth() + 1);
@@ -206,6 +209,14 @@ export default function ImportPage({ importType }: Props) {
     });
     return `/revenue/invoices?${params.toString()}`;
   })();
+
+  if (!isAdmin) {
+    return (
+      <div style={{ padding: 48 }}>
+        <Empty description="Admin access required" />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: 24 }}>

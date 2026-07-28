@@ -22,6 +22,7 @@ import type {
   MappingTemplate,
   RevenueImportType,
 } from '@/pages/revenue/types';
+import { useIsAdmin } from '@/components/AdminGate';
 
 const { Text } = Typography;
 
@@ -42,6 +43,7 @@ function TemplateSection({
     template: MappingTemplate | null,
   ) => void;
 }) {
+  const isAdmin = useIsAdmin();
   const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editHeaders, setEditHeaders] = useState<string[]>([]);
@@ -115,6 +117,7 @@ function TemplateSection({
             pagination={false}
             size="small"
           />
+          {isAdmin && (
           <Space>
             <Button icon={<EditOutlined />} onClick={startEdit}>
               Edit
@@ -123,12 +126,15 @@ function TemplateSection({
               Create New
             </Button>
           </Space>
+          )}
         </Space>
       ) : (
         <Empty description="No template configured">
+          {isAdmin && (
           <Button type="primary" icon={<PlusOutlined />} onClick={startCreate}>
             Create New
           </Button>
+          )}
         </Empty>
       )}
     </Card>

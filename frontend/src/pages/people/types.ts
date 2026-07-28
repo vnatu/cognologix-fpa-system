@@ -246,6 +246,13 @@ export interface DashboardPeriod {
   versions: DashboardPeriodVersion[];
 }
 
+export interface ClassificationSalaryMetrics {
+  grossPay: number;
+  totalEmployerContributions: number;
+  totalPayrollCost: number;
+  avgTotalPayrollCostPerHead: number;
+}
+
 export interface DashboardSummary {
   periodMonth: number;
   periodYear: number;
@@ -261,17 +268,12 @@ export interface DashboardSummary {
     billableRatioPct: number;
   };
   salaryMetrics: {
-    totalGrossPay: number;
-    billableGrossPay: number;
-    benchGrossPay: number;
-    supportGrossPay: number;
-    leadershipGrossPay: number;
-    managementGrossPay: number;
-    avgPerHeadBillable: number;
-    avgPerHeadBench: number;
-    avgPerHeadSupport: number;
-    avgPerHeadLeadership: number;
-    avgPerHeadManagement: number;
+    total: ClassificationSalaryMetrics;
+    billable: ClassificationSalaryMetrics;
+    bench: ClassificationSalaryMetrics;
+    support: ClassificationSalaryMetrics;
+    leadership: ClassificationSalaryMetrics;
+    management: ClassificationSalaryMetrics;
   };
   puBreakdown: Array<{
     practiceUnit: string;
