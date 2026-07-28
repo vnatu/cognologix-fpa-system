@@ -76,8 +76,9 @@ class PeopleDashboardIntegrationTest {
                 .andExpect(jsonPath("$.headcount.bench").value(1))
                 .andExpect(jsonPath("$.headcount.leadership").value(1))
                 .andExpect(jsonPath("$.headcount.billableRatioPct").value(60.00))
-                .andExpect(jsonPath("$.salaryMetrics.billableGrossPay").value(300000.00))
-                .andExpect(jsonPath("$.salaryMetrics.avgPerHeadBillable").value(150000.00));
+                .andExpect(jsonPath("$.salaryMetrics.billable.grossPay").value(300000.00))
+                .andExpect(jsonPath("$.salaryMetrics.billable.totalPayrollCost").value(300000.00))
+                .andExpect(jsonPath("$.salaryMetrics.billable.avgTotalPayrollCostPerHead").value(150000.00));
     }
 
     @Test

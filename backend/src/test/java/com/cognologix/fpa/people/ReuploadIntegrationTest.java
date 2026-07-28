@@ -297,8 +297,9 @@ class ReuploadIntegrationTest extends PeopleModuleIntegrationTest {
         var v2Masters = peoplePayrollService.buildMasterRecords(v2Id);
         assertThat(v2Masters).hasSize(1);
         assertThat(v2Masters.getFirst().getPeopleSnapshot().getFullName()).isEqualTo("Revised");
+        // Zoho Payroll full rupees 130000 → 1.30 Rs Lakhs (ADR-046)
         assertThat(v2Masters.getFirst().getPayrollSnapshot().getGrossPay())
-                .isEqualByComparingTo("130000");
+                .isEqualByComparingTo("1.30");
     }
 
     @Test

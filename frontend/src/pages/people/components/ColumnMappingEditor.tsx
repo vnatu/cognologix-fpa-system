@@ -16,6 +16,7 @@ import {
   SYSTEM_ATTRIBUTE_LABELS,
 } from '../constants';
 import type { ImportType, MappingTemplate } from '../types';
+import { normalizeHeader } from '@/utils/excelHeaders';
 
 interface Props {
   importType: ImportType;
@@ -180,17 +181,17 @@ export default function ColumnMappingEditor({
   );
 }
 
-/** Build initial mappings from a saved template and file headers. */
+/** Build initial mappings from a saved template and file headers (normalized match — ADR-047). */
 export function buildInitialMappings(
   headers: string[],
   templateLines: Array<{ excelColumnName: string; systemAttribute: string }>,
 ): Record<string, string> {
   const byExcel = new Map(
-    templateLines.map((l) => [l.excelColumnName, l.systemAttribute]),
+    templateLines.map((l) => [normalizeHeader(l.excelColumnName), l.systemAttribute]),
   );
   const mappings: Record<string, string> = {};
   for (const header of headers) {
-    const attr = byExcel.get(header);
+    const attr = byExcel.get(normalizeHeader(header));
     if (attr) mappings[header] = attr;
   }
   return mappings;

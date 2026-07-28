@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import com.cognologix.fpa.general.AdminOnly;
 
 @RestController
 @RequestMapping("/api/revenue")
@@ -31,6 +32,7 @@ public class RevenueController {
 
     // ── Imports / mappings ───────────────────────────────────────────────────
 
+    @AdminOnly
     @PostMapping(value = "/imports/invoices/parse-headers", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Parse Excel column headers and row count without persisting")
     public ParseHeadersResponse parseHeaders(@RequestPart("file") MultipartFile file) {
@@ -46,6 +48,7 @@ public class RevenueController {
                 .orElse(ResponseEntity.noContent().build());
     }
 
+    @AdminOnly
     @PostMapping("/imports/mappings")
     @Operation(summary = "Create or replace the active template for a revenue import type")
     public ResponseEntity<MappingTemplateResponse> createMapping(
@@ -68,6 +71,7 @@ public class RevenueController {
                         Collectors.toList()));
     }
 
+    @AdminOnly
     @PostMapping(value = "/imports/{periodMonth}/{periodYear}/invoices",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload Zoho Books invoices for a period")
@@ -81,6 +85,7 @@ public class RevenueController {
         return revenueService.uploadInvoices(periodMonth, periodYear, file, mappingId, uploadedBy);
     }
 
+    @AdminOnly
     @PostMapping(value = "/imports/{periodMonth}/{periodYear}/credit-notes",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload Zoho Books credit notes for a period")
@@ -118,12 +123,37 @@ public class RevenueController {
                 customerId, periodMonth, periodYear, status, importType, page, size);
     }
 
+    @GetMapping("/invoices/export")
+    @Operation(summary = "Export all matching invoices as Excel (not paginated; invoices only)")
+    public ResponseEntity<byte[]> exportInvoices(
+            @RequestParam(required = false) String customerId,
+            @RequestParam(required = false) Integer periodMonth,
+            @RequestParam(required = false) Integer periodYear,
+            @RequestParam(required = false) String status) {
+        return excelAttachment(
+                revenueService.exportInvoices(customerId, periodMonth, periodYear, status),
+                "invoices_export.xlsx");
+    }
+
+    @GetMapping("/credit-notes/export")
+    @Operation(summary = "Export all matching credit notes as Excel (not paginated)")
+    public ResponseEntity<byte[]> exportCreditNotes(
+            @RequestParam(required = false) String customerId,
+            @RequestParam(required = false) Integer periodMonth,
+            @RequestParam(required = false) Integer periodYear,
+            @RequestParam(required = false) String status) {
+        return excelAttachment(
+                revenueService.exportCreditNotes(customerId, periodMonth, periodYear, status),
+                "credit_notes_export.xlsx");
+    }
+
     @GetMapping("/summary/{periodMonth}/{periodYear}")
     @Operation(summary = "Net revenue summary per client for a period")
     public List<MonthlyRevenueSummary> getAllClientsSummary(
             @PathVariable int periodMonth,
             @PathVariable int periodYear) {
-        return revenueService.getAllClientsMonthlyRevenue(periodMonth, periodYear);
+        var summaries = revenueService.getAllClientsMonthlyRevenue(periodMonth, periodYear);
+        return summaries != null ? summaries : List.of();
     }
 
     @GetMapping("/summary/{customerId}/{periodMonth}/{periodYear}")
@@ -135,11 +165,11 @@ public class RevenueController {
         return revenueService.getMonthlyRevenueSummary(customerId, periodMonth, periodYear);
     }
 
-    @GetMapping("/dashboard/{periodMonth}/{periodYear}")
-    @Operation(summary = "Revenue dashboard: vs plan, invoice status, DSO")
-    public DashboardResponse getDashboard(
-            @PathVariable int periodMonth,
-            @PathVariable int periodYear) {
-        return revenueService.getDashboard(periodMonth, periodYear);
+    private static ResponseEntity<byte[]> excelAttachment(byte[] content, String filename) {
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(content);
     }
 }

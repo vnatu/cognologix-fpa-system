@@ -1,6 +1,7 @@
 package com.cognologix.fpa.people;
 
 import com.cognologix.fpa.customer.CustomerService;
+import com.cognologix.fpa.general.BackupSheet;
 import com.cognologix.fpa.people.domain.*;
 import com.cognologix.fpa.people.dto.*;
 import com.cognologix.fpa.people.repository.*;
@@ -40,6 +41,8 @@ public class PeoplePayrollService {
     private final CustomerService customerService;
     private final ApplicationEventPublisher eventPublisher;
     private final ExcelSnapshotParser excelSnapshotParser;
+    private final PeopleExcelIO peopleExcelIO;
+    private final PeopleModuleBackup peopleModuleBackup;
 
     // ── Period lifecycle ─────────────────────────────────────────────────────
 
@@ -193,6 +196,7 @@ public class PeoplePayrollService {
                     .billableStatus(people.getBillableStatus())
                     .jobLevel(people.getJobLevel())
                     .grossPay(payroll != null ? payroll.getGrossPay() : null)
+                    .totalEmployerContributions(employerContributionsOf(payroll))
                     .deliveryPu(flags.deliveryPu())
                     .billable(flags.billable())
                     .bench(flags.bench())
@@ -229,6 +233,7 @@ public class PeoplePayrollService {
                         .employeeRegistry(registry)
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
+                        .totalEmployerContributions(employerContributionsOf(payroll))
                         .reconciliationStatus(ReconciliationStatus.AUTO_MATCHED_EXITED)
                         .build()));
             } else if (payroll.getImportType() == ImportType.ZOHO_PAYROLL_FNF) {
@@ -239,6 +244,7 @@ public class PeoplePayrollService {
                             .employeeRegistry(registry)
                             .payrollSnapshot(payroll)
                             .grossPay(payroll.getGrossPay())
+                            .totalEmployerContributions(employerContributionsOf(payroll))
                             .reconciliationStatus(ReconciliationStatus.UNMATCHED)
                             .build()));
                 } else {
@@ -254,6 +260,7 @@ public class PeoplePayrollService {
                             .employeeRegistry(placeholder)
                             .payrollSnapshot(payroll)
                             .grossPay(payroll.getGrossPay())
+                            .totalEmployerContributions(employerContributionsOf(payroll))
                             .reconciliationStatus(ReconciliationStatus.UNMATCHED)
                             .build()));
                 }
@@ -271,6 +278,7 @@ public class PeoplePayrollService {
                         .employeeRegistry(placeholder)
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
+                        .totalEmployerContributions(employerContributionsOf(payroll))
                         .reconciliationStatus(ReconciliationStatus.UNMATCHED)
                         .build()));
             } else {
@@ -281,6 +289,7 @@ public class PeoplePayrollService {
                         .employeeRegistry(registry)
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
+                        .totalEmployerContributions(employerContributionsOf(payroll))
                         .reconciliationStatus(ReconciliationStatus.AUTO_MATCHED_EXITED)
                         .build()));
             }
@@ -693,6 +702,11 @@ public class PeoplePayrollService {
         BigDecimal supportPay = BigDecimal.ZERO;
         BigDecimal leadershipPay = BigDecimal.ZERO;
         BigDecimal managementPay = BigDecimal.ZERO;
+        BigDecimal billableContrib = BigDecimal.ZERO;
+        BigDecimal benchContrib = BigDecimal.ZERO;
+        BigDecimal supportContrib = BigDecimal.ZERO;
+        BigDecimal leadershipContrib = BigDecimal.ZERO;
+        BigDecimal managementContrib = BigDecimal.ZERO;
 
         Map<String, BuAggregate> byBu = new LinkedHashMap<>();
 
@@ -703,41 +717,59 @@ public class PeoplePayrollService {
                 continue;
             }
             BigDecimal pay = r.getGrossPay() != null ? r.getGrossPay() : BigDecimal.ZERO;
+            BigDecimal contrib = r.getTotalEmployerContributions() != null
+                    ? r.getTotalEmployerContributions() : BigDecimal.ZERO;
+            BigDecimal payrollCost = r.resolvedTotalPayrollCost();
 
             // Salary bucketing priority: Leadership salary always in Leadership bucket (spec §8)
             if (r.isLeadership()) {
                 leadershipHc++;
                 leadershipPay = leadershipPay.add(pay);
+                leadershipContrib = leadershipContrib.add(contrib);
             } else if (r.isManagement()) {
                 managementHc++;
                 managementPay = managementPay.add(pay);
+                managementContrib = managementContrib.add(contrib);
             } else if (r.isBillable()) {
                 billableHc++;
                 billablePay = billablePay.add(pay);
+                billableContrib = billableContrib.add(contrib);
             } else if (r.isBench()) {
                 benchHc++;
                 benchPay = benchPay.add(pay);
+                benchContrib = benchContrib.add(contrib);
             } else if (r.isSupport()) {
                 supportHc++;
                 supportPay = supportPay.add(pay);
+                supportContrib = supportContrib.add(contrib);
             }
 
             String bu = r.getBusinessUnit() != null ? r.getBusinessUnit() : "(unknown)";
-            BuAggregate agg = byBu.computeIfAbsent(bu, k -> new BuAggregate(0, BigDecimal.ZERO));
+            BuAggregate agg = byBu.computeIfAbsent(bu,
+                    k -> new BuAggregate(0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
             int billableInc = r.isBillable() ? 1 : 0;
-            byBu.put(bu, new BuAggregate(agg.billableHc() + billableInc, agg.totalGrossPay().add(pay)));
+            byBu.put(bu, new BuAggregate(
+                    agg.billableHc() + billableInc,
+                    agg.totalGrossPay().add(pay),
+                    agg.totalEmployerContributions().add(contrib),
+                    agg.totalPayrollCost().add(payrollCost)));
         }
 
         List<BuBreakdown> buBreakdown = byBu.entrySet().stream()
-                .map(e -> new BuBreakdown(e.getKey(), e.getValue().billableHc(), e.getValue().totalGrossPay()))
+                .map(e -> new BuBreakdown(
+                        e.getKey(),
+                        e.getValue().billableHc(),
+                        e.getValue().totalGrossPay(),
+                        e.getValue().totalEmployerContributions(),
+                        e.getValue().totalPayrollCost()))
                 .toList();
 
         return new MasterSummary(
-                billableHc, billablePay,
-                benchHc, benchPay,
-                supportHc, supportPay,
-                leadershipHc, leadershipPay,
-                managementHc, managementPay,
+                billableHc, billablePay, billableContrib, billablePay.add(billableContrib),
+                benchHc, benchPay, benchContrib, benchPay.add(benchContrib),
+                supportHc, supportPay, supportContrib, supportPay.add(supportContrib),
+                leadershipHc, leadershipPay, leadershipContrib, leadershipPay.add(leadershipContrib),
+                managementHc, managementPay, managementContrib, managementPay.add(managementContrib),
                 buBreakdown);
     }
 
@@ -775,12 +807,14 @@ public class PeoplePayrollService {
                         .employeeRegistry(registry)
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
+                        .totalEmployerContributions(employerContributionsOf(payroll))
                         .reconciliationStatus(ReconciliationStatus.MANUALLY_MAPPED)
                         .build());
 
         master.setEmployeeRegistry(registry);
         master.setPayrollSnapshot(payroll);
         master.setGrossPay(payroll.getGrossPay());
+        master.setTotalEmployerContributions(employerContributionsOf(payroll));
         master.setReconciliationStatus(ReconciliationStatus.MANUALLY_MAPPED);
         MasterRecord saved = masterRecordRepository.save(master);
         Hibernate.initialize(saved.getEmployeeRegistry());
@@ -819,6 +853,149 @@ public class PeoplePayrollService {
                     "Cannot remove the last entry for config_type " + entry.getConfigType());
         }
         classificationConfigRepository.delete(entry);
+    }
+
+    public byte[] exportClassificationConfig() {
+        return peopleExcelIO.exportClassificationConfig(findAllClassificationConfig());
+    }
+
+    public byte[] buildClassificationImportSample() {
+        return peopleExcelIO.buildClassificationImportSample();
+    }
+
+    @Transactional
+    public SimpleImportResponse importClassificationConfig(MultipartFile file) {
+        List<PeopleExcelIO.ParsedClassificationImportRow> rows =
+                peopleExcelIO.parseClassificationImport(file);
+        int created = 0;
+        int skipped = 0;
+        List<SimpleImportRowError> errors = new ArrayList<>();
+
+        for (var row : rows) {
+            String configTypeRaw = blankToNull(row.configTypeRaw());
+            String value = blankToNull(row.valueRaw());
+
+            if (configTypeRaw == null) {
+                errors.add(new SimpleImportRowError(row.rowNumber(), "Config Type is required"));
+                continue;
+            }
+            if (value == null) {
+                errors.add(new SimpleImportRowError(row.rowNumber(), "Value is required"));
+                continue;
+            }
+
+            ClassificationConfigType configType;
+            try {
+                configType = ClassificationConfigType.valueOf(
+                        configTypeRaw.trim().toUpperCase(Locale.ROOT).replace(' ', '_'));
+            } catch (IllegalArgumentException e) {
+                errors.add(new SimpleImportRowError(
+                        row.rowNumber(), "Invalid Config Type: " + configTypeRaw));
+                continue;
+            }
+
+            if (classificationConfigRepository.existsByConfigTypeAndValue(configType, value)) {
+                skipped++;
+                continue;
+            }
+
+            classificationConfigRepository.save(ClassificationConfig.builder()
+                    .configType(configType)
+                    .value(value)
+                    .build());
+            created++;
+        }
+
+        return new SimpleImportResponse(rows.size(), created, skipped, errors);
+    }
+
+    public byte[] exportMappingTemplates() {
+        return peopleExcelIO.exportMappingTemplates(findActiveMappings());
+    }
+
+    public byte[] buildMappingImportSample() {
+        return peopleExcelIO.buildMappingImportSample();
+    }
+
+    @Transactional
+    public SimpleImportResponse importMappingTemplates(MultipartFile file) {
+        List<PeopleExcelIO.ParsedMappingImportRow> rows = peopleExcelIO.parseMappingImport(file);
+        int created = 0;
+        int skipped = 0;
+        List<SimpleImportRowError> errors = new ArrayList<>();
+
+        record GroupKey(ImportType importType, String templateName) {}
+
+        Map<GroupKey, List<PeopleExcelIO.ParsedMappingImportRow>> groups = new LinkedHashMap<>();
+
+        for (var row : rows) {
+            String importTypeRaw = blankToNull(row.importTypeRaw());
+            String templateName = blankToNull(row.templateNameRaw());
+            String excelColumnName = blankToNull(row.excelColumnNameRaw());
+            String systemAttribute = blankToNull(row.systemAttributeRaw());
+
+            if (importTypeRaw == null) {
+                errors.add(new SimpleImportRowError(row.rowNumber(), "Import Type is required"));
+                continue;
+            }
+            if (templateName == null) {
+                errors.add(new SimpleImportRowError(row.rowNumber(), "Template Name is required"));
+                continue;
+            }
+            if (excelColumnName == null) {
+                errors.add(new SimpleImportRowError(row.rowNumber(), "Excel Column Name is required"));
+                continue;
+            }
+            if (systemAttribute == null) {
+                errors.add(new SimpleImportRowError(row.rowNumber(), "System Attribute is required"));
+                continue;
+            }
+
+            ImportType importType;
+            try {
+                importType = ImportType.valueOf(importTypeRaw.trim().toUpperCase(Locale.ROOT).replace(' ', '_'));
+            } catch (IllegalArgumentException e) {
+                errors.add(new SimpleImportRowError(
+                        row.rowNumber(), "Invalid Import Type: " + importTypeRaw));
+                continue;
+            }
+            if (!PEOPLE_IMPORT_TYPES.contains(importType)) {
+                errors.add(new SimpleImportRowError(
+                        row.rowNumber(), "Import Type not supported for People & Payroll: " + importTypeRaw));
+                continue;
+            }
+
+            groups.computeIfAbsent(new GroupKey(importType, templateName), k -> new ArrayList<>()).add(row);
+        }
+
+        for (var entry : groups.entrySet()) {
+            GroupKey key = entry.getKey();
+            List<PeopleExcelIO.ParsedMappingImportRow> groupRows = entry.getValue();
+
+            Optional<ImportColumnMapping> active =
+                    importColumnMappingRepository.findByImportTypeAndActiveTrue(key.importType());
+            if (active.isPresent() && active.get().getTemplateName().equals(key.templateName())) {
+                skipped++;
+                continue;
+            }
+
+            List<MappingLineInput> lines = groupRows.stream()
+                    .map(r -> new MappingLineInput(
+                            blankToNull(r.excelColumnNameRaw()),
+                            blankToNull(r.systemAttributeRaw())))
+                    .toList();
+            saveMappingTemplate(key.importType(), key.templateName(), lines);
+            created++;
+        }
+
+        return new SimpleImportResponse(rows.size(), created, skipped, errors);
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     // ── Cross-module validation ───────────────────────────────────────────────
@@ -928,7 +1105,11 @@ public class PeoplePayrollService {
         MasterSummary summary = summarizeMaster(version.getId());
         List<PeriodFinalisedEvent.BuPeriodActual> buActuals = summary.buBreakdown().stream()
                 .map(b -> new PeriodFinalisedEvent.BuPeriodActual(
-                        b.businessUnit(), b.billableHc(), b.totalGrossPay()))
+                        b.businessUnit(),
+                        b.billableHc(),
+                        b.totalGrossPay(),
+                        b.totalEmployerContributions(),
+                        b.totalPayrollCost()))
                 .toList();
         Period period = version.getPeriod();
         return new PeriodFinalisedEvent(
@@ -945,6 +1126,16 @@ public class PeoplePayrollService {
                 summary.supportGrossPay(),
                 summary.leadershipGrossPay(),
                 summary.managementGrossPay(),
+                summary.billableEmployerContributions(),
+                summary.benchEmployerContributions(),
+                summary.supportEmployerContributions(),
+                summary.leadershipEmployerContributions(),
+                summary.managementEmployerContributions(),
+                summary.billableTotalPayrollCost(),
+                summary.benchTotalPayrollCost(),
+                summary.supportTotalPayrollCost(),
+                summary.leadershipTotalPayrollCost(),
+                summary.managementTotalPayrollCost(),
                 buActuals);
     }
 
@@ -1008,8 +1199,22 @@ public class PeoplePayrollService {
                 .grossPay(ExcelSnapshotParser.requiredDecimal(row, SystemAttribute.GROSS_PAY))
                 .netPay(ExcelSnapshotParser.requiredDecimal(row, SystemAttribute.NET_PAY))
                 .ctcPerAnnum(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.CTC_PER_ANNUM))
+                .epfContribution(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.EPF_CONTRIBUTION))
+                .epsContribution(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.EPS_CONTRIBUTION))
+                .edliContribution(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.EDLI_CONTRIBUTION))
+                .epfAdminCharges(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.EPF_ADMIN_CHARGES))
+                .vpf(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.VPF))
+                .npsDeduction(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.NPS_DEDUCTION))
+                .gratuity(ExcelSnapshotParser.optionalDecimal(row, SystemAttribute.GRATUITY))
                 .build();
         payrollSnapshotRepository.save(snap);
+    }
+
+    private static BigDecimal employerContributionsOf(PayrollSnapshot payroll) {
+        if (payroll == null) {
+            return null;
+        }
+        return payroll.resolvedTotalEmployerContributions();
     }
 
     private void applyExitedEmployees(List<Map<String, String>> rows, SnapshotUpload upload) {
@@ -1151,16 +1356,32 @@ public class PeoplePayrollService {
 
     public record MasterSummary(
             int billableHc, BigDecimal billableGrossPay,
+            BigDecimal billableEmployerContributions, BigDecimal billableTotalPayrollCost,
             int benchHc, BigDecimal benchGrossPay,
+            BigDecimal benchEmployerContributions, BigDecimal benchTotalPayrollCost,
             int supportHc, BigDecimal supportGrossPay,
+            BigDecimal supportEmployerContributions, BigDecimal supportTotalPayrollCost,
             int leadershipHc, BigDecimal leadershipGrossPay,
+            BigDecimal leadershipEmployerContributions, BigDecimal leadershipTotalPayrollCost,
             int managementHc, BigDecimal managementGrossPay,
+            BigDecimal managementEmployerContributions, BigDecimal managementTotalPayrollCost,
             List<BuBreakdown> buBreakdown
     ) {}
 
-    public record BuBreakdown(String businessUnit, int billableHc, BigDecimal totalGrossPay) {}
+    public record BuBreakdown(
+            String businessUnit,
+            int billableHc,
+            BigDecimal totalGrossPay,
+            BigDecimal totalEmployerContributions,
+            BigDecimal totalPayrollCost
+    ) {}
 
-    private record BuAggregate(int billableHc, BigDecimal totalGrossPay) {}
+    private record BuAggregate(
+            int billableHc,
+            BigDecimal totalGrossPay,
+            BigDecimal totalEmployerContributions,
+            BigDecimal totalPayrollCost
+    ) {}
 
     private record ClassificationFlags(
             boolean deliveryPu,
@@ -1170,4 +1391,20 @@ public class PeoplePayrollService {
             boolean leadership,
             boolean management
     ) {}
+
+    // ── Backup / restore (ADR-044 Tier 2) ────────────────────────────────────
+
+    public List<BackupSheet> exportBackupSheets() {
+        return peopleModuleBackup.exportBackupSheets();
+    }
+
+    @Transactional
+    public void wipeForRestore() {
+        peopleModuleBackup.wipePeopleData();
+    }
+
+    @Transactional
+    public Map<String, Integer> restoreBackupSheets(Map<String, List<String[]>> rowsByFile) {
+        return peopleModuleBackup.restoreBackupSheets(rowsByFile);
+    }
 }

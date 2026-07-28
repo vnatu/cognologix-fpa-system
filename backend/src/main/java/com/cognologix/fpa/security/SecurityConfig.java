@@ -2,16 +2,15 @@ package com.cognologix.fpa.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -21,12 +20,13 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
 
 @Configuration
+@EnableMethodSecurity
 public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            JwtTokenProvider tokenProvider,
-                                           UserDetailsService userDetailsService) throws Exception {
+                                           DatabaseUserDetailsService userDetailsService) throws Exception {
         var jwtFilter = new JwtAuthenticationFilter(tokenProvider, userDetailsService);
         return http
                 .csrf(AbstractHttpConfigurer::disable)
@@ -41,8 +41,13 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((req, res, e) -> {
                             res.setContentType("application/json");
-                            res.setStatus(401);
+                            res.setStatus(HttpStatus.UNAUTHORIZED.value());
                             res.getWriter().write("{\"error\":\"Unauthorized\"}");
+                        })
+                        .accessDeniedHandler((req, res, e) -> {
+                            res.setContentType("application/json");
+                            res.setStatus(HttpStatus.FORBIDDEN.value());
+                            res.getWriter().write("{\"error\":\"Forbidden\"}");
                         })
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
@@ -59,22 +64,6 @@ public class SecurityConfig {
         var source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;
-    }
-
-    /**
-     * Placeholder in-memory user store.
-     * Replace with a database-backed UserDetailsService once the users table
-     * is created in a future Flyway migration.
-     */
-    @Bean
-    public UserDetailsService userDetailsService(PasswordEncoder encoder) {
-        // LOCAL DEV ONLY — replace with DB-backed UserDetailsService once user management exists
-        var user = User.builder()
-                .username("admin@cognologix.com")
-                .password(encoder.encode("cognologix"))
-                .roles("ADMIN")
-                .build();
-        return new InMemoryUserDetailsManager(user);
     }
 
     @Bean

@@ -19,6 +19,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import { fetchCustomers, fetchProjectCodes, addProjectCode, deleteProjectCode, downloadProjectCodeImportSample, exportProjectCodes } from './api';
 import ProjectCodeImportModal from './ProjectCodeImportModal';
+import { AdminGate, useIsAdmin } from '@/components/AdminGate';
 import type { CustomerSummary, ProjectCode } from './types';
 
 interface Props {
@@ -35,6 +36,7 @@ export default function ProjectCodesSection({
   selectedCustomerId,
   onSelectCustomer,
 }: Props) {
+  const isAdmin = useIsAdmin();
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [showInternal, setShowInternal] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(true);
@@ -123,22 +125,23 @@ export default function ProjectCodesSection({
       title: '',
       key: 'actions',
       width: 80,
-      render: (_: unknown, row: ProjectCode) => (
-        <Popconfirm
-          title="Remove this project code?"
-          description="This cannot be undone."
-          okText="Remove"
-          okButtonProps={{ danger: true }}
-          onConfirm={() => handleDelete(row.id)}
-        >
-          <Button
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            type="text"
-          />
-        </Popconfirm>
-      ),
+      render: (_: unknown, row: ProjectCode) =>
+        isAdmin ? (
+          <Popconfirm
+            title="Remove this project code?"
+            description="This cannot be undone."
+            okText="Remove"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => handleDelete(row.id)}
+          >
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              type="text"
+            />
+          </Popconfirm>
+        ) : null,
     },
   ];
 
@@ -186,17 +189,21 @@ export default function ProjectCodesSection({
           >
             Download Sample File
           </Button>
-          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
-            Import Project Codes
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => { form.resetFields(); setModalOpen(true); }}
-            disabled={!selectedCustomerId}
-          >
-            Add Project Code
-          </Button>
+          <AdminGate>
+            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+              Import Project Codes
+            </Button>
+          </AdminGate>
+          <AdminGate fallback="hide">
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => { form.resetFields(); setModalOpen(true); }}
+              disabled={!selectedCustomerId}
+            >
+              Add Project Code
+            </Button>
+          </AdminGate>
         </Space>
       </div>
 

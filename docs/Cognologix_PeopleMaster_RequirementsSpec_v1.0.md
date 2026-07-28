@@ -109,10 +109,10 @@ Zoho Payroll is authoritative for what was actually paid. It is exported monthly
 | Department, Designation  | Reference only — Zoho People is authoritative for role data       |
 | CTC Amount (Per Annum)   | Annual CTC from salary structure — used for budgeting only        |
 | Gross Amount (Per Annum) | Currently ignored                                                 |
-| Gross Pay                | Actual monthly gross paid — PRIMARY salary metric used throughout |
-| Net Pay                  | Take-home — captured but not shown on dashboard                   |
+| Gross Pay                | Actual monthly gross paid — PRIMARY salary metric; Zoho full rupees stored as Rs Lakhs on import (ADR-046) |
+| Net Pay                  | Take-home — captured but not shown on dashboard; stored as Rs Lakhs (ADR-046) |
 
-*Gross Pay, not CTC, is the company-expense figure driving all salary metrics. CTC Per Annum is retained for budgeting comparisons only — this mirrors the existing Excel convention exactly.*
+*Gross Pay, not CTC, is the company-expense figure driving all salary metrics. CTC Per Annum is retained for budgeting comparisons only — this mirrors the existing Excel convention exactly. All Zoho Payroll salary and employer-contribution amounts are converted from full rupees to Rs Lakhs at import (ADR-046).*
 
 **4.3 Zoho People — Exited Employees Export (supplementary)**
 

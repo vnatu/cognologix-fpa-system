@@ -28,7 +28,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * People Analytics Dashboard — aggregates master_record rows per period version (spec §10).
+ * People Analytics Dashboard — aggregates master_record rows per period version (spec §10 / ADR-045).
  */
 @Service
 @RequiredArgsConstructor
@@ -68,7 +68,7 @@ public class PeopleDashboardService {
 
         DashboardSummaryResponse.SalaryMetrics salary = buildSalaryMetrics(buckets);
         List<DashboardSummaryResponse.PuBreakdown> puBreakdown = buildPuBreakdown(active);
-        BuBreakdowns buBreakdowns = buildBuBreakdowns(active, salary.totalGrossPay());
+        BuBreakdowns buBreakdowns = buildBuBreakdowns(active, salary.total().totalPayrollCost());
 
         return new DashboardSummaryResponse(
                 period.getPeriodMonth(),
@@ -141,44 +141,57 @@ public class PeopleDashboardService {
             case BENCH_HC -> BigDecimal.valueOf(buckets.benchHc);
             case TOTAL_HC -> BigDecimal.valueOf(buckets.totalHc());
             case BILLABLE_RATIO_PCT -> pct(buckets.billableHc, buckets.totalHc());
-            case TOTAL_GROSS_PAY -> buckets.totalGrossPay();
-            case BILLABLE_GROSS_PAY -> buckets.billablePay;
+            case TOTAL_GROSS_PAY -> buckets.totalPayrollCost();
+            case BILLABLE_GROSS_PAY -> buckets.billablePayrollCost;
         };
     }
 
     private ClassificationBuckets classify(List<MasterRecord> records) {
         ClassificationBuckets b = new ClassificationBuckets();
         for (MasterRecord r : records) {
-            BigDecimal pay = r.getGrossPay(); // null excluded from pay totals/averages
+            BigDecimal gross = r.getGrossPay(); // null excluded from pay totals/averages
+            BigDecimal contrib = r.getTotalEmployerContributions() != null
+                    ? r.getTotalEmployerContributions() : BigDecimal.ZERO;
+            BigDecimal payrollCost = r.resolvedTotalPayrollCost();
             // Salary bucketing priority: Leadership > Management > Billable > Bench > Support (spec §8)
             if (r.isLeadership()) {
                 b.leadershipHc++;
-                if (pay != null) {
-                    b.leadershipPay = b.leadershipPay.add(pay);
+                if (gross != null) {
+                    b.leadershipGross = b.leadershipGross.add(gross);
+                    b.leadershipContrib = b.leadershipContrib.add(contrib);
+                    b.leadershipPayrollCost = b.leadershipPayrollCost.add(payrollCost);
                     b.leadershipPaidHc++;
                 }
             } else if (r.isManagement()) {
                 b.managementHc++;
-                if (pay != null) {
-                    b.managementPay = b.managementPay.add(pay);
+                if (gross != null) {
+                    b.managementGross = b.managementGross.add(gross);
+                    b.managementContrib = b.managementContrib.add(contrib);
+                    b.managementPayrollCost = b.managementPayrollCost.add(payrollCost);
                     b.managementPaidHc++;
                 }
             } else if (r.isBillable()) {
                 b.billableHc++;
-                if (pay != null) {
-                    b.billablePay = b.billablePay.add(pay);
+                if (gross != null) {
+                    b.billableGross = b.billableGross.add(gross);
+                    b.billableContrib = b.billableContrib.add(contrib);
+                    b.billablePayrollCost = b.billablePayrollCost.add(payrollCost);
                     b.billablePaidHc++;
                 }
             } else if (r.isBench()) {
                 b.benchHc++;
-                if (pay != null) {
-                    b.benchPay = b.benchPay.add(pay);
+                if (gross != null) {
+                    b.benchGross = b.benchGross.add(gross);
+                    b.benchContrib = b.benchContrib.add(contrib);
+                    b.benchPayrollCost = b.benchPayrollCost.add(payrollCost);
                     b.benchPaidHc++;
                 }
             } else {
                 b.supportHc++;
-                if (pay != null) {
-                    b.supportPay = b.supportPay.add(pay);
+                if (gross != null) {
+                    b.supportGross = b.supportGross.add(gross);
+                    b.supportContrib = b.supportContrib.add(contrib);
+                    b.supportPayrollCost = b.supportPayrollCost.add(payrollCost);
                     b.supportPaidHc++;
                 }
             }
@@ -188,17 +201,18 @@ public class PeopleDashboardService {
 
     private DashboardSummaryResponse.SalaryMetrics buildSalaryMetrics(ClassificationBuckets b) {
         return new DashboardSummaryResponse.SalaryMetrics(
-                b.totalGrossPay(),
-                b.billablePay,
-                b.benchPay,
-                b.supportPay,
-                b.leadershipPay,
-                b.managementPay,
-                avg(b.billablePay, b.billablePaidHc),
-                avg(b.benchPay, b.benchPaidHc),
-                avg(b.supportPay, b.supportPaidHc),
-                avg(b.leadershipPay, b.leadershipPaidHc),
-                avg(b.managementPay, b.managementPaidHc));
+                metrics(b.totalGross(), b.totalContrib(), b.totalPayrollCost(), b.totalPaidHc()),
+                metrics(b.billableGross, b.billableContrib, b.billablePayrollCost, b.billablePaidHc),
+                metrics(b.benchGross, b.benchContrib, b.benchPayrollCost, b.benchPaidHc),
+                metrics(b.supportGross, b.supportContrib, b.supportPayrollCost, b.supportPaidHc),
+                metrics(b.leadershipGross, b.leadershipContrib, b.leadershipPayrollCost, b.leadershipPaidHc),
+                metrics(b.managementGross, b.managementContrib, b.managementPayrollCost, b.managementPaidHc));
+    }
+
+    private static DashboardSummaryResponse.ClassificationSalaryMetrics metrics(
+            BigDecimal gross, BigDecimal contrib, BigDecimal payrollCost, int paidHc) {
+        return new DashboardSummaryResponse.ClassificationSalaryMetrics(
+                gross, contrib, payrollCost, avg(payrollCost, paidHc));
     }
 
     private List<DashboardSummaryResponse.PuBreakdown> buildPuBreakdown(List<MasterRecord> records) {
@@ -243,7 +257,7 @@ public class PeopleDashboardService {
                 .toList();
     }
 
-    private BuBreakdowns buildBuBreakdowns(List<MasterRecord> records, BigDecimal companyTotalGrossPay) {
+    private BuBreakdowns buildBuBreakdowns(List<MasterRecord> records, BigDecimal companyTotalPayrollCost) {
         Map<String, BuAgg> byBu = new LinkedHashMap<>();
         for (MasterRecord r : records) {
             String bu = r.getBusinessUnit() != null && !r.getBusinessUnit().isBlank()
@@ -278,7 +292,7 @@ public class PeopleDashboardService {
                         a.billableHc,
                         nonBillable,
                         a.totalPay,
-                        pctAmount(a.totalPay, companyTotalGrossPay)));
+                        pctAmount(a.totalPay, companyTotalPayrollCost)));
             } else {
                 clients.add(new DashboardSummaryResponse.ClientBreakdown(
                         buName,
@@ -379,18 +393,42 @@ public class PeopleDashboardService {
         int supportPaidHc;
         int leadershipPaidHc;
         int managementPaidHc;
-        BigDecimal billablePay = BigDecimal.ZERO;
-        BigDecimal benchPay = BigDecimal.ZERO;
-        BigDecimal supportPay = BigDecimal.ZERO;
-        BigDecimal leadershipPay = BigDecimal.ZERO;
-        BigDecimal managementPay = BigDecimal.ZERO;
+        BigDecimal billableGross = BigDecimal.ZERO;
+        BigDecimal benchGross = BigDecimal.ZERO;
+        BigDecimal supportGross = BigDecimal.ZERO;
+        BigDecimal leadershipGross = BigDecimal.ZERO;
+        BigDecimal managementGross = BigDecimal.ZERO;
+        BigDecimal billableContrib = BigDecimal.ZERO;
+        BigDecimal benchContrib = BigDecimal.ZERO;
+        BigDecimal supportContrib = BigDecimal.ZERO;
+        BigDecimal leadershipContrib = BigDecimal.ZERO;
+        BigDecimal managementContrib = BigDecimal.ZERO;
+        BigDecimal billablePayrollCost = BigDecimal.ZERO;
+        BigDecimal benchPayrollCost = BigDecimal.ZERO;
+        BigDecimal supportPayrollCost = BigDecimal.ZERO;
+        BigDecimal leadershipPayrollCost = BigDecimal.ZERO;
+        BigDecimal managementPayrollCost = BigDecimal.ZERO;
 
         int totalHc() {
             return billableHc + benchHc + supportHc + leadershipHc + managementHc;
         }
 
-        BigDecimal totalGrossPay() {
-            return billablePay.add(benchPay).add(supportPay).add(leadershipPay).add(managementPay);
+        int totalPaidHc() {
+            return billablePaidHc + benchPaidHc + supportPaidHc + leadershipPaidHc + managementPaidHc;
+        }
+
+        BigDecimal totalGross() {
+            return billableGross.add(benchGross).add(supportGross).add(leadershipGross).add(managementGross);
+        }
+
+        BigDecimal totalContrib() {
+            return billableContrib.add(benchContrib).add(supportContrib)
+                    .add(leadershipContrib).add(managementContrib);
+        }
+
+        BigDecimal totalPayrollCost() {
+            return billablePayrollCost.add(benchPayrollCost).add(supportPayrollCost)
+                    .add(leadershipPayrollCost).add(managementPayrollCost);
         }
     }
 

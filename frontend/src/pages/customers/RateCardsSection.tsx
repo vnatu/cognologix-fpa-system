@@ -40,6 +40,7 @@ import {
   exportRateCards,
 } from './api';
 import RateCardImportModal from './RateCardImportModal';
+import { AdminGate, useIsAdmin } from '@/components/AdminGate';
 import type {
   CustomerSummary,
   ProjectCode,
@@ -101,6 +102,7 @@ export default function RateCardsSection({
   selectedCustomerId,
   onSelectCustomer,
 }: Props) {
+  const isAdmin = useIsAdmin();
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [showInternal, setShowInternal] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(true);
@@ -317,17 +319,21 @@ export default function RateCardsSection({
           >
             Download Sample File
           </Button>
-          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
-            Import Rate Cards
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={openModal}
-            disabled={!selectedCustomerId || isInternalSelected}
-          >
-            New Rate Card
-          </Button>
+          <AdminGate>
+            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+              Import Rate Cards
+            </Button>
+          </AdminGate>
+          <AdminGate fallback="hide">
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={openModal}
+              disabled={!selectedCustomerId || isInternalSelected}
+            >
+              New Rate Card
+            </Button>
+          </AdminGate>
         </Space>
       </div>
 
@@ -394,7 +400,7 @@ export default function RateCardsSection({
             <RateCardCard
               key={card.id}
               card={card}
-              onEdit={() => openEditModal(card)}
+              onEdit={isAdmin ? () => openEditModal(card) : undefined}
             />
           ))}
           {historyCards.length > 0 && (

@@ -2,20 +2,29 @@ package com.cognologix.fpa.budgeting;
 
 import com.cognologix.fpa.budgeting.domain.*;
 import com.cognologix.fpa.budgeting.dto.BudgetingDtos.*;
+import com.cognologix.fpa.budgeting.dto.PlanInputImportResponse;
 import com.cognologix.fpa.budgeting.repository.*;
 import com.cognologix.fpa.customer.CustomerService;
+import com.cognologix.fpa.general.BackupSheet;
 import com.cognologix.fpa.customer.CustomerService.BuCustomerRef;
 import com.cognologix.fpa.customer.CustomerService.CustomerRef;
+import com.cognologix.fpa.expenses.ExpenseService;
 import com.cognologix.fpa.people.PeriodFinalisedEvent;
+import com.cognologix.fpa.revenue.RevenueService;
+import com.cognologix.fpa.revenue.dto.RevenueDtos.MonthlyRevenueSummary;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.Month;
+import java.time.YearMonth;
+import java.time.format.TextStyle;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -54,14 +63,31 @@ public class BudgetingService {
     private final OverheadActualsRepository overheadActualsRepository;
     private final OverheadLineItemRepository overheadLineItemRepository;
     private final CustomerService customerService;
+    private final RevenueService revenueService;
+    private final ExpenseService expenseService;
+    private final BudgetingExcelIO budgetingExcelIO;
+    private final BudgetingModuleBackup budgetingModuleBackup;
+
+    public static final String REVENUE_SOURCE_MODULE = "REVENUE_MODULE";
+    public static final String REVENUE_SOURCE_MANUAL = "MANUAL_OVERRIDE";
 
     @Transactional
     public FinancialYearPlan createFinancialYearPlan(String fiscalYear, int openingHc) {
-        return createFinancialYearPlan(fiscalYear, openingHc, "system");
+        return createFinancialYearPlan(fiscalYear, openingHc, "system", null, null);
     }
 
     @Transactional
     public FinancialYearPlan createFinancialYearPlan(String fiscalYear, int openingHc, String createdBy) {
+        return createFinancialYearPlan(fiscalYear, openingHc, createdBy, null, null);
+    }
+
+    @Transactional
+    public FinancialYearPlan createFinancialYearPlan(
+            String fiscalYear,
+            int openingHc,
+            String createdBy,
+            LocalDate fiscalYearStartOverride,
+            LocalDate fiscalYearEndOverride) {
         if (fiscalYear == null || fiscalYear.isBlank()) {
             throw new IllegalArgumentException("fiscalYear is required");
         }
@@ -85,10 +111,19 @@ public class BudgetingService {
                     "fiscalYear end must be start+1 (e.g. FY2627), got: " + normalized);
         }
 
+        LocalDate derivedStart = LocalDate.of(startYear, 4, 1);
+        LocalDate derivedEnd = LocalDate.of(endYear, 3, 31);
+        LocalDate fiscalYearStart = fiscalYearStartOverride != null ? fiscalYearStartOverride : derivedStart;
+        LocalDate fiscalYearEnd = fiscalYearEndOverride != null ? fiscalYearEndOverride : derivedEnd;
+        if (!fiscalYearEnd.isAfter(fiscalYearStart)) {
+            throw new IllegalArgumentException(
+                    "fiscalYearEnd must be after fiscalYearStart");
+        }
+
         FinancialYearPlan plan = FinancialYearPlan.builder()
                 .fiscalYear(normalized)
-                .fiscalYearStart(LocalDate.of(startYear, 4, 1))
-                .fiscalYearEnd(LocalDate.of(endYear, 3, 31))
+                .fiscalYearStart(fiscalYearStart)
+                .fiscalYearEnd(fiscalYearEnd)
                 .openingHc(openingHc)
                 .createdBy(createdBy)
                 .build();
@@ -295,45 +330,145 @@ public class BudgetingService {
     @Transactional
     public void upsertHcPlan(UUID planId, UUID typeId, UUID versionId, List<HcPlan> hcPlans) {
         ForecastVersion version = validateDraftVersion(planId, typeId, versionId);
-        hcPlanRepository.deleteByForecastVersionId(versionId);
-        for (HcPlan plan : hcPlans) {
-            plan.setId(null);
-            plan.setForecastVersion(version);
-            hcPlanRepository.save(plan);
+        Map<MonthYearKey, HcPlan> existingByKey = hcPlanRepository.findByForecastVersionId(versionId)
+                .stream()
+                .collect(Collectors.toMap(
+                        p -> new MonthYearKey(p.getPlanMonth(), p.getPlanYear()),
+                        p -> p,
+                        (a, b) -> a,
+                        LinkedHashMap::new));
+
+        Set<MonthYearKey> kept = new HashSet<>();
+        for (HcPlan incoming : hcPlans) {
+            MonthYearKey key = new MonthYearKey(incoming.getPlanMonth(), incoming.getPlanYear());
+            kept.add(key);
+            HcPlan target = existingByKey.get(key);
+            if (target == null) {
+                incoming.setId(null);
+                incoming.setForecastVersion(version);
+                hcPlanRepository.save(incoming);
+            } else {
+                target.setPlannedHires(incoming.getPlannedHires());
+                target.setPlannedExits(incoming.getPlannedExits());
+                target.setPlannedBillableHc(incoming.getPlannedBillableHc());
+                target.setPlannedBenchHc(incoming.getPlannedBenchHc());
+                target.setPlannedSupportHc(incoming.getPlannedSupportHc());
+                target.setPlannedLeadershipHc(incoming.getPlannedLeadershipHc());
+                target.setPlannedManagementHc(incoming.getPlannedManagementHc());
+                hcPlanRepository.save(target);
+            }
         }
+        existingByKey.forEach((key, row) -> {
+            if (!kept.contains(key)) {
+                hcPlanRepository.delete(row);
+            }
+        });
     }
 
     @Transactional
     public void upsertSalaryBudget(UUID planId, UUID typeId, UUID versionId, List<SalaryBudget> salaryBudgets) {
         ForecastVersion version = validateDraftVersion(planId, typeId, versionId);
-        salaryBudgetRepository.deleteByForecastVersionId(versionId);
-        for (SalaryBudget budget : salaryBudgets) {
-            budget.setId(null);
-            budget.setForecastVersion(version);
-            salaryBudgetRepository.save(budget);
+        Map<MonthYearKey, SalaryBudget> existingByKey = salaryBudgetRepository
+                .findByForecastVersionId(versionId)
+                .stream()
+                .collect(Collectors.toMap(
+                        b -> new MonthYearKey(b.getPlanMonth(), b.getPlanYear()),
+                        b -> b,
+                        (a, b) -> a,
+                        LinkedHashMap::new));
+
+        Set<MonthYearKey> kept = new HashSet<>();
+        for (SalaryBudget incoming : salaryBudgets) {
+            MonthYearKey key = new MonthYearKey(incoming.getPlanMonth(), incoming.getPlanYear());
+            kept.add(key);
+            SalaryBudget target = existingByKey.get(key);
+            if (target == null) {
+                incoming.setId(null);
+                incoming.setForecastVersion(version);
+                salaryBudgetRepository.save(incoming);
+            } else {
+                target.setBillableSalaries(incoming.getBillableSalaries());
+                target.setBenchSalaries(incoming.getBenchSalaries());
+                target.setSupportSalaries(incoming.getSupportSalaries());
+                target.setCofoundersSalaries(incoming.getCofoundersSalaries());
+                target.setSeniorMgmtSalaries(incoming.getSeniorMgmtSalaries());
+                salaryBudgetRepository.save(target);
+            }
         }
+        existingByKey.forEach((key, row) -> {
+            if (!kept.contains(key)) {
+                salaryBudgetRepository.delete(row);
+            }
+        });
     }
 
     @Transactional
     public void upsertRevenuePlan(UUID planId, UUID typeId, UUID versionId, List<ClientRevenuePlan> revenuePlans) {
         ForecastVersion version = validateDraftVersion(planId, typeId, versionId);
-        clientRevenuePlanRepository.deleteByForecastVersionId(versionId);
-        for (ClientRevenuePlan plan : revenuePlans) {
-            plan.setId(null);
-            plan.setForecastVersion(version);
-            clientRevenuePlanRepository.save(plan);
+        Map<CustomerMonthYearKey, ClientRevenuePlan> existingByKey = clientRevenuePlanRepository
+                .findByForecastVersionId(versionId)
+                .stream()
+                .collect(Collectors.toMap(
+                        p -> new CustomerMonthYearKey(p.getCustomerId(), p.getPlanMonth(), p.getPlanYear()),
+                        p -> p,
+                        (a, b) -> a,
+                        LinkedHashMap::new));
+
+        Set<CustomerMonthYearKey> kept = new HashSet<>();
+        for (ClientRevenuePlan incoming : revenuePlans) {
+            CustomerMonthYearKey key = new CustomerMonthYearKey(
+                    incoming.getCustomerId(), incoming.getPlanMonth(), incoming.getPlanYear());
+            kept.add(key);
+            ClientRevenuePlan target = existingByKey.get(key);
+            if (target == null) {
+                incoming.setId(null);
+                incoming.setForecastVersion(version);
+                clientRevenuePlanRepository.save(incoming);
+            } else {
+                target.setPlannedTmRevenue(incoming.getPlannedTmRevenue());
+                target.setPlannedFixedBidRevenue(incoming.getPlannedFixedBidRevenue());
+                clientRevenuePlanRepository.save(target);
+            }
         }
+        existingByKey.forEach((key, row) -> {
+            if (!kept.contains(key)) {
+                clientRevenuePlanRepository.delete(row);
+            }
+        });
     }
 
     @Transactional
     public void upsertOverheadBudget(UUID planId, UUID typeId, UUID versionId, List<OverheadBudget> overheadBudgets) {
         ForecastVersion version = validateDraftVersion(planId, typeId, versionId);
-        overheadBudgetRepository.deleteByForecastVersionId(versionId);
-        for (OverheadBudget budget : overheadBudgets) {
-            budget.setId(null);
-            budget.setForecastVersion(version);
-            overheadBudgetRepository.save(budget);
+        Map<OverheadMonthYearKey, OverheadBudget> existingByKey = overheadBudgetRepository
+                .findByForecastVersionId(versionId)
+                .stream()
+                .collect(Collectors.toMap(
+                        b -> new OverheadMonthYearKey(b.getPlanMonth(), b.getPlanYear(), b.getOverheadLine()),
+                        b -> b,
+                        (a, b) -> a,
+                        LinkedHashMap::new));
+
+        Set<OverheadMonthYearKey> kept = new HashSet<>();
+        for (OverheadBudget incoming : overheadBudgets) {
+            OverheadMonthYearKey key = new OverheadMonthYearKey(
+                    incoming.getPlanMonth(), incoming.getPlanYear(), incoming.getOverheadLine());
+            kept.add(key);
+            OverheadBudget target = existingByKey.get(key);
+            if (target == null) {
+                incoming.setId(null);
+                incoming.setForecastVersion(version);
+                overheadBudgetRepository.save(incoming);
+            } else {
+                target.setAmount(incoming.getAmount());
+                overheadBudgetRepository.save(target);
+            }
         }
+        existingByKey.forEach((key, row) -> {
+            if (!kept.contains(key)) {
+                overheadBudgetRepository.delete(row);
+            }
+        });
     }
 
     private ForecastVersion validateDraftVersion(UUID planId, UUID typeId, UUID versionId) {
@@ -383,13 +518,157 @@ public class BudgetingService {
         return overheadBudgetRepository.findByForecastVersionId(versionId);
     }
 
+    public byte[] exportHcPlan(UUID planId, UUID typeId, UUID versionId) {
+        return budgetingExcelIO.exportHcPlan(getHcPlan(planId, typeId, versionId));
+    }
+
+    public byte[] exportSalaryBudget(UUID planId, UUID typeId, UUID versionId) {
+        return budgetingExcelIO.exportSalaryBudget(getSalaryBudget(planId, typeId, versionId));
+    }
+
+    public byte[] exportRevenuePlan(UUID planId, UUID typeId, UUID versionId) {
+        return budgetingExcelIO.exportRevenuePlan(getRevenuePlan(planId, typeId, versionId));
+    }
+
+    public byte[] exportOverheadBudget(UUID planId, UUID typeId, UUID versionId) {
+        return budgetingExcelIO.exportOverheadBudget(getOverheadBudget(planId, typeId, versionId));
+    }
+
+    public byte[] exportAllInputs(UUID planId, UUID typeId, UUID versionId) {
+        return budgetingExcelIO.zipPlanInputs(
+                exportHcPlan(planId, typeId, versionId),
+                exportSalaryBudget(planId, typeId, versionId),
+                exportRevenuePlan(planId, typeId, versionId),
+                exportOverheadBudget(planId, typeId, versionId));
+    }
+
+    public byte[] buildHcPlanImportSample() {
+        return budgetingExcelIO.buildHcPlanSample();
+    }
+
+    public byte[] buildSalaryBudgetImportSample() {
+        return budgetingExcelIO.buildSalaryBudgetSample();
+    }
+
+    public byte[] buildRevenuePlanImportSample() {
+        return budgetingExcelIO.buildRevenuePlanSample();
+    }
+
+    public byte[] buildOverheadBudgetImportSample() {
+        return budgetingExcelIO.buildOverheadBudgetSample();
+    }
+
+    @Transactional
+    public PlanInputImportResponse importHcPlan(UUID planId, UUID typeId, UUID versionId, MultipartFile file) {
+        BudgetingExcelIO.HcPlanParseResult parsed = budgetingExcelIO.parseHcPlan(file);
+        Map<MonthYearKey, HcPlan> merged = new LinkedHashMap<>();
+        for (HcPlan existing : getHcPlan(planId, typeId, versionId)) {
+            merged.put(new MonthYearKey(existing.getPlanMonth(), existing.getPlanYear()), existing);
+        }
+        int created = 0;
+        int skipped = 0;
+        for (HcPlan imported : parsed.rows()) {
+            MonthYearKey key = new MonthYearKey(imported.getPlanMonth(), imported.getPlanYear());
+            if (merged.containsKey(key)) {
+                skipped++;
+            } else {
+                created++;
+            }
+            merged.put(key, imported);
+        }
+        if (!parsed.rows().isEmpty()) {
+            upsertHcPlan(planId, typeId, versionId, new ArrayList<>(merged.values()));
+        }
+        return new PlanInputImportResponse(parsed.totalRows(), created, skipped, parsed.errors());
+    }
+
+    @Transactional
+    public PlanInputImportResponse importSalaryBudget(UUID planId, UUID typeId, UUID versionId, MultipartFile file) {
+        BudgetingExcelIO.SalaryBudgetParseResult parsed = budgetingExcelIO.parseSalaryBudget(file);
+        Map<MonthYearKey, SalaryBudget> merged = new LinkedHashMap<>();
+        for (SalaryBudget existing : getSalaryBudget(planId, typeId, versionId)) {
+            merged.put(new MonthYearKey(existing.getPlanMonth(), existing.getPlanYear()), existing);
+        }
+        int created = 0;
+        int skipped = 0;
+        for (SalaryBudget imported : parsed.rows()) {
+            MonthYearKey key = new MonthYearKey(imported.getPlanMonth(), imported.getPlanYear());
+            if (merged.containsKey(key)) {
+                skipped++;
+            } else {
+                created++;
+            }
+            merged.put(key, imported);
+        }
+        if (!parsed.rows().isEmpty()) {
+            upsertSalaryBudget(planId, typeId, versionId, new ArrayList<>(merged.values()));
+        }
+        return new PlanInputImportResponse(parsed.totalRows(), created, skipped, parsed.errors());
+    }
+
+    @Transactional
+    public PlanInputImportResponse importRevenuePlan(UUID planId, UUID typeId, UUID versionId, MultipartFile file) {
+        BudgetingExcelIO.RevenuePlanParseResult parsed = budgetingExcelIO.parseRevenuePlan(file);
+        Map<CustomerMonthYearKey, ClientRevenuePlan> merged = new LinkedHashMap<>();
+        for (ClientRevenuePlan existing : getRevenuePlan(planId, typeId, versionId)) {
+            merged.put(new CustomerMonthYearKey(
+                    existing.getCustomerId(), existing.getPlanMonth(), existing.getPlanYear()), existing);
+        }
+        int created = 0;
+        int skipped = 0;
+        for (ClientRevenuePlan imported : parsed.rows()) {
+            CustomerMonthYearKey key = new CustomerMonthYearKey(
+                    imported.getCustomerId(), imported.getPlanMonth(), imported.getPlanYear());
+            if (merged.containsKey(key)) {
+                skipped++;
+            } else {
+                created++;
+            }
+            merged.put(key, imported);
+        }
+        if (!parsed.rows().isEmpty()) {
+            upsertRevenuePlan(planId, typeId, versionId, new ArrayList<>(merged.values()));
+        }
+        return new PlanInputImportResponse(parsed.totalRows(), created, skipped, parsed.errors());
+    }
+
+    @Transactional
+    public PlanInputImportResponse importOverheadBudget(UUID planId, UUID typeId, UUID versionId, MultipartFile file) {
+        BudgetingExcelIO.OverheadBudgetParseResult parsed = budgetingExcelIO.parseOverheadBudget(file);
+        Map<OverheadMonthYearKey, OverheadBudget> merged = new LinkedHashMap<>();
+        for (OverheadBudget existing : getOverheadBudget(planId, typeId, versionId)) {
+            merged.put(new OverheadMonthYearKey(
+                    existing.getPlanMonth(), existing.getPlanYear(), existing.getOverheadLine()), existing);
+        }
+        int created = 0;
+        int skipped = 0;
+        for (OverheadBudget imported : parsed.rows()) {
+            OverheadMonthYearKey key = new OverheadMonthYearKey(
+                    imported.getPlanMonth(), imported.getPlanYear(), imported.getOverheadLine());
+            if (merged.containsKey(key)) {
+                skipped++;
+            } else {
+                created++;
+            }
+            merged.put(key, imported);
+        }
+        if (!parsed.rows().isEmpty()) {
+            upsertOverheadBudget(planId, typeId, versionId, new ArrayList<>(merged.values()));
+        }
+        return new PlanInputImportResponse(parsed.totalRows(), created, skipped, parsed.errors());
+    }
+
+    private record MonthYearKey(int month, int year) {}
+    private record CustomerMonthYearKey(UUID customerId, int month, int year) {}
+    private record OverheadMonthYearKey(int month, int year, String overheadLine) {}
+
     public List<OverheadLineItem> listOverheadLineItems() {
         return overheadLineItemRepository.findAllByOrderBySortOrderAsc();
     }
 
     @Transactional
-    public void upsertRevenueActuals(UUID planId, int month, int year, BigDecimal manualTotal,
-                                     List<ClientRevenueActual> byClient, String enteredBy) {
+    public PeriodActuals upsertRevenueActuals(UUID planId, int month, int year, BigDecimal manualTotal,
+                                              List<ClientRevenueActual> byClient, String enteredBy) {
         FinancialYearPlan plan = financialYearPlanRepository.findById(planId)
                 .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
 
@@ -405,22 +684,41 @@ public class BudgetingService {
                 });
 
         actuals.setActualRevenueManual(manualTotal);
-        periodActualsRepository.save(actuals);
+        PeriodActuals saved = periodActualsRepository.save(actuals);
 
-        clientRevenueActualRepository.deleteByPlanMonthYear(planId, month, year);
-        if (byClient != null && !byClient.isEmpty()) {
+        Map<UUID, ClientRevenueActual> existingByCustomer = clientRevenueActualRepository
+                .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year)
+                .stream()
+                .collect(Collectors.toMap(ClientRevenueActual::getCustomerId, a -> a, (a, b) -> a));
+
+        Set<UUID> keptCustomers = new HashSet<>();
+        if (byClient != null) {
             for (ClientRevenueActual entry : byClient) {
-                ClientRevenueActual actual = ClientRevenueActual.builder()
-                        .financialYearPlan(plan)
-                        .customerId(entry.getCustomerId())
-                        .actualsMonth(month)
-                        .actualsYear(year)
-                        .actualRevenue(entry.getActualRevenue())
-                        .enteredBy(enteredBy)
-                        .build();
-                clientRevenueActualRepository.save(actual);
+                keptCustomers.add(entry.getCustomerId());
+                ClientRevenueActual target = existingByCustomer.get(entry.getCustomerId());
+                if (target == null) {
+                    ClientRevenueActual actual = ClientRevenueActual.builder()
+                            .financialYearPlan(plan)
+                            .customerId(entry.getCustomerId())
+                            .actualsMonth(month)
+                            .actualsYear(year)
+                            .actualRevenue(entry.getActualRevenue())
+                            .enteredBy(enteredBy)
+                            .build();
+                    clientRevenueActualRepository.save(actual);
+                } else {
+                    target.setActualRevenue(entry.getActualRevenue());
+                    target.setEnteredBy(enteredBy);
+                    clientRevenueActualRepository.save(target);
+                }
             }
         }
+        existingByCustomer.forEach((customerId, row) -> {
+            if (!keptCustomers.contains(customerId)) {
+                clientRevenueActualRepository.delete(row);
+            }
+        });
+        return saved;
     }
 
     @Transactional
@@ -440,20 +738,38 @@ public class BudgetingService {
                     return periodActualsRepository.save(newActuals);
                 });
 
-        overheadActualsRepository.deleteByPlanMonthYear(planId, month, year);
-        if (lineItems != null && !lineItems.isEmpty()) {
+        Map<String, OverheadActuals> existingByLine = overheadActualsRepository
+                .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year)
+                .stream()
+                .collect(Collectors.toMap(OverheadActuals::getOverheadLine, o -> o, (a, b) -> a));
+
+        Set<String> keptLines = new HashSet<>();
+        if (lineItems != null) {
             for (OverheadActuals item : lineItems) {
-                OverheadActuals overhead = OverheadActuals.builder()
-                        .financialYearPlan(plan)
-                        .actualsMonth(month)
-                        .actualsYear(year)
-                        .overheadLine(item.getOverheadLine())
-                        .actualAmount(item.getActualAmount())
-                        .enteredBy(enteredBy)
-                        .build();
-                overheadActualsRepository.save(overhead);
+                keptLines.add(item.getOverheadLine());
+                OverheadActuals target = existingByLine.get(item.getOverheadLine());
+                if (target == null) {
+                    OverheadActuals overhead = OverheadActuals.builder()
+                            .financialYearPlan(plan)
+                            .actualsMonth(month)
+                            .actualsYear(year)
+                            .overheadLine(item.getOverheadLine())
+                            .actualAmount(item.getActualAmount())
+                            .enteredBy(enteredBy)
+                            .build();
+                    overheadActualsRepository.save(overhead);
+                } else {
+                    target.setActualAmount(item.getActualAmount());
+                    target.setEnteredBy(enteredBy);
+                    overheadActualsRepository.save(target);
+                }
             }
         }
+        existingByLine.forEach((line, row) -> {
+            if (!keptLines.contains(line)) {
+                overheadActualsRepository.delete(row);
+            }
+        });
     }
 
     public Optional<PeriodActuals> getPeriodActualsDetail(UUID planId, int month, int year) {
@@ -461,6 +777,15 @@ public class BudgetingService {
     }
 
     public RollingForecastResult getRollingForecast(UUID financialYearPlanId) {
+        return getRollingForecast(financialYearPlanId, PeriodGranularity.ANNUAL, null, null, null);
+    }
+
+    public RollingForecastResult getRollingForecast(
+            UUID financialYearPlanId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter) {
         FinancialYearPlan plan = financialYearPlanRepository.findById(financialYearPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + financialYearPlanId));
 
@@ -468,23 +793,35 @@ public class BudgetingService {
                 .orElseThrow(() -> new IllegalStateException(
                         "No ACTIVE baseline (Normal) version for plan: " + financialYearPlanId));
 
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
+
         List<MonthlyFinancials> months = new ArrayList<>();
-        for (LocalDate month = plan.getFiscalYearStart();
-             !month.isAfter(plan.getFiscalYearEnd());
-             month = month.plusMonths(1)) {
+        for (LocalDate m = plan.getFiscalYearStart();
+             !m.isAfter(plan.getFiscalYearEnd());
+             m = m.plusMonths(1)) {
 
             Optional<PeriodActuals> actualsOpt = periodActualsRepository
                     .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(
-                            financialYearPlanId, month.getMonthValue(), month.getYear());
+                            financialYearPlanId, m.getMonthValue(), m.getYear());
 
             if (actualsOpt.isPresent()) {
-                months.add(buildMonthlyFinancialsFromActuals(plan, actualsOpt.get(), month));
+                months.add(buildMonthlyFinancialsFromActuals(plan, actualsOpt.get(), m));
             } else {
-                months.add(buildMonthlyFinancialsFromPlan(plan, baseline, month));
+                months.add(buildMonthlyFinancialsFromPlan(plan, baseline, m));
             }
         }
 
-        return new RollingForecastResult(financialYearPlanId, plan.getFiscalYear(), baseline.getId(), months);
+        // Chart always returns 12 months; granularity only drives highlight metadata (ADR-049).
+        return new RollingForecastResult(
+                financialYearPlanId,
+                plan.getFiscalYear(),
+                baseline.getId(),
+                months,
+                selection.granularity().name(),
+                selection.periodLabel(),
+                selection.highlightMonth(),
+                selection.highlightYear(),
+                selection.highlightQuarter());
     }
 
     /**
@@ -497,11 +834,22 @@ public class BudgetingService {
      * </ul>
      */
     public DeltaResult getDelta(UUID financialYearPlanId) {
-        RollingForecastResult rolling = getRollingForecast(financialYearPlanId);
+        return getDelta(financialYearPlanId, PeriodGranularity.ANNUAL, null, null, null);
+    }
+
+    public DeltaResult getDelta(
+            UUID financialYearPlanId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter) {
+        RollingForecastResult rolling = getRollingForecast(
+                financialYearPlanId, granularity, month, year, quarter);
         FinancialYearPlan plan = financialYearPlanRepository.findById(financialYearPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
         ForecastVersion baseline = getActiveBaseline(financialYearPlanId)
                 .orElseThrow(() -> new IllegalStateException("No ACTIVE baseline"));
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
 
         List<MonthlyFinancials> deltaMonths = new ArrayList<>();
         for (MonthlyFinancials rollingMonth : rolling.months()) {
@@ -553,14 +901,34 @@ public class BudgetingService {
             deltaMonths.add(delta);
         }
 
-        return new DeltaResult(financialYearPlanId, plan.getFiscalYear(), baseline.getId(), deltaMonths);
+        List<MonthlyFinancials> inScope = filterMonths(deltaMonths, selection, false);
+        MonthlyFinancials periodTotal = sumMonthlyFinancials(inScope, selection);
+
+        return new DeltaResult(
+                financialYearPlanId,
+                plan.getFiscalYear(),
+                baseline.getId(),
+                deltaMonths,
+                selection.granularity().name(),
+                selection.periodLabel(),
+                periodTotal);
     }
 
     public PlanVsActualResult getPlanVsActual(UUID financialYearPlanId) {
-        return getPlanVsActual(financialYearPlanId, null);
+        return getPlanVsActual(financialYearPlanId, null, PeriodGranularity.ANNUAL, null, null, null);
     }
 
     public PlanVsActualResult getPlanVsActual(UUID financialYearPlanId, UUID forecastTypeId) {
+        return getPlanVsActual(financialYearPlanId, forecastTypeId, PeriodGranularity.ANNUAL, null, null, null);
+    }
+
+    public PlanVsActualResult getPlanVsActual(
+            UUID financialYearPlanId,
+            UUID forecastTypeId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter) {
         FinancialYearPlan plan = financialYearPlanRepository.findById(financialYearPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
 
@@ -576,6 +944,8 @@ public class BudgetingService {
                     .orElseThrow(() -> new IllegalStateException("No ACTIVE baseline"));
         }
 
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
+
         List<MonthlyPlanVsActual> months = new ArrayList<>();
         MoneyTriad q1Rev = zero(), q2Rev = zero(), q3Rev = zero(), q4Rev = zero();
         MoneyTriad q1Sal = zero(), q2Sal = zero(), q3Sal = zero(), q4Sal = zero();
@@ -584,23 +954,29 @@ public class BudgetingService {
         MoneyTriad q1Gp = zero(), q2Gp = zero(), q3Gp = zero(), q4Gp = zero();
         MoneyTriad q1Ebitda = zero(), q2Ebitda = zero(), q3Ebitda = zero(), q4Ebitda = zero();
 
-        for (LocalDate month = plan.getFiscalYearStart();
-             !month.isAfter(plan.getFiscalYearEnd());
-             month = month.plusMonths(1)) {
+        for (LocalDate m = plan.getFiscalYearStart();
+             !m.isAfter(plan.getFiscalYearEnd());
+             m = m.plusMonths(1)) {
 
-            MonthlyFinancials planMonth = buildMonthlyFinancialsFromPlan(plan, baseline, month);
+            MonthlyFinancials planMonth = buildMonthlyFinancialsFromPlan(plan, baseline, m);
             Optional<PeriodActuals> actualsOpt = periodActualsRepository
                     .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(
-                            financialYearPlanId, month.getMonthValue(), month.getYear());
+                            financialYearPlanId, m.getMonthValue(), m.getYear());
 
             MonthlyFinancials actualMonth = actualsOpt.isPresent()
-                    ? buildMonthlyFinancialsFromActuals(plan, actualsOpt.get(), month)
-                    : nullMonth(month);
+                    ? buildMonthlyFinancialsFromActuals(plan, actualsOpt.get(), m)
+                    : nullMonth(m);
 
-            MonthlyPlanVsActual pva = buildMonthlyPlanVsActual(planMonth, actualMonth, actualsOpt.isPresent());
+            String revenueSource = actualsOpt.isPresent()
+                    ? resolveActualRevenue(plan.getId(), m.getMonthValue(), m.getYear(), actualsOpt.get())
+                            .source()
+                    : null;
+
+            MonthlyPlanVsActual pva = buildMonthlyPlanVsActual(
+                    planMonth, actualMonth, actualsOpt.isPresent(), revenueSource);
             months.add(pva);
 
-            int fiscalMonth = getFiscalMonth(month);
+            int fiscalMonth = getFiscalMonth(m);
             if (fiscalMonth <= 3) {
                 q1Rev = add(q1Rev, pva.totalRevenue());
                 q1Sal = add(q1Sal, pva.totalSalaryCost());
@@ -645,17 +1021,95 @@ public class BudgetingService {
                 add(add(add(q1Ebitda, q2Ebitda), q3Ebitda), q4Ebitda)
         );
 
-        return new PlanVsActualResult(financialYearPlanId, plan.getFiscalYear(), baseline.getId(), months, q1, q2, q3, q4, fy);
+        boolean ytdOnly = selection.granularity() == PeriodGranularity.ANNUAL;
+        List<MonthlyPlanVsActual> inScope = filterPvaMonths(months, selection, ytdOnly);
+        PeriodTotals selectedPeriod = aggregatePvaPeriod(selection.periodLabel(), inScope);
+
+        long monthsWithActuals = months.stream().filter(MonthlyPlanVsActual::hasActuals).count();
+        String coverageNote = null;
+        if (selection.granularity() == PeriodGranularity.ANNUAL) {
+            coverageNote = buildActualsCoverageNote(months);
+        }
+
+        return new PlanVsActualResult(
+                financialYearPlanId,
+                plan.getFiscalYear(),
+                baseline.getId(),
+                months,
+                q1, q2, q3, q4, fy,
+                selection.granularity().name(),
+                selection.periodLabel(),
+                selectedPeriod,
+                coverageNote,
+                (int) monthsWithActuals,
+                months.size());
     }
 
     public CostPerEmployeeResult getCostPerEmployee(UUID planId, int month, int year) {
-        return getCostPerEmployee(planId, month, year, null);
+        return getCostPerEmployee(planId, PeriodGranularity.MONTHLY, month, year, null, null);
     }
 
     public CostPerEmployeeResult getCostPerEmployee(UUID planId, int month, int year, UUID forecastTypeId) {
-        financialYearPlanRepository.findById(planId)
-                .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
+        return getCostPerEmployee(planId, PeriodGranularity.MONTHLY, month, year, null, forecastTypeId);
+    }
 
+    public CostPerEmployeeResult getCostPerEmployee(
+            UUID planId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter,
+            UUID forecastTypeId) {
+        FinancialYearPlan plan = financialYearPlanRepository.findById(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
+
+        List<CostPerEmployeeResult> monthly = new ArrayList<>();
+        for (YearMonth ym : selection.months()) {
+            monthly.add(computeCostPerEmployeeForMonth(planId, ym.getMonthValue(), ym.getYear(), forecastTypeId));
+        }
+        if (monthly.isEmpty()) {
+            throw new IllegalArgumentException("No months in selected period");
+        }
+        if (monthly.size() == 1) {
+            CostPerEmployeeResult single = monthly.getFirst();
+            return new CostPerEmployeeResult(
+                    single.financialYearPlanId(),
+                    selection.highlightMonth(),
+                    selection.highlightYear(),
+                    selection.highlightQuarter(),
+                    selection.granularity().name(),
+                    selection.periodLabel(),
+                    single.fromActuals(),
+                    single.billable(),
+                    single.bench(),
+                    single.support(),
+                    single.leadership(),
+                    single.totalCostPerBillableHead());
+        }
+
+        boolean fromActuals = monthly.stream().allMatch(CostPerEmployeeResult::fromActuals);
+        CategoryCost billable = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::billable).toList());
+        CategoryCost bench = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::bench).toList());
+        CategoryCost support = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::support).toList());
+        CategoryCost leadership = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::leadership).toList());
+        return new CostPerEmployeeResult(
+                planId,
+                selection.highlightMonth(),
+                selection.highlightYear(),
+                selection.highlightQuarter(),
+                selection.granularity().name(),
+                selection.periodLabel(),
+                fromActuals,
+                billable,
+                bench,
+                support,
+                leadership,
+                billable.total());
+    }
+
+    private CostPerEmployeeResult computeCostPerEmployeeForMonth(
+            UUID planId, int month, int year, UUID forecastTypeId) {
         Optional<PeriodActuals> actualsOpt = periodActualsRepository
                 .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year);
 
@@ -684,11 +1138,7 @@ public class BudgetingService {
                     nullSafe(actuals.getActualLeadershipSalaries()),
                     ZERO
             );
-            overheadLines = overheadActualsRepository
-                    .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year)
-                    .stream()
-                    .map(o -> new OverheadLineFigures(o.getOverheadLine(), o.getActualAmount()))
-                    .toList();
+            overheadLines = resolveOverheadActualsFromExpenses(month, year);
         } else {
             ForecastVersion baseline;
             if (forecastTypeId != null) {
@@ -713,27 +1163,110 @@ public class BudgetingService {
         Map<String, BigDecimal> overheadMap = overheadLines.stream()
                 .collect(Collectors.toMap(OverheadLineFigures::lineCode, OverheadLineFigures::amount));
 
-        CategoryCost billableCost = computeCategoryLayers("Billable", hc.billableHc(),
-                salary.billable(), overheadMap, hc.totalHc(), hc.billableHc());
-        CategoryCost benchCost = computeCategoryLayers("Bench", hc.benchHc(),
-                salary.bench(), overheadMap, hc.totalHc(), hc.billableHc());
-        CategoryCost supportCost = computeCategoryLayers("Support", hc.supportHc(),
-                salary.support(), overheadMap, hc.totalHc(), 0);
-        CategoryCost leadershipCost = computeCategoryLayers("Leadership", hc.leadershipHc(),
-                salary.seniorMgmt(), overheadMap, hc.totalHc(), 0);
+        BigDecimal billableContrib = fromActuals
+                ? nullSafe(actualsOpt.get().getActualBillableEmployerContributions()) : null;
+        BigDecimal benchContrib = fromActuals
+                ? nullSafe(actualsOpt.get().getActualBenchEmployerContributions()) : null;
+        BigDecimal supportContrib = fromActuals
+                ? nullSafe(actualsOpt.get().getActualSupportEmployerContributions()) : null;
+        BigDecimal leadershipContrib = fromActuals
+                ? nullSafe(actualsOpt.get().getActualLeadershipEmployerContributions()) : null;
 
-        return new CostPerEmployeeResult(planId, month, year, fromActuals,
+        CategoryCost billableCost = computeCategoryLayers("Billable", hc.billableHc(),
+                salary.billable(), billableContrib, fromActuals, overheadMap, hc.totalHc(), hc.billableHc());
+        CategoryCost benchCost = computeCategoryLayers("Bench", hc.benchHc(),
+                salary.bench(), benchContrib, fromActuals, overheadMap, hc.totalHc(), hc.billableHc());
+        CategoryCost supportCost = computeCategoryLayers("Support", hc.supportHc(),
+                salary.support(), supportContrib, fromActuals, overheadMap, hc.totalHc(), 0);
+        CategoryCost leadershipCost = computeCategoryLayers("Leadership", hc.leadershipHc(),
+                salary.seniorMgmt(), leadershipContrib, fromActuals, overheadMap, hc.totalHc(), 0);
+
+        return new CostPerEmployeeResult(planId, month, year, null, PeriodGranularity.MONTHLY.name(),
+                formatMonthLabel(month, year), fromActuals,
                 billableCost, benchCost, supportCost, leadershipCost, billableCost.total());
     }
 
     public BuMetricsResult getBuMetrics(UUID planId, int month, int year) {
-        return getBuMetrics(planId, month, year, null);
+        return getBuMetrics(planId, PeriodGranularity.MONTHLY, month, year, null, null);
     }
 
     public BuMetricsResult getBuMetrics(UUID planId, int month, int year, UUID forecastTypeId) {
-        financialYearPlanRepository.findById(planId)
-                .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
+        return getBuMetrics(planId, PeriodGranularity.MONTHLY, month, year, null, forecastTypeId);
+    }
 
+    public BuMetricsResult getBuMetrics(
+            UUID planId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter,
+            UUID forecastTypeId) {
+        FinancialYearPlan plan = financialYearPlanRepository.findById(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
+
+        boolean ytdOnly = selection.granularity() == PeriodGranularity.ANNUAL;
+        List<YearMonth> monthsInScope = selection.months();
+        if (ytdOnly) {
+            monthsInScope = monthsInScope.stream()
+                    .filter(ym -> periodActualsRepository
+                            .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(
+                                    planId, ym.getMonthValue(), ym.getYear())
+                            .isPresent())
+                    .toList();
+            if (monthsInScope.isEmpty()) {
+                // No actuals yet — fall back to empty rows with zero plan (still return customers).
+                monthsInScope = List.of();
+            }
+        }
+
+        Map<UUID, BuMetricRow> merged = new LinkedHashMap<>();
+        int monthCount = 0;
+        for (YearMonth ym : monthsInScope) {
+            BuMetricsResult monthResult = computeBuMetricsForMonth(
+                    planId, ym.getMonthValue(), ym.getYear(), forecastTypeId);
+            monthCount++;
+            for (BuMetricRow row : monthResult.rows()) {
+                merged.merge(row.customerId(), row, this::sumBuMetricRows);
+            }
+        }
+
+        if (monthCount == 0) {
+            // Annual with no actuals: return customers with zeros from a plan-only April compute if available
+            YearMonth first = YearMonth.from(plan.getFiscalYearStart());
+            BuMetricsResult emptyMonth = computeBuMetricsForMonth(
+                    planId, first.getMonthValue(), first.getYear(), forecastTypeId);
+            List<BuMetricRow> zeroRows = emptyMonth.rows().stream()
+                    .map(r -> new BuMetricRow(
+                            r.customerId(), r.customerCode(), r.customerName(), r.internal(),
+                            ZERO, ZERO, ZERO, null, null, null, ZERO, null, ZERO, null, null))
+                    .toList();
+            return new BuMetricsResult(
+                    planId,
+                    selection.highlightMonth(),
+                    selection.highlightYear(),
+                    selection.highlightQuarter(),
+                    selection.granularity().name(),
+                    selection.periodLabel(),
+                    zeroRows);
+        }
+
+        List<BuMetricRow> rows = merged.values().stream()
+                .map(r -> recalculateBuMargins(r))
+                .toList();
+
+        return new BuMetricsResult(
+                planId,
+                selection.highlightMonth(),
+                selection.highlightYear(),
+                selection.highlightQuarter(),
+                selection.granularity().name(),
+                selection.periodLabel(),
+                rows);
+    }
+
+    private BuMetricsResult computeBuMetricsForMonth(
+            UUID planId, int month, int year, UUID forecastTypeId) {
         ForecastVersion baseline;
         if (forecastTypeId != null) {
             baseline = forecastVersionRepository.findByForecastTypeIdAndStatus(forecastTypeId, ForecastVersionStatus.ACTIVE)
@@ -758,14 +1291,15 @@ public class BudgetingService {
                         BigDecimal::add
                 ));
 
-        List<ClientRevenueActual> actualRevenues = clientRevenueActualRepository
+        Optional<PeriodActuals> actualsOpt = periodActualsRepository
                 .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year);
-        Map<UUID, BigDecimal> actualRevenueMap = actualRevenues.stream()
-                .collect(Collectors.toMap(
-                        ClientRevenueActual::getCustomerId,
-                        ClientRevenueActual::getActualRevenue,
-                        BigDecimal::add
-                ));
+        ResolvedActualRevenue resolved = resolveActualRevenue(planId, month, year, actualsOpt.orElse(null));
+        Map<UUID, BigDecimal> actualRevenueMap = new HashMap<>();
+        for (ClientRevenueFigures fig : resolved.byClient()) {
+            if (fig.customerId() != null) {
+                actualRevenueMap.merge(fig.customerId(), fig.totalRevenue(), BigDecimal::add);
+            }
+        }
 
         HcFigures plannedHc = getPlannedHcForMonth(baseline.getId(), monthDate);
         int totalPlannedBillableHc = plannedHc.billableHc();
@@ -773,9 +1307,6 @@ public class BudgetingService {
                 .filter(c -> !c.internal())
                 .map(c -> plannedRevenueMap.getOrDefault(c.id(), ZERO))
                 .reduce(ZERO, BigDecimal::add);
-
-        Optional<PeriodActuals> actualsOpt = periodActualsRepository
-                .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year);
         final Map<String, PeriodBuActuals> buActualsMap;
         if (actualsOpt.isPresent()) {
             List<PeriodBuActuals> buActuals = periodBuActualsRepository
@@ -817,7 +1348,12 @@ public class BudgetingService {
             }
 
             Integer actualBillableHc = buActual != null ? buActual.getBillableHc() : null;
-            BigDecimal actualSalaryCost = buActual != null ? buActual.getTotalGrossPay() : null;
+            BigDecimal actualSalaryCost = null;
+            if (buActual != null) {
+                actualSalaryCost = buActual.getTotalPayrollCost() != null
+                        ? buActual.getTotalPayrollCost()
+                        : buActual.getTotalGrossPay();
+            }
 
             BigDecimal plannedGrossMargin = clientPlannedRevenue.subtract(plannedSalaryCost);
             BigDecimal actualGrossMargin = actualSalaryCost != null
@@ -858,7 +1394,8 @@ public class BudgetingService {
             ));
         }
 
-        return new BuMetricsResult(planId, month, year, rows);
+        return new BuMetricsResult(planId, month, year, null, PeriodGranularity.MONTHLY.name(),
+                formatMonthLabel(month, year), rows);
     }
 
     @Transactional
@@ -891,6 +1428,13 @@ public class BudgetingService {
         actuals.setActualSupportSalaries(event.supportGrossPay());
         actuals.setActualLeadershipSalaries(event.leadershipGrossPay());
         actuals.setActualManagementSalaries(event.managementGrossPay());
+        actuals.setActualBillableEmployerContributions(event.billableEmployerContributions());
+        actuals.setActualBenchEmployerContributions(event.benchEmployerContributions());
+        actuals.setActualSupportEmployerContributions(event.supportEmployerContributions());
+        actuals.setActualLeadershipEmployerContributions(event.leadershipEmployerContributions());
+        actuals.setActualManagementEmployerContributions(event.managementEmployerContributions());
+        actuals.setActualTotalEmployerContributions(event.totalEmployerContributions());
+        actuals.setActualTotalPayrollCost(event.totalPayrollCost());
         actuals.setPeoplePeriodVersionId(event.periodVersionId());
 
         PeriodActuals saved = periodActualsRepository.saveAndFlush(actuals);
@@ -904,7 +1448,9 @@ public class BudgetingService {
                         .periodActuals(saved)
                         .businessUnit(buActual.businessUnit())
                         .billableHc(buActual.billableHc())
-                        .totalGrossPay(buActual.totalGrossPay())
+                        .totalGrossPay(buActual.totalGrossPay() != null ? buActual.totalGrossPay() : ZERO)
+                        .totalEmployerContributions(buActual.totalEmployerContributions())
+                        .totalPayrollCost(buActual.totalPayrollCost())
                         .build();
                 periodBuActualsRepository.save(buRecord);
             }
@@ -936,48 +1482,32 @@ public class BudgetingService {
                 billableSalary.add(benchSalary).add(supportSalary).add(cofoundersSalary).add(seniorMgmtSalary)
         );
 
-        List<ClientRevenueActual> revenueActuals = clientRevenueActualRepository
-                .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(plan.getId(), month, year);
-
-        List<ClientRevenueFigures> revenueByClient;
-        if (!revenueActuals.isEmpty()) {
-            revenueByClient = revenueActuals.stream()
-                    .map(ra -> {
-                        Optional<CustomerRef> custOpt = customerService.findCustomerRef(ra.getCustomerId());
-                        return new ClientRevenueFigures(
-                                ra.getCustomerId(),
-                                custOpt.map(CustomerRef::customerCode).orElse("UNKNOWN"),
-                                custOpt.map(CustomerRef::customerName).orElse("Unknown Customer"),
-                                ZERO,
-                                ra.getActualRevenue(),
-                                ra.getActualRevenue()
-                        );
-                    })
-                    .toList();
-        } else if (actuals.getActualRevenueManual() != null) {
-            revenueByClient = List.of(new ClientRevenueFigures(
-                    null, "MANUAL", "Manual revenue total", ZERO, actuals.getActualRevenueManual(),
-                    actuals.getActualRevenueManual()
-            ));
-        } else {
-            revenueByClient = List.of();
-        }
-
+        ResolvedActualRevenue resolved = resolveActualRevenue(plan.getId(), month, year, actuals);
+        List<ClientRevenueFigures> revenueByClient = resolved.byClient();
         BigDecimal totalRevenue = revenueByClient.stream()
                 .map(ClientRevenueFigures::totalRevenue)
                 .reduce(ZERO, BigDecimal::add);
 
-        List<OverheadActuals> overheadActuals = overheadActualsRepository
-                .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(plan.getId(), month, year);
-        List<OverheadLineFigures> overhead = overheadActuals.stream()
-                .map(oa -> new OverheadLineFigures(oa.getOverheadLine(), oa.getActualAmount()))
-                .toList();
+        List<OverheadLineFigures> overhead = resolveOverheadActualsFromExpenses(month, year);
 
         BigDecimal totalOverhead = overhead.stream()
                 .map(OverheadLineFigures::amount)
                 .reduce(ZERO, BigDecimal::add);
 
         return computeFinancials(month, year, true, hc, salary, revenueByClient, totalRevenue, overhead, totalOverhead);
+    }
+
+    /**
+     * Overhead actuals come from the Expenses module (ADR-050). Empty/null → zero (no manual override).
+     */
+    private List<OverheadLineFigures> resolveOverheadActualsFromExpenses(int month, int year) {
+        Map<String, BigDecimal> fromExpenses = expenseService.getMonthlyExpenseActuals(month, year);
+        if (fromExpenses == null || fromExpenses.isEmpty()) {
+            return List.of();
+        }
+        return fromExpenses.entrySet().stream()
+                .map(e -> new OverheadLineFigures(e.getKey(), nullSafe(e.getValue())))
+                .toList();
     }
 
     private MonthlyFinancials buildMonthlyFinancialsFromPlan(FinancialYearPlan plan,
@@ -1100,7 +1630,7 @@ public class BudgetingService {
     }
 
     private MonthlyPlanVsActual buildMonthlyPlanVsActual(MonthlyFinancials plan, MonthlyFinancials actual,
-                                                         boolean hasActuals) {
+                                                         boolean hasActuals, String revenueSource) {
         TriadHc hc = new TriadHc(plan.hc(), actual.hc(),
                 new HcFigures(
                         actual.hc().billableHc() - plan.hc().billableHc(),
@@ -1137,19 +1667,105 @@ public class BudgetingService {
         MoneyTriad grossProfit = triad(plan.grossProfit(), actual.grossProfit());
         MoneyTriad ebitda = triad(plan.ebitda(), actual.ebitda());
 
-        return new MonthlyPlanVsActual(plan.month(), plan.year(), hasActuals, hc, salary, revenueByClient,
+        return new MonthlyPlanVsActual(plan.month(), plan.year(), hasActuals, revenueSource,
+                hc, salary, revenueByClient,
                 totalRevenue, overheadTriad, totalOverhead, totalSalaryCost, statutoryBenefits,
                 totalCogs, grossProfit, ebitda);
     }
 
+    /**
+     * Prefer Revenue module net figures when an upload exists for the period; otherwise fall back
+     * to {@code period_actuals.actual_revenue_manual} / per-client manual rows (ADR-043).
+     */
+    private ResolvedActualRevenue resolveActualRevenue(
+            UUID planId, int month, int year, PeriodActuals actualsOrNull) {
+        List<MonthlyRevenueSummary> fromRevenue =
+                revenueService.getAllClientsMonthlyRevenue(month, year);
+        if (fromRevenue != null) {
+            List<ClientRevenueFigures> byClient = fromRevenue.stream()
+                    .map(summary -> {
+                        var customer = customerService.resolveBuCustomer(summary.customerId());
+                        BigDecimal amount = preferredNetAmount(summary);
+                        return new ClientRevenueFigures(
+                                customer.map(CustomerService.BuCustomerRef::id).orElse(null),
+                                summary.customerId(),
+                                customer.map(CustomerService.BuCustomerRef::customerName)
+                                        .orElse(summary.customerId()),
+                                ZERO,
+                                amount,
+                                amount);
+                    })
+                    .toList();
+            return new ResolvedActualRevenue(byClient, REVENUE_SOURCE_MODULE);
+        }
+
+        List<ClientRevenueActual> revenueActuals = clientRevenueActualRepository
+                .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year);
+        if (!revenueActuals.isEmpty()) {
+            List<ClientRevenueFigures> byClient = revenueActuals.stream()
+                    .map(ra -> {
+                        Optional<CustomerRef> custOpt = customerService.findCustomerRef(ra.getCustomerId());
+                        return new ClientRevenueFigures(
+                                ra.getCustomerId(),
+                                custOpt.map(CustomerRef::customerCode).orElse("UNKNOWN"),
+                                custOpt.map(CustomerRef::customerName).orElse("Unknown Customer"),
+                                ZERO,
+                                ra.getActualRevenue(),
+                                ra.getActualRevenue());
+                    })
+                    .toList();
+            return new ResolvedActualRevenue(byClient, REVENUE_SOURCE_MANUAL);
+        }
+
+        if (actualsOrNull != null && actualsOrNull.getActualRevenueManual() != null) {
+            return new ResolvedActualRevenue(
+                    List.of(new ClientRevenueFigures(
+                            null,
+                            "MANUAL",
+                            "Manual Override",
+                            ZERO,
+                            actualsOrNull.getActualRevenueManual(),
+                            actualsOrNull.getActualRevenueManual())),
+                    REVENUE_SOURCE_MANUAL);
+        }
+
+        return new ResolvedActualRevenue(List.of(), null);
+    }
+
+    private static BigDecimal preferredNetAmount(MonthlyRevenueSummary summary) {
+        // Budgeting plan figures are INR — prefer converted net when present.
+        if (summary.netRevenueInr() != null) {
+            return summary.netRevenueInr();
+        }
+        return nullSafeStatic(summary.netRevenue());
+    }
+
+    private static BigDecimal nullSafeStatic(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private record ResolvedActualRevenue(List<ClientRevenueFigures> byClient, String source) {}
+
+
     private CategoryCost computeCategoryLayers(String category, int headcount, BigDecimal salary,
+                                               BigDecimal actualEmployerContributions, boolean fromActuals,
                                                Map<String, BigDecimal> overheadMap, int totalHc, int billableHc) {
         if (headcount == 0) {
-            return new CategoryCost(category, 0, ZERO, ZERO, ZERO, ZERO);
+            return new CategoryCost(category, 0, ZERO, ZERO, fromActuals ? "ACTUAL" : "ESTIMATE_13PCT",
+                    ZERO, ZERO, ZERO, ZERO);
         }
 
         BigDecimal avgSalary = divide(salary, new BigDecimal(Math.max(1, headcount)));
-        BigDecimal layer1 = avgSalary.add(avgSalary.multiply(STATUTORY_RATE));
+        BigDecimal employerPerHead;
+        String contribSource;
+        if (fromActuals) {
+            employerPerHead = divide(nullSafe(actualEmployerContributions), new BigDecimal(Math.max(1, headcount)));
+            contribSource = "ACTUAL";
+        } else {
+            employerPerHead = avgSalary.multiply(STATUTORY_RATE).setScale(2, RoundingMode.HALF_UP);
+            contribSource = "ESTIMATE_13PCT";
+        }
+        BigDecimal layer1 = avgSalary.add(employerPerHead);
 
         BigDecimal directOverheadTotal = DIRECT_OVERHEAD_LINES.stream()
                 .map(line -> overheadMap.getOrDefault(line, ZERO))
@@ -1171,7 +1787,8 @@ public class BudgetingService {
         }
 
         BigDecimal total = layer1.add(layer2).add(layer3);
-        return new CategoryCost(category, headcount, layer1, layer2, layer3, total);
+        return new CategoryCost(category, headcount, avgSalary, employerPerHead, contribSource,
+                layer1, layer2, layer3, total);
     }
 
     private List<ClientRevenueFigures> computeDeltaRevenueByClient(
@@ -1284,6 +1901,363 @@ public class BudgetingService {
                 .toList();
     }
 
+    public Optional<YearMonth> findLatestActualsMonth(UUID planId) {
+        List<PeriodActuals> actuals = periodActualsRepository.findByFinancialYearPlanId(planId);
+        return actuals.stream()
+                .map(a -> YearMonth.of(a.getActualsYear(), a.getActualsMonth()))
+                .max(Comparator
+                        .comparingInt((YearMonth ym) -> fiscalSortKey(ym.getMonthValue(), ym.getYear()))
+                        .thenComparing(ym -> ym));
+    }
+
+    private record PeriodSelection(
+            PeriodGranularity granularity,
+            List<YearMonth> months,
+            String periodLabel,
+            Integer highlightMonth,
+            Integer highlightYear,
+            Integer highlightQuarter
+    ) {}
+
+    private PeriodSelection resolvePeriodSelection(
+            FinancialYearPlan plan,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter) {
+        PeriodGranularity g = granularity != null ? granularity : PeriodGranularity.ANNUAL;
+        return switch (g) {
+            case MONTHLY -> {
+                if (month == null || year == null) {
+                    throw new IllegalArgumentException("month and year are required for MONTHLY granularity");
+                }
+                if (month < 1 || month > 12) {
+                    throw new IllegalArgumentException("month must be between 1 and 12");
+                }
+                YearMonth ym = YearMonth.of(year, month);
+                ensureInFiscalYear(plan, ym);
+                yield new PeriodSelection(
+                        g,
+                        List.of(ym),
+                        formatMonthLabel(month, year),
+                        month,
+                        year,
+                        null);
+            }
+            case QUARTERLY -> {
+                if (quarter == null || year == null) {
+                    throw new IllegalArgumentException("quarter and year are required for QUARTERLY granularity");
+                }
+                if (quarter < 1 || quarter > 4) {
+                    throw new IllegalArgumentException("quarter must be between 1 and 4");
+                }
+                List<YearMonth> qMonths = quarterMonths(quarter, year);
+                for (YearMonth ym : qMonths) {
+                    ensureInFiscalYear(plan, ym);
+                }
+                yield new PeriodSelection(
+                        g,
+                        qMonths,
+                        "Q" + quarter + " " + plan.getFiscalYear(),
+                        qMonths.getFirst().getMonthValue(),
+                        qMonths.getFirst().getYear(),
+                        quarter);
+            }
+            case ANNUAL -> {
+                List<YearMonth> all = new ArrayList<>();
+                for (LocalDate d = plan.getFiscalYearStart();
+                     !d.isAfter(plan.getFiscalYearEnd());
+                     d = d.plusMonths(1)) {
+                    all.add(YearMonth.from(d));
+                }
+                yield new PeriodSelection(
+                        g,
+                        List.copyOf(all),
+                        plan.getFiscalYear(),
+                        null,
+                        null,
+                        null);
+            }
+        };
+    }
+
+    private static List<YearMonth> quarterMonths(int quarter, int firstMonthYear) {
+        // year = calendar year of the quarter's first month (ADR-049)
+        return switch (quarter) {
+            case 1 -> List.of(
+                    YearMonth.of(firstMonthYear, 4),
+                    YearMonth.of(firstMonthYear, 5),
+                    YearMonth.of(firstMonthYear, 6));
+            case 2 -> List.of(
+                    YearMonth.of(firstMonthYear, 7),
+                    YearMonth.of(firstMonthYear, 8),
+                    YearMonth.of(firstMonthYear, 9));
+            case 3 -> List.of(
+                    YearMonth.of(firstMonthYear, 10),
+                    YearMonth.of(firstMonthYear, 11),
+                    YearMonth.of(firstMonthYear, 12));
+            case 4 -> List.of(
+                    YearMonth.of(firstMonthYear, 1),
+                    YearMonth.of(firstMonthYear, 2),
+                    YearMonth.of(firstMonthYear, 3));
+            default -> throw new IllegalArgumentException("quarter must be between 1 and 4");
+        };
+    }
+
+    private void ensureInFiscalYear(FinancialYearPlan plan, YearMonth ym) {
+        LocalDate d = ym.atDay(1);
+        if (d.isBefore(plan.getFiscalYearStart().withDayOfMonth(1))
+                || d.isAfter(plan.getFiscalYearEnd().withDayOfMonth(1))) {
+            throw new IllegalArgumentException(
+                    "Period " + ym + " is outside fiscal year " + plan.getFiscalYear());
+        }
+    }
+
+    private static String formatMonthLabel(int month, int year) {
+        return Month.of(month).getDisplayName(TextStyle.FULL, Locale.ENGLISH) + " " + year;
+    }
+
+    private static int fiscalSortKey(int month, int year) {
+        // Apr…Mar ordering within an Indian FY
+        int fiscalMonth = month >= 4 ? month - 3 : month + 9;
+        int fiscalYearStart = month >= 4 ? year : year - 1;
+        return fiscalYearStart * 12 + fiscalMonth;
+    }
+
+    private List<MonthlyFinancials> filterMonths(
+            List<MonthlyFinancials> months, PeriodSelection selection, boolean actualsOnly) {
+        Set<YearMonth> scope = new HashSet<>(selection.months());
+        return months.stream()
+                .filter(m -> scope.contains(YearMonth.of(m.year(), m.month())))
+                .filter(m -> !actualsOnly || m.fromActuals())
+                .toList();
+    }
+
+    private List<MonthlyPlanVsActual> filterPvaMonths(
+            List<MonthlyPlanVsActual> months, PeriodSelection selection, boolean actualsOnly) {
+        Set<YearMonth> scope = new HashSet<>(selection.months());
+        return months.stream()
+                .filter(m -> scope.contains(YearMonth.of(m.year(), m.month())))
+                .filter(m -> !actualsOnly || m.hasActuals())
+                .toList();
+    }
+
+    private PeriodTotals aggregatePvaPeriod(String label, List<MonthlyPlanVsActual> months) {
+        MoneyTriad rev = zero(), sal = zero(), ovh = zero(), cogs = zero(), gp = zero(), ebitda = zero();
+        for (MonthlyPlanVsActual m : months) {
+            rev = add(rev, m.totalRevenue());
+            sal = add(sal, m.totalSalaryCost());
+            ovh = add(ovh, m.totalOverhead());
+            cogs = add(cogs, m.totalCogs());
+            gp = add(gp, m.grossProfit());
+            ebitda = add(ebitda, m.ebitda());
+        }
+        return new PeriodTotals(label, rev, sal, ovh, cogs, gp, ebitda);
+    }
+
+    private String buildActualsCoverageNote(List<MonthlyPlanVsActual> months) {
+        List<MonthlyPlanVsActual> withActuals = months.stream()
+                .filter(MonthlyPlanVsActual::hasActuals)
+                .toList();
+        int n = withActuals.size();
+        if (n == 0) {
+            return "Actuals: none (0 of 12 months)";
+        }
+        MonthlyPlanVsActual first = withActuals.getFirst();
+        MonthlyPlanVsActual last = withActuals.getLast();
+        String start = Month.of(first.month()).getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
+                + " " + first.year();
+        String end = Month.of(last.month()).getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
+                + " " + last.year();
+        String range = start.equals(end) ? start : start + "–" + end;
+        return "Actuals: " + range + " (" + n + " of 12 months)";
+    }
+
+    private MonthlyFinancials sumMonthlyFinancials(List<MonthlyFinancials> months, PeriodSelection selection) {
+        if (months.isEmpty()) {
+            YearMonth anchor = selection.months().isEmpty()
+                    ? YearMonth.now()
+                    : selection.months().getFirst();
+            return nullMonth(anchor.atDay(1));
+        }
+        MonthlyFinancials first = months.getFirst();
+        HcFigures hc = new HcFigures(0, 0, 0, 0, 0, 0);
+        SalaryFigures salary = new SalaryFigures(ZERO, ZERO, ZERO, ZERO, ZERO, ZERO);
+        Map<String, ClientRevenueFigures> revenueByClient = new LinkedHashMap<>();
+        Map<String, BigDecimal> overhead = new LinkedHashMap<>();
+        BigDecimal totalRevenue = ZERO;
+        BigDecimal totalOverhead = ZERO;
+        BigDecimal totalSalaryCost = ZERO;
+        BigDecimal statutoryBenefits = ZERO;
+        BigDecimal variablePay = ZERO;
+        BigDecimal totalCogs = ZERO;
+        BigDecimal grossProfit = ZERO;
+        BigDecimal totalOpex = ZERO;
+        BigDecimal ebitda = ZERO;
+        boolean anyActuals = false;
+
+        for (MonthlyFinancials m : months) {
+            anyActuals = anyActuals || m.fromActuals();
+            hc = addHc(hc, m.hc());
+            salary = addSalary(salary, m.salary());
+            for (ClientRevenueFigures c : m.revenueByClient()) {
+                String key = clientRevenueKey(c);
+                revenueByClient.merge(key, c, (a, b) -> new ClientRevenueFigures(
+                        a.customerId(), a.customerCode(), a.customerName(),
+                        a.tmRevenue().add(b.tmRevenue()),
+                        a.fixedBidRevenue().add(b.fixedBidRevenue()),
+                        a.totalRevenue().add(b.totalRevenue())));
+            }
+            for (OverheadLineFigures o : m.overhead()) {
+                overhead.merge(o.lineCode(), o.amount(), BigDecimal::add);
+            }
+            totalRevenue = totalRevenue.add(m.totalRevenue());
+            totalOverhead = totalOverhead.add(m.totalOverhead());
+            totalSalaryCost = totalSalaryCost.add(m.totalSalaryCost());
+            statutoryBenefits = statutoryBenefits.add(m.statutoryBenefits());
+            variablePay = variablePay.add(m.variablePay());
+            totalCogs = totalCogs.add(m.totalCogs());
+            grossProfit = grossProfit.add(m.grossProfit());
+            totalOpex = totalOpex.add(m.totalOpex());
+            ebitda = ebitda.add(m.ebitda());
+        }
+
+        return new MonthlyFinancials(
+                first.month(),
+                first.year(),
+                anyActuals,
+                hc,
+                salary,
+                List.copyOf(revenueByClient.values()),
+                totalRevenue,
+                overhead.entrySet().stream()
+                        .map(e -> new OverheadLineFigures(e.getKey(), e.getValue()))
+                        .toList(),
+                totalOverhead,
+                totalSalaryCost,
+                statutoryBenefits,
+                variablePay,
+                totalCogs,
+                grossProfit,
+                totalOpex,
+                ebitda);
+    }
+
+    private HcFigures addHc(HcFigures a, HcFigures b) {
+        return new HcFigures(
+                a.billableHc() + b.billableHc(),
+                a.benchHc() + b.benchHc(),
+                a.supportHc() + b.supportHc(),
+                a.leadershipHc() + b.leadershipHc(),
+                a.managementHc() + b.managementHc(),
+                a.totalHc() + b.totalHc());
+    }
+
+    private SalaryFigures addSalary(SalaryFigures a, SalaryFigures b) {
+        return new SalaryFigures(
+                a.billable().add(b.billable()),
+                a.bench().add(b.bench()),
+                a.support().add(b.support()),
+                a.cofounders().add(b.cofounders()),
+                a.seniorMgmt().add(b.seniorMgmt()),
+                a.total().add(b.total()));
+    }
+
+    private CategoryCost averageCategoryCosts(List<CategoryCost> costs) {
+        if (costs.isEmpty()) {
+            return new CategoryCost("?", 0, ZERO, ZERO, "ESTIMATE_13PCT", ZERO, ZERO, ZERO, ZERO);
+        }
+        int n = costs.size();
+        BigDecimal nBd = new BigDecimal(n);
+        CategoryCost first = costs.getFirst();
+        int avgHc = (int) Math.round(costs.stream().mapToInt(CategoryCost::headcount).average().orElse(0));
+        return new CategoryCost(
+                first.category(),
+                avgHc,
+                avgBd(costs.stream().map(CategoryCost::grossPayPerHead).toList(), nBd),
+                avgBd(costs.stream().map(CategoryCost::employerContributionsPerHead).toList(), nBd),
+                costs.stream().allMatch(c -> "ACTUAL".equals(c.employerContributionsSource()))
+                        ? "ACTUAL" : first.employerContributionsSource(),
+                avgBd(costs.stream().map(CategoryCost::layer1).toList(), nBd),
+                avgBd(costs.stream().map(CategoryCost::layer2).toList(), nBd),
+                avgBd(costs.stream().map(CategoryCost::layer3).toList(), nBd),
+                avgBd(costs.stream().map(CategoryCost::total).toList(), nBd));
+    }
+
+    private BigDecimal avgBd(List<BigDecimal> values, BigDecimal n) {
+        return values.stream().reduce(ZERO, BigDecimal::add).divide(n, 2, RoundingMode.HALF_UP);
+    }
+
+    private BuMetricRow sumBuMetricRows(BuMetricRow a, BuMetricRow b) {
+        BigDecimal actualRevenue = sumNullable(a.actualRevenue(), b.actualRevenue());
+        BigDecimal actualSalary = sumNullable(a.actualSalaryCost(), b.actualSalaryCost());
+        Integer plannedHc = sumNullableInt(a.plannedBillableHc(), b.plannedBillableHc());
+        Integer actualHc = sumNullableInt(a.actualBillableHc(), b.actualBillableHc());
+        return new BuMetricRow(
+                a.customerId(),
+                a.customerCode(),
+                a.customerName(),
+                a.internal(),
+                a.plannedRevenue().add(b.plannedRevenue()),
+                actualRevenue,
+                a.plannedSalaryCost().add(b.plannedSalaryCost()),
+                actualSalary,
+                plannedHc,
+                actualHc,
+                ZERO, // recalculated
+                null,
+                ZERO,
+                null,
+                null);
+    }
+
+    private BuMetricRow recalculateBuMargins(BuMetricRow r) {
+        BigDecimal plannedGm = r.plannedRevenue().subtract(r.plannedSalaryCost());
+        BigDecimal actualGm = r.actualSalaryCost() != null
+                ? nullSafe(r.actualRevenue()).subtract(r.actualSalaryCost())
+                : null;
+        BigDecimal plannedGmPct = r.plannedRevenue().compareTo(ZERO) > 0
+                ? plannedGm.multiply(new BigDecimal("100"))
+                .divide(r.plannedRevenue(), 2, RoundingMode.HALF_UP)
+                : ZERO;
+        BigDecimal actualGmPct = actualGm != null && nullSafe(r.actualRevenue()).compareTo(ZERO) > 0
+                ? actualGm.multiply(new BigDecimal("100"))
+                .divide(nullSafe(r.actualRevenue()), 2, RoundingMode.HALF_UP)
+                : null;
+        int hcForAvg = r.actualBillableHc() != null && r.actualBillableHc() > 0
+                ? r.actualBillableHc()
+                : 0;
+        BigDecimal avgSalary = r.actualSalaryCost() != null && hcForAvg > 0
+                ? divide(r.actualSalaryCost(), new BigDecimal(hcForAvg))
+                : null;
+        return new BuMetricRow(
+                r.customerId(),
+                r.customerCode(),
+                r.customerName(),
+                r.internal(),
+                r.plannedRevenue(),
+                r.actualRevenue(),
+                r.plannedSalaryCost(),
+                r.actualSalaryCost(),
+                r.plannedBillableHc(),
+                r.actualBillableHc(),
+                plannedGm,
+                actualGm,
+                plannedGmPct,
+                actualGmPct,
+                avgSalary);
+    }
+
+    private BigDecimal sumNullable(BigDecimal a, BigDecimal b) {
+        if (a == null && b == null) return null;
+        return nullSafe(a).add(nullSafe(b));
+    }
+
+    private Integer sumNullableInt(Integer a, Integer b) {
+        if (a == null && b == null) return null;
+        return (a != null ? a : 0) + (b != null ? b : 0);
+    }
+
     private int getFiscalMonth(LocalDate date) {
         int month = date.getMonthValue();
         return month >= 4 ? month - 3 : month + 9;
@@ -1368,4 +2342,20 @@ public class BudgetingService {
             BigDecimal plannedFixedBidRevenue,
             BigDecimal plannedTotal
     ) {}
+
+    // ── Backup / restore (ADR-044 Tier 2) ────────────────────────────────────
+
+    public List<BackupSheet> exportBackupSheets() {
+        return budgetingModuleBackup.exportBackupSheets();
+    }
+
+    @Transactional
+    public void wipeForRestore() {
+        budgetingModuleBackup.wipeBudgetingData();
+    }
+
+    @Transactional
+    public Map<String, Integer> restoreBackupSheets(Map<String, List<String[]>> rowsByFile) {
+        return budgetingModuleBackup.restoreBackupSheets(rowsByFile);
+    }
 }

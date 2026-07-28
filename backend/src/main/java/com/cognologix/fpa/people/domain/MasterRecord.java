@@ -3,6 +3,8 @@ package com.cognologix.fpa.people.domain;
 import com.cognologix.fpa.people.EmployeeRegistry;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -53,6 +55,16 @@ public class MasterRecord {
     @Column(name = "gross_pay", precision = 12, scale = 2)
     private BigDecimal grossPay;
 
+    /** Copied from payroll_snapshot.total_employer_contributions on master build (ADR-045). */
+    @Column(name = "total_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal totalEmployerContributions;
+
+    /** DB-generated: COALESCE(gross_pay,0) + COALESCE(total_employer_contributions,0). */
+    @Generated(event = {EventType.INSERT, EventType.UPDATE})
+    @Column(name = "total_payroll_cost", precision = 12, scale = 2,
+            insertable = false, updatable = false)
+    private BigDecimal totalPayrollCost;
+
     @Column(name = "is_delivery_pu", nullable = false)
     @Builder.Default
     private boolean deliveryPu = false;
@@ -98,5 +110,15 @@ public class MasterRecord {
     @PrePersist
     private void prePersist() {
         builtAt = Instant.now();
+    }
+
+    /** Prefer DB-generated total; otherwise gross + employer contributions. */
+    public BigDecimal resolvedTotalPayrollCost() {
+        if (totalPayrollCost != null) {
+            return totalPayrollCost;
+        }
+        BigDecimal gross = grossPay != null ? grossPay : BigDecimal.ZERO;
+        BigDecimal contrib = totalEmployerContributions != null ? totalEmployerContributions : BigDecimal.ZERO;
+        return gross.add(contrib);
     }
 }

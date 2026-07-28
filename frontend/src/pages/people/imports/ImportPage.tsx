@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
+  Empty,
   Input,
   Modal,
   Select,
   Space,
   Steps,
+  Tag,
   Typography,
   Upload,
   notification,
 } from 'antd';
-import { InboxOutlined, SettingOutlined } from '@ant-design/icons';
+import { CalendarOutlined, InboxOutlined, SettingOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload/interface';
 import axios from 'axios';
 import { HEADING_FONT } from '@/theme/antdTheme';
@@ -30,9 +32,14 @@ import ColumnMappingEditor, {
   mappingsToLines,
 } from '../components/ColumnMappingEditor';
 import TemplateDrawer from '../components/TemplateDrawer';
-import { IMPORT_TYPE_LABELS, REQUIRED_ATTRIBUTES_BY_IMPORT_TYPE, isPayrollImportType, payrollSnapshotDetailPath, payrollTemplateLabel, snapshotDetailPath, SYSTEM_ATTRIBUTE_LABELS } from '../constants';
+import { IMPORT_TYPE_LABELS, PERIOD_STATUS_LABELS, REQUIRED_ATTRIBUTES_BY_IMPORT_TYPE, isPayrollImportType, payrollSnapshotDetailPath, payrollTemplateLabel, snapshotDetailPath, SYSTEM_ATTRIBUTE_LABELS } from '../constants';
 import type { ImportType, MappingTemplate, SnapshotUploadResult } from '../types';
-import { buildImportableVersionOptions, EXPAND_PERIOD_AFTER_UPLOAD_KEY } from '../utils';
+import {
+  buildImportableVersionOptions,
+  EXPAND_PERIOD_AFTER_UPLOAD_KEY,
+  formatVersionLabel,
+} from '../utils';
+import { useIsAdmin } from '@/components/AdminGate';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -42,6 +49,7 @@ interface Props {
 }
 
 export default function ImportPage({ importType }: Props) {
+  const isAdmin = useIsAdmin();
   const [step, setStep] = useState(0);
   const [periodOptions, setPeriodOptions] = useState<
     ReturnType<typeof buildImportableVersionOptions>
@@ -67,6 +75,19 @@ export default function ImportPage({ importType }: Props) {
   const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null);
 
   const isFnfImport = importType === 'ZOHO_PAYROLL_FNF';
+
+  const selectedPeriod = useMemo(
+    () => periodOptions.find((o) => o.periodVersionId === periodVersionId) ?? null,
+    [periodOptions, periodVersionId],
+  );
+
+  const selectedPeriodLabel = selectedPeriod
+    ? formatVersionLabel(
+        selectedPeriod.periodMonth,
+        selectedPeriod.periodYear,
+        selectedPeriod.versionNumber,
+      )
+    : null;
 
   const loadPeriods = useCallback(async () => {
     try {
@@ -307,6 +328,14 @@ export default function ImportPage({ importType }: Props) {
     setPayrollTemplates([]);
   };
 
+  if (!isAdmin) {
+    return (
+      <div style={{ padding: 48 }}>
+        <Empty description="Admin access required" />
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 24 }}>
       <Space
@@ -330,7 +359,7 @@ export default function ImportPage({ importType }: Props) {
 
       <Steps
         current={step}
-        style={{ marginBottom: 32, maxWidth: 720 }}
+        style={{ marginBottom: 24, maxWidth: 720 }}
         items={[
           { title: 'Upload file' },
           { title: 'Column mapping' },
@@ -338,6 +367,43 @@ export default function ImportPage({ importType }: Props) {
           { title: 'Result' },
         ]}
       />
+
+      {step >= 1 && selectedPeriodLabel && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<CalendarOutlined />}
+          style={{
+            marginBottom: 24,
+            borderWidth: 2,
+            background: '#fffbe6',
+          }}
+          message={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space size="small" wrap>
+                <Text strong>Reporting period</Text>
+                <Tag color="gold" style={{ fontSize: 14, padding: '2px 10px', margin: 0 }}>
+                  {selectedPeriodLabel}
+                </Tag>
+                {selectedPeriod && (
+                  <Text type="secondary">
+                    ({PERIOD_STATUS_LABELS[selectedPeriod.status] ?? selectedPeriod.status})
+                  </Text>
+                )}
+              </Space>
+              {file?.name && (
+                <Space size="small" wrap>
+                  <Text strong>File</Text>
+                  <Tag style={{ fontSize: 13, padding: '2px 10px', margin: 0 }}>
+                    {file.name}
+                  </Tag>
+                </Space>
+              )}
+            </Space>
+          }
+          description="All rows in this file will be imported against this period. Go back to change the period or file before uploading."
+        />
+      )}
 
       {step === 0 && (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -433,7 +499,11 @@ export default function ImportPage({ importType }: Props) {
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Alert
             type="info"
-            message={`Ready to import ${rowCount} rows with ${Object.values(mappings).filter(Boolean).length} mapped columns.`}
+            message={
+              selectedPeriodLabel
+                ? `Ready to import ${rowCount} rows from ${file?.name ?? 'selected file'} with ${Object.values(mappings).filter(Boolean).length} mapped columns into ${selectedPeriodLabel}.`
+                : `Ready to import ${rowCount} rows with ${Object.values(mappings).filter(Boolean).length} mapped columns.`
+            }
           />
           {warnings.unmapped.length > 0 && (
             <Alert
@@ -552,7 +622,34 @@ export default function ImportPage({ importType }: Props) {
         cancelText="Go back"
         confirmLoading={uploading}
       >
-        Some columns are unmapped or required fields are not mapped. Do you want to continue anyway?
+        <Space direction="vertical" size="middle">
+          {(selectedPeriodLabel || file?.name) && (
+            <Alert
+              type="warning"
+              showIcon
+              icon={<CalendarOutlined />}
+              message={
+                <Space direction="vertical" size={4}>
+                  {selectedPeriodLabel && (
+                    <Text>
+                      You are uploading data for period{' '}
+                      <Text strong>{selectedPeriodLabel}</Text>
+                    </Text>
+                  )}
+                  {file?.name && (
+                    <Text>
+                      File: <Text strong>{file.name}</Text>
+                    </Text>
+                  )}
+                </Space>
+              }
+            />
+          )}
+          <Text>
+            Some columns are unmapped or required fields are not mapped. Do you
+            want to continue anyway?
+          </Text>
+        </Space>
       </Modal>
 
       <TemplateDrawer

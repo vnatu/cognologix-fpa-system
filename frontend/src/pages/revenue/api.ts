@@ -9,6 +9,27 @@ import type {
   UploadSummary,
 } from './types';
 
+async function downloadBlob(url: string, filename: string, params?: Record<string, unknown>): Promise<void> {
+  const response = await axios.get<Blob>(url, { responseType: 'blob', params });
+  const objectUrl = window.URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+export type InvoiceFilterParams = {
+  customerId?: string;
+  periodMonth?: number;
+  periodYear?: number;
+  status?: string;
+};
+
+export type InvoiceExportParams = InvoiceFilterParams;
+
 export const parseHeaders = (
   importType: RevenueImportType,
   file: File,
@@ -95,18 +116,22 @@ export const fetchUploadsForPeriod = (
     )
     .then((r) => r.data);
 
-export const fetchInvoices = (params: {
-  customerId?: string;
-  periodMonth?: number;
-  periodYear?: number;
-  status?: string;
-  importType?: RevenueImportType;
-  page?: number;
-  size?: number;
-}): Promise<InvoiceListPage> =>
+export const fetchInvoices = (
+  params: InvoiceFilterParams & {
+    importType?: RevenueImportType;
+    page?: number;
+    size?: number;
+  },
+): Promise<InvoiceListPage> =>
   axios
     .get<InvoiceListPage>('/api/revenue/invoices', { params })
     .then((r) => r.data);
+
+export const exportInvoices = (params: InvoiceExportParams): Promise<void> =>
+  downloadBlob('/api/revenue/invoices/export', 'invoices_export.xlsx', params);
+
+export const exportCreditNotes = (params: InvoiceExportParams): Promise<void> =>
+  downloadBlob('/api/revenue/credit-notes/export', 'credit_notes_export.xlsx', params);
 
 export const fetchDashboard = (
   periodMonth: number,

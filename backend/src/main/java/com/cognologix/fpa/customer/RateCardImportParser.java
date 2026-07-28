@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
+import com.cognologix.fpa.general.ExcelParserUtils;
 
 /**
  * Parses rate card Excel imports (spec §6, ADR-015).
@@ -58,14 +59,14 @@ public class RateCardImportParser {
                 }
                 rows.add(new ParsedRateCardImportRow(
                         r + 1,
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_CUSTOMER_CODE))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_CUSTOMER_CODE))),
                         optionalCell(row, columnIndex, COL_PROJECT_CODE),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_RATE_CARD_NAME))),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_RATE_CARD_TYPE))),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_CURRENCY))),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_EFFECTIVE_FROM))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_RATE_CARD_NAME))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_RATE_CARD_TYPE))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_CURRENCY))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_EFFECTIVE_FROM))),
                         optionalCell(row, columnIndex, COL_JOB_LEVEL),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_RATE_AMOUNT)))));
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_RATE_AMOUNT)))));
             }
             return rows;
         } catch (CustomerBadRequestException e) {
@@ -118,7 +119,7 @@ public class RateCardImportParser {
             if (header == null || header.isBlank()) {
                 continue;
             }
-            columnIndex.put(normalizeHeader(header), cell.getColumnIndex());
+            columnIndex.put(ExcelParserUtils.normalizeHeader(header), cell.getColumnIndex());
         }
         return columnIndex;
     }
@@ -126,7 +127,7 @@ public class RateCardImportParser {
     private static void validateRequiredHeaders(Map<String, Integer> columnIndex) {
         List<String> missing = new ArrayList<>();
         for (String header : REQUIRED_HEADERS) {
-            if (!columnIndex.containsKey(normalizeHeader(header))) {
+            if (!columnIndex.containsKey(ExcelParserUtils.normalizeHeader(header))) {
                 missing.add(header);
             }
         }
@@ -135,9 +136,6 @@ public class RateCardImportParser {
         }
     }
 
-    private static String normalizeHeader(String header) {
-        return header.trim().toLowerCase(Locale.ROOT);
-    }
 
     private static String cellValue(Row row, Integer columnIndex) {
         if (columnIndex == null) {
@@ -147,7 +145,7 @@ public class RateCardImportParser {
     }
 
     private static String optionalCell(Row row, Map<String, Integer> columnIndex, String headerName) {
-        Integer idx = columnIndex.get(normalizeHeader(headerName));
+        Integer idx = columnIndex.get(ExcelParserUtils.normalizeHeader(headerName));
         if (idx == null) {
             return null;
         }

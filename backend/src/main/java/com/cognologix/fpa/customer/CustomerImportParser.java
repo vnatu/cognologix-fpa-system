@@ -1,6 +1,7 @@
 package com.cognologix.fpa.customer;
 
 import com.cognologix.fpa.customer.domain.LifecycleStatus;
+import com.cognologix.fpa.general.ExcelParserUtils;
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -11,8 +12,8 @@ import java.util.*;
 
 /**
  * Parses Customer Master Excel imports (ADR-027).
- * Expected headers (case-insensitive): Customer Code, Customer Name,
- * Zoho Books Customer Ref, Lifecycle Status, DSO Days, Relationship Owner Employee ID.
+ * Expected headers (normalized — ADR-047): Customer Code, Customer Name,
+ * Zoho Books Customer Ref, Lifecycle Status, Is Internal, Relationship Owner Employee ID, DSO Days.
  */
 @Component
 public class CustomerImportParser {
@@ -21,8 +22,20 @@ public class CustomerImportParser {
     static final String COL_CUSTOMER_NAME = "Customer Name";
     static final String COL_ZOHO_BOOKS_REF = "Zoho Books Customer Ref";
     static final String COL_LIFECYCLE_STATUS = "Lifecycle Status";
-    static final String COL_DSO_DAYS = "DSO Days";
+    static final String COL_IS_INTERNAL = "Is Internal";
     static final String COL_RELATIONSHIP_OWNER = "Relationship Owner Employee ID";
+    static final String COL_DSO_DAYS = "DSO Days";
+
+    /** Canonical Title Case headers for export / sample templates (ADR-047). */
+    static final String[] IMPORT_EXPORT_HEADERS = {
+            COL_CUSTOMER_CODE,
+            COL_CUSTOMER_NAME,
+            COL_ZOHO_BOOKS_REF,
+            COL_LIFECYCLE_STATUS,
+            COL_IS_INTERNAL,
+            COL_RELATIONSHIP_OWNER,
+            COL_DSO_DAYS
+    };
 
     private static final List<String> REQUIRED_HEADERS = List.of(COL_CUSTOMER_CODE, COL_CUSTOMER_NAME);
 
@@ -52,12 +65,13 @@ public class CustomerImportParser {
                 int rowNumber = r + 1;
                 rows.add(new ParsedCustomerImportRow(
                         rowNumber,
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_CUSTOMER_CODE))),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_CUSTOMER_NAME))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_CUSTOMER_CODE))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_CUSTOMER_NAME))),
                         optionalCell(row, columnIndex, COL_ZOHO_BOOKS_REF),
                         optionalCell(row, columnIndex, COL_LIFECYCLE_STATUS),
-                        optionalCell(row, columnIndex, COL_DSO_DAYS),
-                        optionalCell(row, columnIndex, COL_RELATIONSHIP_OWNER)));
+                        optionalCell(row, columnIndex, COL_IS_INTERNAL),
+                        optionalCell(row, columnIndex, COL_RELATIONSHIP_OWNER),
+                        optionalCell(row, columnIndex, COL_DSO_DAYS)));
             }
             return rows;
         } catch (CustomerBadRequestException e) {
@@ -95,6 +109,19 @@ public class CustomerImportParser {
         }
     }
 
+    /** Null/blank → null (leave unchanged on update). Recognises true/yes/y/1 and false/no/n/0. */
+    static Boolean parseOptionalBoolean(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "true", "yes", "y", "1" -> true;
+            case "false", "no", "n", "0" -> false;
+            default -> null;
+        };
+    }
+
     private static void validateFileExtension(MultipartFile file) {
         String name = file.getOriginalFilename();
         if (name == null) {
@@ -113,7 +140,7 @@ public class CustomerImportParser {
             if (header == null || header.isBlank()) {
                 continue;
             }
-            columnIndex.put(normalizeHeader(header), cell.getColumnIndex());
+            columnIndex.put(ExcelParserUtils.normalizeHeader(header), cell.getColumnIndex());
         }
         return columnIndex;
     }
@@ -121,17 +148,13 @@ public class CustomerImportParser {
     private static void validateRequiredHeaders(Map<String, Integer> columnIndex) {
         List<String> missing = new ArrayList<>();
         for (String header : REQUIRED_HEADERS) {
-            if (!columnIndex.containsKey(normalizeHeader(header))) {
+            if (!columnIndex.containsKey(ExcelParserUtils.normalizeHeader(header))) {
                 missing.add(header);
             }
         }
         if (!missing.isEmpty()) {
             throw new CustomerBadRequestException("Missing required columns: " + String.join(", ", missing));
         }
-    }
-
-    private static String normalizeHeader(String header) {
-        return header.trim().toLowerCase(Locale.ROOT);
     }
 
     private static String cellValue(Row row, Integer columnIndex) {
@@ -142,7 +165,7 @@ public class CustomerImportParser {
     }
 
     private static String optionalCell(Row row, Map<String, Integer> columnIndex, String headerName) {
-        Integer idx = columnIndex.get(normalizeHeader(headerName));
+        Integer idx = columnIndex.get(ExcelParserUtils.normalizeHeader(headerName));
         if (idx == null) {
             return null;
         }
@@ -198,7 +221,8 @@ public class CustomerImportParser {
             String customerName,
             String zohoBooksCustomerRef,
             String lifecycleStatusRaw,
-            String dsoDaysRaw,
-            String relationshipOwnerEmployeeId
+            String isInternalRaw,
+            String relationshipOwnerEmployeeId,
+            String dsoDaysRaw
     ) {}
 }

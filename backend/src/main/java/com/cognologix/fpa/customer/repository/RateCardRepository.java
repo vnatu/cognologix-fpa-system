@@ -50,11 +50,15 @@ public interface RateCardRepository extends JpaRepository<RateCard, UUID> {
                                                   @Param("projectCodeId") UUID projectCodeId,
                                                   @Param("asOf") LocalDate asOf);
 
+    /**
+     * All rate cards for all customers — no customer filter (export / backup).
+     * Fetch customer only (to-one); lines are {@code EAGER} on {@link RateCard}.
+     * Avoid JOIN FETCH on {@code lines}: collection fetch + DISTINCT + ORDER BY can
+     * return an incomplete root set under Hibernate 6.
+     */
     @Query("""
-            SELECT DISTINCT rc FROM RateCard rc
+            SELECT rc FROM RateCard rc
             JOIN FETCH rc.customer c
-            JOIN FETCH rc.lines
-            ORDER BY c.customerCode ASC, rc.effectiveFrom ASC
             """)
     List<RateCard> findAllForExport();
 }

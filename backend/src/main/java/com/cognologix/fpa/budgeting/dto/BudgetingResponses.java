@@ -43,9 +43,17 @@ public final class BudgetingResponses {
             int openingHc,
             Instant createdAt,
             String createdBy,
-            List<ForecastTypeResponse> forecastTypes
+            List<ForecastTypeResponse> forecastTypes,
+            /** Most recent month with period_actuals for this FY (ADR-049); null if none. */
+            Integer latestActualsMonth,
+            Integer latestActualsYear
     ) {
         public static PlanDetailResponse from(FinancialYearPlan plan) {
+            return from(plan, null, null);
+        }
+
+        public static PlanDetailResponse from(
+                FinancialYearPlan plan, Integer latestActualsMonth, Integer latestActualsYear) {
             List<ForecastTypeResponse> types = plan.getForecastTypes().stream()
                     .sorted(Comparator.comparing(ForecastType::getTypeName))
                     .map(ForecastTypeResponse::from)
@@ -58,7 +66,9 @@ public final class BudgetingResponses {
                     plan.getOpeningHc(),
                     plan.getCreatedAt(),
                     plan.getCreatedBy(),
-                    types);
+                    types,
+                    latestActualsMonth,
+                    latestActualsYear);
         }
     }
 
@@ -118,10 +128,14 @@ public final class BudgetingResponses {
             BigDecimal actualSupportSalaries,
             BigDecimal actualLeadershipSalaries,
             BigDecimal actualManagementSalaries,
+            /** Manual Override — used when Revenue module has no upload for the period (ADR-043). */
             BigDecimal actualRevenueManual,
+            String actualRevenueManualLabel,
             UUID peoplePeriodVersionId,
             Instant createdAt
     ) {
+        public static final String MANUAL_OVERRIDE_LABEL = "Manual Override";
+
         public static PeriodActualsResponse from(PeriodActuals a) {
             return new PeriodActualsResponse(
                     a.getId(),
@@ -139,6 +153,7 @@ public final class BudgetingResponses {
                     a.getActualLeadershipSalaries(),
                     a.getActualManagementSalaries(),
                     a.getActualRevenueManual(),
+                    MANUAL_OVERRIDE_LABEL,
                     a.getPeoplePeriodVersionId(),
                     a.getCreatedAt());
         }

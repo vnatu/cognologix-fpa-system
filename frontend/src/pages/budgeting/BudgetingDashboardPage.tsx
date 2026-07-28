@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
   Card,
   Col,
   Empty,
+  Popover,
   Radio,
   Row,
+  Segmented,
   Select,
   Skeleton,
   Space,
@@ -17,6 +19,7 @@ import {
   Typography,
   InputNumber,
 } from 'antd';
+import { QuestionCircleOutlined } from '@ant-design/icons';
 import {
   Line,
   LineChart,
@@ -26,16 +29,20 @@ import {
   Tooltip,
   Legend,
   CartesianGrid,
+  ReferenceArea,
 } from 'recharts';
 import { formatCurrency } from '@/utils/formatDate';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import {
   buildFyMonthCols,
+  buildFyMonthOptions,
+  buildFyQuarterOptions,
   billableRatio,
-  currentFyMonth,
+  defaultDashboardPeriod,
   FY_MONTH_LABELS,
   num,
   pct,
+  quarterForMonth,
   TYPE_LABELS,
 } from './utils';
 import type {
@@ -43,6 +50,8 @@ import type {
   CostPerEmployeeResult,
   DeltaResult,
   FyMonthCol,
+  PeriodGranularity,
+  PeriodQuery,
   PlanDetail,
   PlanSummary,
   PlanVsActualResult,
@@ -60,6 +69,66 @@ import {
 
 const { Title, Text } = Typography;
 
+const PANEL_HELP = {
+  headlineKpis:
+    'Key financial metrics for the selected period. Plan = your budgeted target. Actual = what was invoiced/incurred. Variance = Actual minus Plan (positive is good for Revenue and EBITDA, negative is good for Costs). Green = favorable, Red = unfavorable.',
+  rollingForecast:
+    'Shows the full financial year trend. Baseline (dashed) = your published plan. Rolling Forecast (solid red) = actuals for past months + current plan for future months. Actuals (green) = months where real data has been finalised. The gap between Rolling Forecast and Baseline is your Delta.',
+  pvaRevenue:
+    'Compares planned revenue against actual invoiced revenue per client for the selected period. Planned TM Revenue = what you budgeted to invoice on Time & Material basis. Planned Fixed Bid = contracted fixed amounts. Actual = what was actually invoiced in Zoho Books.',
+  pvaHc:
+    'Compares planned headcount against actual headcount per category for the selected period. Billable = employees deployed on client projects. Bench = delivery staff not yet deployed. Support = non-delivery staff (HR, Admin, Finance). Leadership = senior management. Management = co-founders.',
+  pvaCosts:
+    'Compares planned salary and overhead costs against actuals. Salary actuals flow automatically from finalised People & Payroll periods. Overhead actuals are entered manually. Total Payroll Cost includes gross pay plus employer contributions (EPF, EPS, EDLI, Gratuity etc.).',
+  buMetrics:
+    "Gross Margin per client = Revenue minus Salary Cost allocated to that client. Gross Margin % shows how much of each rupee of revenue remains after direct staff costs. Click 'View Employees' to see individual employee details for that client in People & Payroll.",
+  plSummary:
+    'Consolidated Profit & Loss statement. Revenue flows from client invoices. COGS (Cost of Goods Sold) = billable and bench staff salaries + delivery overheads. Gross Profit = Revenue minus COGS. OpEx = support, leadership, and management costs plus non-delivery overheads. EBITDA = Gross Profit minus OpEx.',
+  costPerEmployee:
+    'Fully loaded cost per head by employee category using Full Absorption Costing. Layer 1 = direct salary + employer statutory contributions. Layer 2 = direct overhead per head (insurance, software, training). Layer 3 = shared overhead allocated to billable employees only (rent, electricity etc.). The Minimum Billing Rate for billable staff = Layer 1 + 2 + 3 — this is your break-even rate for client negotiations.',
+  deltaView:
+    'Delta = Rolling Forecast minus Baseline. Shows how your current trajectory differs from your original plan. For Revenue and Margin: positive delta = tracking above plan (good). For Costs: negative delta = tracking below plan (good = under-budget). Traffic light colors: green = favorable, red = unfavorable.',
+} as const;
+
+function PanelHelpTitle({
+  title,
+  helpTitle,
+  helpContent,
+  style,
+}: {
+  title: ReactNode;
+  helpTitle: string;
+  helpContent: string;
+  style?: CSSProperties;
+}) {
+  const { token } = theme.useToken();
+  return (
+    <Space size={8} align="center" style={style}>
+      <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
+        {title}
+      </Title>
+      <Popover
+        title={helpTitle}
+        content={
+          <div style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>
+            {helpContent}
+          </div>
+        }
+        trigger="click"
+      >
+        <QuestionCircleOutlined
+          style={{
+            color: token.colorTextSecondary,
+            fontSize: 14,
+            cursor: 'pointer',
+          }}
+          aria-label={`About ${helpTitle}`}
+        />
+      </Popover>
+    </Space>
+  );
+}
+
 export default function BudgetingDashboardPage() {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -67,19 +136,28 @@ export default function BudgetingDashboardPage() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanDetail | null>(null);
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
+  const [granularity, setGranularity] = useState<PeriodGranularity>('MONTHLY');
+  const [selectedMonth, setSelectedMonth] = useState<number>(4);
+  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedQuarter, setSelectedQuarter] = useState<number>(1);
   const [pva, setPva] = useState<PlanVsActualResult | null>(null);
   const [rf, setRf] = useState<RollingForecastResult | null>(null);
   const [delta, setDelta] = useState<DeltaResult | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const [selectedMonth, setSelectedMonth] = useState<{
-    month: number;
-    year: number;
-  } | null>(null);
   const [buMetrics, setBuMetrics] = useState<BuMetricsResult | null>(null);
   const [costPerEmp, setCostPerEmp] = useState<CostPerEmployeeResult | null>(
     null,
   );
+
+  const periodQuery: PeriodQuery = useMemo(() => {
+    if (granularity === 'MONTHLY') {
+      return { granularity, month: selectedMonth, year: selectedYear };
+    }
+    if (granularity === 'QUARTERLY') {
+      return { granularity, quarter: selectedQuarter, year: selectedYear };
+    }
+    return { granularity: 'ANNUAL' };
+  }, [granularity, selectedMonth, selectedYear, selectedQuarter]);
 
   const loadPlans = useCallback(async () => {
     try {
@@ -104,6 +182,11 @@ export default function BudgetingDashboardPage() {
       setPlan(planData);
       const primaryType = planData.forecastTypes.find((t) => t.primary);
       setSelectedTypeId(primaryType?.id ?? null);
+      const defaults = defaultDashboardPeriod(planData);
+      setGranularity(defaults.granularity);
+      setSelectedMonth(defaults.month);
+      setSelectedYear(defaults.year);
+      setSelectedQuarter(defaults.quarter);
     } catch (error) {
       console.error('Failed to load plan', error);
     } finally {
@@ -118,17 +201,23 @@ export default function BudgetingDashboardPage() {
   }, [selectedPlanId, loadPlan]);
 
   const loadDashboardData = useCallback(
-    async (planId: string, typeId: string | null) => {
+    async (planId: string, typeId: string | null, period: PeriodQuery) => {
       setLoading(true);
       try {
-        const [pvaData, rfData, deltaData] = await Promise.all([
-          fetchPlanVsActual(planId, typeId ?? undefined),
-          fetchRollingForecast(planId),
-          fetchDelta(planId),
-        ]);
+        const [pvaData, rfData, deltaData, buData, costData] = await Promise.all(
+          [
+            fetchPlanVsActual(planId, typeId ?? undefined, period),
+            fetchRollingForecast(planId, period),
+            fetchDelta(planId, period),
+            fetchBuMetrics(planId, period, typeId ?? undefined),
+            fetchCostPerEmployee(planId, period, typeId ?? undefined),
+          ],
+        );
         setPva(pvaData);
         setRf(rfData);
         setDelta(deltaData);
+        setBuMetrics(buData);
+        setCostPerEmp(costData);
       } catch (error) {
         console.error('Failed to load dashboard data', error);
       } finally {
@@ -140,45 +229,13 @@ export default function BudgetingDashboardPage() {
 
   useEffect(() => {
     if (selectedPlanId && plan) {
-      loadDashboardData(selectedPlanId, selectedTypeId);
-      const monthState = currentFyMonth(plan);
-      setSelectedMonth(monthState);
+      loadDashboardData(selectedPlanId, selectedTypeId, periodQuery);
     }
-  }, [selectedPlanId, selectedTypeId, plan, loadDashboardData]);
-
-  const loadMonthData = useCallback(
-    async (
-      planId: string,
-      month: number,
-      year: number,
-      typeId: string | null,
-    ) => {
-      try {
-        const [buData, costData] = await Promise.all([
-          fetchBuMetrics(planId, month, year, typeId ?? undefined),
-          fetchCostPerEmployee(planId, month, year, typeId ?? undefined),
-        ]);
-        setBuMetrics(buData);
-        setCostPerEmp(costData);
-      } catch (error) {
-        console.error('Failed to load month data', error);
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (selectedPlanId && selectedMonth) {
-      loadMonthData(
-        selectedPlanId,
-        selectedMonth.month,
-        selectedMonth.year,
-        selectedTypeId,
-      );
-    }
-  }, [selectedPlanId, selectedMonth, selectedTypeId, loadMonthData]);
+  }, [selectedPlanId, selectedTypeId, plan, periodQuery, loadDashboardData]);
 
   const cols = useMemo(() => buildFyMonthCols(plan), [plan]);
+  const monthOptions = useMemo(() => buildFyMonthOptions(plan), [plan]);
+  const quarterOptions = useMemo(() => buildFyQuarterOptions(plan), [plan]);
 
   if (!plans.length) {
     return (
@@ -200,7 +257,7 @@ export default function BudgetingDashboardPage() {
     <div style={{ padding: 24 }}>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Card>
-          <Space>
+          <Space wrap size="middle">
             <Select
               style={{ minWidth: 200 }}
               placeholder="Select financial year"
@@ -223,40 +280,93 @@ export default function BudgetingDashboardPage() {
                 }))}
               />
             )}
+            <Space size="small">
+              <Text type="secondary">Granularity</Text>
+              <Segmented
+                value={granularity}
+                onChange={(v) => {
+                  const g = v as PeriodGranularity;
+                  setGranularity(g);
+                  if (g === 'QUARTERLY') {
+                    setSelectedQuarter(quarterForMonth(selectedMonth));
+                    const qOpt = quarterOptions.find(
+                      (q) => q.quarter === quarterForMonth(selectedMonth),
+                    );
+                    if (qOpt) setSelectedYear(qOpt.year);
+                  }
+                }}
+                options={[
+                  { label: 'Monthly', value: 'MONTHLY' },
+                  { label: 'Quarterly', value: 'QUARTERLY' },
+                  { label: 'Annual', value: 'ANNUAL' },
+                ]}
+              />
+            </Space>
+            {granularity === 'MONTHLY' && (
+              <Select
+                style={{ minWidth: 180 }}
+                value={`${selectedYear}-${selectedMonth}`}
+                onChange={(val) => {
+                  const opt = monthOptions.find((o) => o.value === val);
+                  if (opt) {
+                    setSelectedMonth(opt.month);
+                    setSelectedYear(opt.year);
+                    setSelectedQuarter(quarterForMonth(opt.month));
+                  }
+                }}
+                options={monthOptions.map((o) => ({
+                  label: o.label,
+                  value: o.value,
+                }))}
+              />
+            )}
+            {granularity === 'QUARTERLY' && (
+              <Select
+                style={{ minWidth: 160 }}
+                value={String(selectedQuarter)}
+                onChange={(val) => {
+                  const opt = quarterOptions.find((o) => o.value === val);
+                  if (opt) {
+                    setSelectedQuarter(opt.quarter);
+                    setSelectedYear(opt.year);
+                    setSelectedMonth(
+                      opt.quarter === 1
+                        ? 4
+                        : opt.quarter === 2
+                          ? 7
+                          : opt.quarter === 3
+                            ? 10
+                            : 1,
+                    );
+                  }
+                }}
+                options={quarterOptions.map((o) => ({
+                  label: o.label,
+                  value: o.value,
+                }))}
+              />
+            )}
           </Space>
         </Card>
 
         {loading && <Skeleton active />}
 
-        {!loading && pva && rf && delta && plan && selectedMonth && (
+        {!loading && pva && rf && delta && plan && (
           <>
             <HeadlineKPIsPanel pva={pva} token={token} />
 
-            <RollingForecastPanel rf={rf} delta={delta} token={token} />
-
-            <PvaRevenuePanel
-              pva={pva}
-              selectedMonth={selectedMonth}
-              setSelectedMonth={setSelectedMonth}
-              cols={cols}
+            <RollingForecastPanel
+              rf={rf}
+              delta={delta}
+              granularity={granularity}
               token={token}
             />
 
-            <PvaHcPanel
-              pva={pva}
-              selectedMonth={selectedMonth}
-              setSelectedMonth={setSelectedMonth}
-              cols={cols}
-              token={token}
-            />
+            <PvaRevenuePanel pva={pva} token={token} />
 
-            <PvaCostsPanel
-              pva={pva}
-              selectedMonth={selectedMonth}
-              setSelectedMonth={setSelectedMonth}
-              cols={cols}
-              token={token}
-            />
+            <PvaHcPanel pva={pva} token={token} />
+
+            <PvaCostsPanel pva={pva} token={token} />
 
             {buMetrics && (
               <BuMetricsPanel
@@ -266,17 +376,45 @@ export default function BudgetingDashboardPage() {
               />
             )}
 
-            <PlSummaryPanel pva={pva} cols={cols} token={token} />
+            <PlSummaryPanel
+              pva={pva}
+              cols={cols}
+              granularity={granularity}
+              selectedMonth={selectedMonth}
+              selectedYear={selectedYear}
+              selectedQuarter={selectedQuarter}
+              token={token}
+            />
 
             {costPerEmp && (
               <CostPerEmployeePanel costPerEmp={costPerEmp} token={token} />
             )}
 
-            <DeltaViewPanel delta={delta} cols={cols} token={token} />
+            <DeltaViewPanel delta={delta} token={token} />
           </>
         )}
       </Space>
     </div>
+  );
+}
+
+function VarianceText({
+  variance,
+  plan,
+  favorPositive = true,
+  token,
+}: {
+  variance: number | null | undefined;
+  plan: number | null | undefined;
+  favorPositive?: boolean;
+  token: ReturnType<typeof theme.useToken>['token'];
+}) {
+  if (variance == null) return null;
+  const good = favorPositive ? variance > 0 : variance < 0;
+  return (
+    <Text style={{ color: good ? token.colorSuccess : token.colorError }}>
+      Variance: {formatCurrency(variance)} ({pct(variance, plan)?.toFixed(1)}%)
+    </Text>
   );
 }
 
@@ -286,10 +424,31 @@ interface HeadlineKPIsPanelProps {
 }
 
 function HeadlineKPIsPanel({ pva, token }: HeadlineKPIsPanelProps) {
-  const fyTotals = pva.fy;
+  const totals = pva.selectedPeriod;
 
-  const firstMonthWithActuals = pva.months.find((m) => m.hasActuals);
-  const billableRatioMonth = firstMonthWithActuals ?? pva.months[0];
+  const billableRatioMonth = useMemo(() => {
+    if (pva.granularity === 'ANNUAL') {
+      const withActuals = pva.months.filter((m) => m.hasActuals);
+      return withActuals[withActuals.length - 1] ?? pva.months[0];
+    }
+    if (pva.granularity === 'MONTHLY') {
+      return (
+        selectedPvaMonth(pva) ??
+        pva.months.find((m) => m.hasActuals) ??
+        pva.months[0]
+      );
+    }
+    // Quarterly: last month in the quarter that has data
+    const qMatch = /^Q([1-4])/.exec(pva.periodLabel);
+    const q = qMatch ? Number(qMatch[1]) : 1;
+    const inQ = pva.months.filter((m) => quarterForMonth(m.month) === q);
+    return (
+      [...inQ].reverse().find((m) => m.hasActuals) ??
+      inQ[inQ.length - 1] ??
+      pva.months[0]
+    );
+  }, [pva]);
+
   const billableHcPlan = billableRatioMonth?.hc.plan.billableHc ?? 0;
   const billableHcActual = billableRatioMonth?.hc.actual.billableHc ?? 0;
   const totalHcPlan = billableRatioMonth?.hc.plan.totalHc ?? 0;
@@ -302,92 +461,107 @@ function HeadlineKPIsPanel({ pva, token }: HeadlineKPIsPanelProps) {
 
   return (
     <Card>
-      <Title level={4} style={{ fontFamily: HEADING_FONT }}>
-        Headline KPIs
-      </Title>
-      <Row gutter={16}>
-        <Col span={8}>
-          <Statistic
-            title="Total Revenue (Rs L)"
-            value={formatCurrency(fyTotals.totalRevenue.actual ?? fyTotals.totalRevenue.plan)}
-            valueStyle={{
-              color:
-                fyTotals.totalRevenue.variance != null &&
-                fyTotals.totalRevenue.variance > 0
-                  ? token.colorSuccess
-                  : undefined,
-            }}
+      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <PanelHelpTitle
+            title="Headline KPIs"
+            helpTitle="Headline KPIs"
+            helpContent={PANEL_HELP.headlineKpis}
           />
-          {fyTotals.totalRevenue.variance != null && (
-            <Text
-              style={{
+          <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
+            {pva.periodLabel}
+          </Title>
+        </div>
+        {pva.actualsCoverageNote && (
+          <Text type="secondary">{pva.actualsCoverageNote}</Text>
+        )}
+        <Row gutter={16}>
+          <Col span={8}>
+            <Statistic
+              title="Total Revenue (Rs L)"
+              value={formatCurrency(
+                totals.totalRevenue.actual ?? totals.totalRevenue.plan,
+              )}
+              valueStyle={{
                 color:
-                  fyTotals.totalRevenue.variance > 0
+                  totals.totalRevenue.variance != null &&
+                  totals.totalRevenue.variance > 0
                     ? token.colorSuccess
-                    : token.colorError,
+                    : undefined,
               }}
-            >
-              Variance: {formatCurrency(fyTotals.totalRevenue.variance)} (
-              {pct(
-                fyTotals.totalRevenue.variance,
-                fyTotals.totalRevenue.plan,
-              )?.toFixed(1)}
-              %)
-            </Text>
-          )}
-        </Col>
-        <Col span={8}>
-          <Statistic
-            title="EBITDA (Rs L)"
-            value={formatCurrency(fyTotals.ebitda.actual ?? fyTotals.ebitda.plan)}
-            valueStyle={{
-              color:
-                fyTotals.ebitda.variance != null && fyTotals.ebitda.variance > 0
-                  ? token.colorSuccess
-                  : undefined,
-            }}
-          />
-          {fyTotals.ebitda.variance != null && (
-            <Text
-              style={{
+            />
+            <VarianceText
+              variance={totals.totalRevenue.variance}
+              plan={totals.totalRevenue.plan}
+              token={token}
+            />
+            <div>
+              <Text type="secondary">
+                Plan {formatCurrency(totals.totalRevenue.plan)}
+                {totals.totalRevenue.actual != null &&
+                  ` · Actual ${formatCurrency(totals.totalRevenue.actual)}`}
+              </Text>
+            </div>
+          </Col>
+          <Col span={8}>
+            <Statistic
+              title="EBITDA (Rs L)"
+              value={formatCurrency(totals.ebitda.actual ?? totals.ebitda.plan)}
+              valueStyle={{
                 color:
-                  fyTotals.ebitda.variance > 0
+                  totals.ebitda.variance != null && totals.ebitda.variance > 0
                     ? token.colorSuccess
-                    : token.colorError,
+                    : undefined,
               }}
-            >
-              Variance: {formatCurrency(fyTotals.ebitda.variance)} (
-              {pct(fyTotals.ebitda.variance, fyTotals.ebitda.plan)?.toFixed(1)}
-              %)
-            </Text>
-          )}
-        </Col>
-        <Col span={8}>
-          <Statistic
-            title="Billable Ratio %"
-            value={billableRatio(
-              totalHcActual > 0 ? billableHcActual : billableHcPlan,
-              totalHcActual > 0 ? totalHcActual : totalHcPlan,
-            ).toFixed(1)}
-            valueStyle={{
-              color:
-                ratioVariance != null && ratioVariance > 0
-                  ? token.colorSuccess
-                  : undefined,
-            }}
-          />
-          {ratioVariance != null && (
-            <Text
-              style={{
+            />
+            <VarianceText
+              variance={totals.ebitda.variance}
+              plan={totals.ebitda.plan}
+              token={token}
+            />
+            <div>
+              <Text type="secondary">
+                Plan {formatCurrency(totals.ebitda.plan)}
+                {totals.ebitda.actual != null &&
+                  ` · Actual ${formatCurrency(totals.ebitda.actual)}`}
+              </Text>
+            </div>
+          </Col>
+          <Col span={8}>
+            <Statistic
+              title="Billable Ratio %"
+              value={billableRatio(
+                totalHcActual > 0 ? billableHcActual : billableHcPlan,
+                totalHcActual > 0 ? totalHcActual : totalHcPlan,
+              ).toFixed(1)}
+              valueStyle={{
                 color:
-                  ratioVariance > 0 ? token.colorSuccess : token.colorError,
+                  ratioVariance != null && ratioVariance > 0
+                    ? token.colorSuccess
+                    : undefined,
               }}
-            >
-              Variance: {ratioVariance.toFixed(1)}%
-            </Text>
-          )}
-        </Col>
-      </Row>
+            />
+            {ratioVariance != null && (
+              <Text
+                style={{
+                  color:
+                    ratioVariance > 0 ? token.colorSuccess : token.colorError,
+                }}
+              >
+                Variance: {ratioVariance.toFixed(1)}%
+              </Text>
+            )}
+          </Col>
+        </Row>
+      </Space>
     </Card>
   );
 }
@@ -395,10 +569,16 @@ function HeadlineKPIsPanel({ pva, token }: HeadlineKPIsPanelProps) {
 interface RollingForecastPanelProps {
   rf: RollingForecastResult;
   delta: DeltaResult;
+  granularity: PeriodGranularity;
   token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function RollingForecastPanel({ rf, delta, token }: RollingForecastPanelProps) {
+function RollingForecastPanel({
+  rf,
+  delta,
+  granularity,
+  token,
+}: RollingForecastPanelProps) {
   const [metric, setMetric] = useState<
     'totalRevenue' | 'ebitda' | 'billableHc'
   >('totalRevenue');
@@ -418,23 +598,37 @@ function RollingForecastPanel({ rf, delta, token }: RollingForecastPanelProps) {
       }
 
       const baselineValue = rfValue - deltaValue;
+      const highlighted =
+        granularity === 'ANNUAL'
+          ? false
+          : granularity === 'MONTHLY'
+            ? m.month === rf.highlightMonth && m.year === rf.highlightYear
+            : quarterForMonth(m.month) === rf.highlightQuarter;
 
       return {
         month: FY_MONTH_LABELS[i],
         baseline: baselineValue,
         forecast: rfValue,
         actual: m.fromActuals ? rfValue : null,
+        highlighted,
       };
     });
-  }, [rf.months, delta.months, metric]);
+  }, [rf, delta.months, metric, granularity]);
+
+  const highlightRange = useMemo(() => {
+    const idxs = chartData
+      .map((d, i) => (d.highlighted ? i : -1))
+      .filter((i) => i >= 0);
+    if (idxs.length === 0) return null;
+    return {
+      x1: FY_MONTH_LABELS[idxs[0]],
+      x2: FY_MONTH_LABELS[idxs[idxs.length - 1]],
+    };
+  }, [chartData]);
 
   return (
     <Card>
-      <Space
-        direction="vertical"
-        size="middle"
-        style={{ width: '100%' }}
-      >
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <div
           style={{
             display: 'flex',
@@ -442,9 +636,11 @@ function RollingForecastPanel({ rf, delta, token }: RollingForecastPanelProps) {
             alignItems: 'center',
           }}
         >
-          <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
-            Rolling Forecast vs Baseline
-          </Title>
+          <PanelHelpTitle
+            title="Rolling Forecast vs Baseline"
+            helpTitle="Rolling Forecast vs Baseline"
+            helpContent={PANEL_HELP.rollingForecast}
+          />
           <Select
             style={{ minWidth: 200 }}
             value={metric}
@@ -462,7 +658,7 @@ function RollingForecastPanel({ rf, delta, token }: RollingForecastPanelProps) {
             <XAxis dataKey="month" />
             <YAxis />
             <Tooltip
-              formatter={(value: any) => {
+              formatter={(value) => {
                 const numValue = typeof value === 'number' ? value : Number(value);
                 return metric === 'billableHc'
                   ? numValue.toFixed(0)
@@ -470,6 +666,14 @@ function RollingForecastPanel({ rf, delta, token }: RollingForecastPanelProps) {
               }}
             />
             <Legend />
+            {highlightRange && (
+              <ReferenceArea
+                x1={highlightRange.x1}
+                x2={highlightRange.x2}
+                fill={token.colorPrimary}
+                fillOpacity={0.08}
+              />
+            )}
             <Line
               type="monotone"
               dataKey="baseline"
@@ -500,74 +704,123 @@ function RollingForecastPanel({ rf, delta, token }: RollingForecastPanelProps) {
   );
 }
 
+function selectedPvaMonth(pva: PlanVsActualResult) {
+  if (pva.granularity === 'MONTHLY') {
+    const names = [
+      '',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return (
+      pva.months.find((m) => pva.periodLabel === `${names[m.month]} ${m.year}`) ??
+      pva.months[0]
+    );
+  }
+  if (pva.granularity === 'QUARTERLY') {
+    const qMatch = /^Q([1-4])/.exec(pva.periodLabel);
+    const q = qMatch ? Number(qMatch[1]) : 1;
+    const inQ = pva.months.filter((m) => quarterForMonth(m.month) === q);
+    return (
+      [...inQ].reverse().find((m) => m.hasActuals) ??
+      inQ[inQ.length - 1] ??
+      null
+    );
+  }
+  // Annual: latest month with actuals for stock metrics (HC)
+  const withActuals = pva.months.filter((m) => m.hasActuals);
+  return withActuals[withActuals.length - 1] ?? pva.months[0] ?? null;
+}
+
 interface PvaRevenuePanelProps {
   pva: PlanVsActualResult;
-  selectedMonth: { month: number; year: number };
-  setSelectedMonth: (month: { month: number; year: number }) => void;
-  cols: FyMonthCol[];
   token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function PvaRevenuePanel({
-  pva,
-  selectedMonth,
-  setSelectedMonth,
-  cols,
-  token,
-}: PvaRevenuePanelProps) {
-  const monthData = useMemo(() => {
-    return pva.months.find(
-      (m) => m.month === selectedMonth.month && m.year === selectedMonth.year,
-    );
-  }, [pva.months, selectedMonth]);
+function PvaRevenuePanel({ pva, token }: PvaRevenuePanelProps) {
+  const monthData = useMemo(
+    () => (pva.granularity === 'MONTHLY' ? selectedPvaMonth(pva) : null),
+    [pva],
+  );
 
   const dataSource = useMemo(() => {
-    if (!monthData) return [];
-    const rows = monthData.revenueByClient.map((c) => ({
-      key: c.customerId,
-      client: c.customerCode,
-      plan: formatCurrency(c.totalRevenue.plan),
-      actual: c.totalRevenue.actual != null ? formatCurrency(c.totalRevenue.actual) : '—',
-      variance:
-        c.totalRevenue.variance != null
-          ? formatCurrency(c.totalRevenue.variance)
-          : '—',
-      variancePct:
-        c.totalRevenue.variance != null
-          ? `${pct(c.totalRevenue.variance, c.totalRevenue.plan)?.toFixed(1) ?? '—'}%`
-          : '—',
-      varianceColor:
-        c.totalRevenue.variance != null && c.totalRevenue.variance > 0
-          ? token.colorSuccess
-          : token.colorError,
-    }));
+    // Monthly: client breakdown for selected month
+    // Quarterly/Annual: total row from selectedPeriod only (client roll-up deferred)
+    if (monthData) {
+      const rows = monthData.revenueByClient.map((c) => ({
+        key: c.customerId,
+        client: c.customerCode,
+        plan: formatCurrency(c.totalRevenue.plan),
+        actual:
+          c.totalRevenue.actual != null
+            ? formatCurrency(c.totalRevenue.actual)
+            : '—',
+        variance:
+          c.totalRevenue.variance != null
+            ? formatCurrency(c.totalRevenue.variance)
+            : '—',
+        variancePct:
+          c.totalRevenue.variance != null
+            ? `${pct(c.totalRevenue.variance, c.totalRevenue.plan)?.toFixed(1) ?? '—'}%`
+            : '—',
+        varianceColor:
+          c.totalRevenue.variance != null && c.totalRevenue.variance > 0
+            ? token.colorSuccess
+            : token.colorError,
+      }));
+      rows.push({
+        key: 'total',
+        client: 'Total',
+        plan: formatCurrency(monthData.totalRevenue.plan),
+        actual:
+          monthData.totalRevenue.actual != null
+            ? formatCurrency(monthData.totalRevenue.actual)
+            : '—',
+        variance:
+          monthData.totalRevenue.variance != null
+            ? formatCurrency(monthData.totalRevenue.variance)
+            : '—',
+        variancePct:
+          monthData.totalRevenue.variance != null
+            ? `${pct(monthData.totalRevenue.variance, monthData.totalRevenue.plan)?.toFixed(1) ?? '—'}%`
+            : '—',
+        varianceColor:
+          monthData.totalRevenue.variance != null &&
+          monthData.totalRevenue.variance > 0
+            ? token.colorSuccess
+            : token.colorError,
+      });
+      return rows;
+    }
 
-    // Total row
-    rows.push({
-      key: 'total',
-      client: 'Total',
-      plan: formatCurrency(monthData.totalRevenue.plan),
-      actual:
-        monthData.totalRevenue.actual != null
-          ? formatCurrency(monthData.totalRevenue.actual)
-          : '—',
-      variance:
-        monthData.totalRevenue.variance != null
-          ? formatCurrency(monthData.totalRevenue.variance)
-          : '—',
-      variancePct:
-        monthData.totalRevenue.variance != null
-          ? `${pct(monthData.totalRevenue.variance, monthData.totalRevenue.plan)?.toFixed(1) ?? '—'}%`
-          : '—',
-      varianceColor:
-        monthData.totalRevenue.variance != null &&
-        monthData.totalRevenue.variance > 0
-          ? token.colorSuccess
-          : token.colorError,
-    });
-
-    return rows;
-  }, [monthData, token]);
+    const t = pva.selectedPeriod.totalRevenue;
+    return [
+      {
+        key: 'total',
+        client: `Total (${pva.periodLabel})`,
+        plan: formatCurrency(t.plan),
+        actual: t.actual != null ? formatCurrency(t.actual) : '—',
+        variance: t.variance != null ? formatCurrency(t.variance) : '—',
+        variancePct:
+          t.variance != null
+            ? `${pct(t.variance, t.plan)?.toFixed(1) ?? '—'}%`
+            : '—',
+        varianceColor:
+          t.variance != null && t.variance > 0
+            ? token.colorSuccess
+            : token.colorError,
+      },
+    ];
+  }, [monthData, pva, token]);
 
   const columns = [
     { title: 'Client', dataIndex: 'client', key: 'client' },
@@ -588,7 +841,7 @@ function PvaRevenuePanel({
       dataIndex: 'variance',
       key: 'variance',
       align: 'right' as const,
-      render: (text: string, record: any) => (
+      render: (text: string, record: { varianceColor: string }) => (
         <span style={{ color: record.varianceColor }}>{text}</span>
       ),
     },
@@ -597,7 +850,7 @@ function PvaRevenuePanel({
       dataIndex: 'variancePct',
       key: 'variancePct',
       align: 'right' as const,
-      render: (text: string, record: any) => (
+      render: (text: string, record: { varianceColor: string }) => (
         <span style={{ color: record.varianceColor }}>{text}</span>
       ),
     },
@@ -605,36 +858,12 @@ function PvaRevenuePanel({
 
   return (
     <Card>
-      <Space
-        direction="vertical"
-        size="middle"
-        style={{ width: '100%' }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
-            PvA Revenue
-          </Title>
-          <Select
-            style={{ minWidth: 150 }}
-            value={`${selectedMonth.year}-${selectedMonth.month}`}
-            onChange={(val) => {
-              const col = cols.find((c) => c.key === val);
-              if (col) {
-                setSelectedMonth({ month: col.planMonth, year: col.planYear });
-              }
-            }}
-            options={cols.map((c) => ({
-              label: c.label,
-              value: c.key,
-            }))}
-          />
-        </div>
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <PanelHelpTitle
+          title={`PvA Revenue — ${pva.periodLabel}`}
+          helpTitle="Plan vs Actual: Revenue"
+          helpContent={PANEL_HELP.pvaRevenue}
+        />
         <Table
           dataSource={dataSource}
           columns={columns}
@@ -649,29 +878,27 @@ function PvaRevenuePanel({
 
 interface PvaHcPanelProps {
   pva: PlanVsActualResult;
-  selectedMonth: { month: number; year: number };
-  setSelectedMonth: (month: { month: number; year: number }) => void;
-  cols: FyMonthCol[];
   token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function PvaHcPanel({
-  pva,
-  selectedMonth,
-  setSelectedMonth,
-  cols,
-  token,
-}: PvaHcPanelProps) {
-  const monthData = useMemo(() => {
-    return pva.months.find(
-      (m) => m.month === selectedMonth.month && m.year === selectedMonth.year,
-    );
-  }, [pva.months, selectedMonth]);
+function PvaHcPanel({ pva, token }: PvaHcPanelProps) {
+  // HC is a stock metric — show end-of-period month (latest actuals in scope)
+  const monthData = useMemo(() => selectedPvaMonth(pva), [pva]);
 
   const dataSource = useMemo(() => {
-    if (!monthData) return [];
+    if (!monthData) {
+      return [
+        {
+          key: 'note',
+          category: `See period totals for ${pva.periodLabel}`,
+          plan: '—',
+          actual: '—',
+          variance: '—',
+          varianceColor: undefined as string | undefined,
+        },
+      ];
+    }
     const hc = monthData.hc;
-
     const rows = [
       {
         key: 'billable',
@@ -717,18 +944,16 @@ function PvaHcPanel({
       },
     ];
 
-    // Add billable ratio row
-            const ratioPlan = billableRatio(hc.plan.billableHc, hc.plan.totalHc);
-            const ratioActual = billableRatio(hc.actual.billableHc, hc.actual.totalHc);
-            const ratioVariance = ratioActual - ratioPlan;
-
-            rows.push({
-              key: 'ratio',
-              category: 'Billable Ratio %',
-              plan: ratioPlan.toFixed(1) as any,
-              actual: ratioActual.toFixed(1) as any,
-              variance: ratioVariance.toFixed(1) as any,
-            });
+    const ratioPlan = billableRatio(hc.plan.billableHc, hc.plan.totalHc);
+    const ratioActual = billableRatio(hc.actual.billableHc, hc.actual.totalHc);
+    const ratioVariance = ratioActual - ratioPlan;
+    rows.push({
+      key: 'ratio',
+      category: 'Billable Ratio %',
+      plan: ratioPlan.toFixed(1) as unknown as number,
+      actual: ratioActual.toFixed(1) as unknown as number,
+      variance: ratioVariance.toFixed(1) as unknown as number,
+    });
 
     return rows.map((r) => ({
       ...r,
@@ -737,7 +962,7 @@ function PvaHcPanel({
           ? token.colorSuccess
           : token.colorError,
     }));
-  }, [monthData, token]);
+  }, [monthData, pva.periodLabel, token]);
 
   const columns = [
     { title: 'Category', dataIndex: 'category', key: 'category' },
@@ -753,44 +978,21 @@ function PvaHcPanel({
       dataIndex: 'variance',
       key: 'variance',
       align: 'right' as const,
-      render: (text: number | string, record: any) => (
-        <span style={{ color: record.varianceColor }}>{text}</span>
-      ),
+      render: (
+        text: number | string,
+        record: { varianceColor?: string },
+      ) => <span style={{ color: record.varianceColor }}>{text}</span>,
     },
   ];
 
   return (
     <Card>
-      <Space
-        direction="vertical"
-        size="middle"
-        style={{ width: '100%' }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
-            PvA HC
-          </Title>
-          <Select
-            style={{ minWidth: 150 }}
-            value={`${selectedMonth.year}-${selectedMonth.month}`}
-            onChange={(val) => {
-              const col = cols.find((c) => c.key === val);
-              if (col) {
-                setSelectedMonth({ month: col.planMonth, year: col.planYear });
-              }
-            }}
-            options={cols.map((c) => ({
-              label: c.label,
-              value: c.key,
-            }))}
-          />
-        </div>
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <PanelHelpTitle
+          title={`PvA HC — ${pva.periodLabel}`}
+          helpTitle="Plan vs Actual: HC"
+          helpContent={PANEL_HELP.pvaHc}
+        />
         <Table
           dataSource={dataSource}
           columns={columns}
@@ -805,29 +1007,40 @@ function PvaHcPanel({
 
 interface PvaCostsPanelProps {
   pva: PlanVsActualResult;
-  selectedMonth: { month: number; year: number };
-  setSelectedMonth: (month: { month: number; year: number }) => void;
-  cols: FyMonthCol[];
   token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function PvaCostsPanel({
-  pva,
-  selectedMonth,
-  setSelectedMonth,
-  cols,
-  token,
-}: PvaCostsPanelProps) {
-  const monthData = useMemo(() => {
-    return pva.months.find(
-      (m) => m.month === selectedMonth.month && m.year === selectedMonth.year,
-    );
-  }, [pva.months, selectedMonth]);
+function PvaCostsPanel({ pva, token }: PvaCostsPanelProps) {
+  const monthData = useMemo(
+    () => (pva.granularity === 'MONTHLY' ? selectedPvaMonth(pva) : null),
+    [pva],
+  );
 
   const salaryDataSource = useMemo(() => {
-    if (!monthData) return [];
+    if (!monthData) {
+      const t = pva.selectedPeriod;
+      return [
+        {
+          key: 'total',
+          category: `Total Salary (${pva.periodLabel})`,
+          plan: formatCurrency(t.totalSalaryCost.plan),
+          actual:
+            t.totalSalaryCost.actual != null
+              ? formatCurrency(t.totalSalaryCost.actual)
+              : '—',
+          variance:
+            t.totalSalaryCost.variance != null
+              ? formatCurrency(t.totalSalaryCost.variance)
+              : '—',
+          varianceColor:
+            t.totalSalaryCost.variance != null &&
+            t.totalSalaryCost.variance > 0
+              ? token.colorError
+              : token.colorSuccess,
+        },
+      ];
+    }
     const sal = monthData.salary;
-
     return [
       {
         key: 'billable',
@@ -836,7 +1049,7 @@ function PvaCostsPanel({
         actual: formatCurrency(sal.actual.billable),
         variance: formatCurrency(sal.variance.billable),
         varianceColor:
-          sal.variance.billable < 0 ? token.colorSuccess : token.colorError,
+          sal.variance.billable > 0 ? token.colorError : token.colorSuccess,
       },
       {
         key: 'bench',
@@ -845,7 +1058,7 @@ function PvaCostsPanel({
         actual: formatCurrency(sal.actual.bench),
         variance: formatCurrency(sal.variance.bench),
         varianceColor:
-          sal.variance.bench < 0 ? token.colorSuccess : token.colorError,
+          sal.variance.bench > 0 ? token.colorError : token.colorSuccess,
       },
       {
         key: 'support',
@@ -854,25 +1067,25 @@ function PvaCostsPanel({
         actual: formatCurrency(sal.actual.support),
         variance: formatCurrency(sal.variance.support),
         varianceColor:
-          sal.variance.support < 0 ? token.colorSuccess : token.colorError,
+          sal.variance.support > 0 ? token.colorError : token.colorSuccess,
       },
       {
         key: 'cofounders',
-        category: 'Co-Founders',
+        category: 'Cofounders',
         plan: formatCurrency(sal.plan.cofounders),
         actual: formatCurrency(sal.actual.cofounders),
         variance: formatCurrency(sal.variance.cofounders),
         varianceColor:
-          sal.variance.cofounders < 0 ? token.colorSuccess : token.colorError,
+          sal.variance.cofounders > 0 ? token.colorError : token.colorSuccess,
       },
       {
-        key: 'senior',
+        key: 'seniorMgmt',
         category: 'Senior Mgmt',
         plan: formatCurrency(sal.plan.seniorMgmt),
         actual: formatCurrency(sal.actual.seniorMgmt),
         variance: formatCurrency(sal.variance.seniorMgmt),
         varianceColor:
-          sal.variance.seniorMgmt < 0 ? token.colorSuccess : token.colorError,
+          sal.variance.seniorMgmt > 0 ? token.colorError : token.colorSuccess,
       },
       {
         key: 'total',
@@ -881,101 +1094,94 @@ function PvaCostsPanel({
         actual: formatCurrency(sal.actual.total),
         variance: formatCurrency(sal.variance.total),
         varianceColor:
-          sal.variance.total < 0 ? token.colorSuccess : token.colorError,
+          sal.variance.total > 0 ? token.colorError : token.colorSuccess,
       },
     ];
-  }, [monthData, token]);
+  }, [monthData, pva, token]);
 
   const overheadDataSource = useMemo(() => {
-    if (!monthData) return [];
-
-    const rows = monthData.overhead.map((oh) => ({
-      key: oh.lineCode,
-      lineCode: oh.lineCode,
-      plan: formatCurrency(oh.amount.plan),
-      actual: oh.amount.actual != null ? formatCurrency(oh.amount.actual) : '—',
-      variance:
-        oh.amount.variance != null ? formatCurrency(oh.amount.variance) : '—',
-      varianceColor:
-        oh.amount.variance != null && oh.amount.variance < 0
-          ? token.colorSuccess
-          : token.colorError,
-    }));
-
-    // Total row
-    rows.push({
-      key: 'total',
-      lineCode: 'Total',
-      plan: formatCurrency(monthData.totalOverhead.plan),
+    if (!monthData) {
+      const t = pva.selectedPeriod;
+      return [
+        {
+          key: 'total',
+          line: `Total Overhead (${pva.periodLabel})`,
+          plan: formatCurrency(t.totalOverhead.plan),
+          actual:
+            t.totalOverhead.actual != null
+              ? formatCurrency(t.totalOverhead.actual)
+              : '—',
+          variance:
+            t.totalOverhead.variance != null
+              ? formatCurrency(t.totalOverhead.variance)
+              : '—',
+          varianceColor:
+            t.totalOverhead.variance != null && t.totalOverhead.variance > 0
+              ? token.colorError
+              : token.colorSuccess,
+        },
+      ];
+    }
+    return monthData.overhead.map((o) => ({
+      key: o.lineCode,
+      line: o.lineCode,
+      plan: formatCurrency(o.amount.plan),
       actual:
-        monthData.totalOverhead.actual != null
-          ? formatCurrency(monthData.totalOverhead.actual)
-          : '—',
+        o.amount.actual != null ? formatCurrency(o.amount.actual) : '—',
       variance:
-        monthData.totalOverhead.variance != null
-          ? formatCurrency(monthData.totalOverhead.variance)
-          : '—',
+        o.amount.variance != null ? formatCurrency(o.amount.variance) : '—',
       varianceColor:
-        monthData.totalOverhead.variance != null &&
-        monthData.totalOverhead.variance < 0
-          ? token.colorSuccess
-          : token.colorError,
-    });
-
-    return rows;
-  }, [monthData, token]);
+        o.amount.variance != null && o.amount.variance > 0
+          ? token.colorError
+          : token.colorSuccess,
+    }));
+  }, [monthData, pva, token]);
 
   const columns = [
-    { title: 'Category', dataIndex: 'category', key: 'category', width: 120 },
+    { title: 'Category', dataIndex: 'category', key: 'category' },
     {
       title: 'Plan (Rs L)',
       dataIndex: 'plan',
       key: 'plan',
       align: 'right' as const,
-      width: 120,
     },
     {
       title: 'Actual (Rs L)',
       dataIndex: 'actual',
       key: 'actual',
       align: 'right' as const,
-      width: 120,
     },
     {
       title: 'Variance (Rs L)',
       dataIndex: 'variance',
       key: 'variance',
       align: 'right' as const,
-      width: 120,
-      render: (text: string, record: any) => (
+      render: (text: string, record: { varianceColor: string }) => (
         <span style={{ color: record.varianceColor }}>{text}</span>
       ),
     },
   ];
 
   const overheadColumns = [
-    { title: 'Line Code', dataIndex: 'lineCode', key: 'lineCode', width: 150 },
+    { title: 'Line', dataIndex: 'line', key: 'line' },
     {
       title: 'Plan (Rs L)',
       dataIndex: 'plan',
       key: 'plan',
       align: 'right' as const,
-      width: 120,
     },
     {
       title: 'Actual (Rs L)',
       dataIndex: 'actual',
       key: 'actual',
       align: 'right' as const,
-      width: 120,
     },
     {
       title: 'Variance (Rs L)',
       dataIndex: 'variance',
       key: 'variance',
       align: 'right' as const,
-      width: 120,
-      render: (text: string, record: any) => (
+      render: (text: string, record: { varianceColor: string }) => (
         <span style={{ color: record.varianceColor }}>{text}</span>
       ),
     },
@@ -983,36 +1189,12 @@ function PvaCostsPanel({
 
   return (
     <Card>
-      <Space
-        direction="vertical"
-        size="middle"
-        style={{ width: '100%' }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
-            PvA Costs
-          </Title>
-          <Select
-            style={{ minWidth: 150 }}
-            value={`${selectedMonth.year}-${selectedMonth.month}`}
-            onChange={(val) => {
-              const col = cols.find((c) => c.key === val);
-              if (col) {
-                setSelectedMonth({ month: col.planMonth, year: col.planYear });
-              }
-            }}
-            options={cols.map((c) => ({
-              label: c.label,
-              value: c.key,
-            }))}
-          />
-        </div>
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <PanelHelpTitle
+          title={`PvA Costs — ${pva.periodLabel}`}
+          helpTitle="Plan vs Actual: Costs"
+          helpContent={PANEL_HELP.pvaCosts}
+        />
         <Row gutter={16}>
           <Col span={12}>
             <Card title="Salary" size="small">
@@ -1056,28 +1238,41 @@ function BuMetricsPanel({ buMetrics, navigate }: BuMetricsPanelProps) {
         key: r.customerId,
         customer: r.customerName,
         plannedRevenue: formatCurrency(r.plannedRevenue),
-        actualRevenue: r.actualRevenue != null ? formatCurrency(r.actualRevenue) : '—',
+        actualRevenue:
+          r.actualRevenue != null ? formatCurrency(r.actualRevenue) : '—',
         plannedSalaryCost: formatCurrency(r.plannedSalaryCost),
         actualSalaryCost:
-          r.actualSalaryCost != null ? formatCurrency(r.actualSalaryCost) : '—',
+          r.actualSalaryCost != null
+            ? formatCurrency(r.actualSalaryCost)
+            : '—',
         plannedBillableHc: r.plannedBillableHc ?? '—',
         actualBillableHc: r.actualBillableHc ?? '—',
         plannedGrossMargin: formatCurrency(r.plannedGrossMargin),
         actualGrossMargin:
-          r.actualGrossMargin != null ? formatCurrency(r.actualGrossMargin) : '—',
+          r.actualGrossMargin != null
+            ? formatCurrency(r.actualGrossMargin)
+            : '—',
         plannedGrossMarginPct: `${r.plannedGrossMarginPct.toFixed(1)}%`,
         actualGrossMarginPct:
           r.actualGrossMarginPct != null
             ? `${r.actualGrossMarginPct.toFixed(1)}%`
             : '—',
         avgSalaryPerHead:
-          r.avgSalaryPerHead != null ? formatCurrency(r.avgSalaryPerHead) : '—',
+          r.avgSalaryPerHead != null
+            ? formatCurrency(r.avgSalaryPerHead)
+            : '—',
         customerName: r.customerName,
       }));
   }, [buMetrics.rows]);
 
   const columns = [
-    { title: 'Customer', dataIndex: 'customer', key: 'customer', fixed: 'left' as const, width: 150 },
+    {
+      title: 'Customer',
+      dataIndex: 'customer',
+      key: 'customer',
+      fixed: 'left' as const,
+      width: 150,
+    },
     {
       title: 'Planned Revenue (Rs L)',
       dataIndex: 'plannedRevenue',
@@ -1159,7 +1354,7 @@ function BuMetricsPanel({ buMetrics, navigate }: BuMetricsPanelProps) {
       title: 'Action',
       key: 'action',
       width: 140,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: { customerName: string }) => (
         <Button
           size="small"
           onClick={() =>
@@ -1176,9 +1371,11 @@ function BuMetricsPanel({ buMetrics, navigate }: BuMetricsPanelProps) {
 
   return (
     <Card>
-      <Title level={4} style={{ fontFamily: HEADING_FONT }}>
-        BU Metrics
-      </Title>
+      <PanelHelpTitle
+        title={`BU Metrics — ${buMetrics.periodLabel}`}
+        helpTitle="BU Metrics"
+        helpContent={PANEL_HELP.buMetrics}
+      />
       <Table
         dataSource={dataSource}
         columns={columns}
@@ -1193,122 +1390,235 @@ function BuMetricsPanel({ buMetrics, navigate }: BuMetricsPanelProps) {
 interface PlSummaryPanelProps {
   pva: PlanVsActualResult;
   cols: FyMonthCol[];
+  granularity: PeriodGranularity;
+  selectedMonth: number;
+  selectedYear: number;
+  selectedQuarter: number;
   token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function PlSummaryPanel({ pva, cols }: PlSummaryPanelProps) {
+function PeriodSummaryCard({
+  pva,
+  token,
+}: {
+  pva: PlanVsActualResult;
+  token: ReturnType<typeof theme.useToken>['token'];
+}) {
+  const t = pva.selectedPeriod;
+  return (
+    <Card size="small" title={`${pva.periodLabel} summary`}>
+      {pva.actualsCoverageNote && (
+        <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+          {pva.actualsCoverageNote}
+        </Text>
+      )}
+      <Row gutter={16}>
+        {(
+          [
+            ['Revenue', t.totalRevenue],
+            ['Salary', t.totalSalaryCost],
+            ['Overhead', t.totalOverhead],
+            ['EBITDA', t.ebitda],
+          ] as const
+        ).map(([label, triad]) => (
+          <Col span={6} key={label}>
+            <Statistic
+              title={label}
+              value={formatCurrency(triad.actual ?? triad.plan)}
+            />
+            <VarianceText
+              variance={triad.variance}
+              plan={triad.plan}
+              favorPositive={label === 'Revenue' || label === 'EBITDA'}
+              token={token}
+            />
+          </Col>
+        ))}
+      </Row>
+    </Card>
+  );
+}
+
+function PlSummaryPanel({
+  pva,
+  cols,
+  granularity,
+  selectedMonth,
+  selectedYear,
+  selectedQuarter,
+  token,
+}: PlSummaryPanelProps) {
   const [mode, setMode] = useState<'plan' | 'actual'>('plan');
 
   const dataSource = useMemo(() => {
     const rows = [
       { key: 'revenue', label: 'Total Revenue', field: 'totalRevenue' as const },
       { key: 'cogs', label: 'Total COGS', field: 'totalCogs' as const },
-      { key: 'grossProfit', label: 'Gross Profit', field: 'grossProfit' as const },
+      {
+        key: 'grossProfit',
+        label: 'Gross Profit',
+        field: 'grossProfit' as const,
+      },
       { key: 'grossMargin', label: 'Gross Margin %', field: null },
       { key: 'opex', label: 'Total OpEx', field: null },
       { key: 'ebitda', label: 'EBITDA', field: 'ebitda' as const },
     ];
 
     return rows.map((row) => {
-      const record: Record<string, any> = {
+      const record: Record<string, string> = {
         key: row.key,
         label: row.label,
       };
 
-      cols.forEach((col) => {
-        const monthData = pva.months.find(
-          (m) => m.month === col.planMonth && m.year === col.planYear,
-        );
-        if (!monthData) {
-          record[col.key] = '—';
-          return;
-        }
-
+      const fillFromPeriod = (
+        key: string,
+        data: {
+          totalRevenue: { plan: number; actual: number | null };
+          totalCogs: { plan: number; actual: number | null };
+          grossProfit: { plan: number; actual: number | null };
+          ebitda: { plan: number; actual: number | null };
+        },
+      ) => {
         if (row.field === null) {
           if (row.key === 'grossMargin') {
-            const revenue = mode === 'plan' ? monthData.totalRevenue.plan : (monthData.totalRevenue.actual ?? monthData.totalRevenue.plan);
-            const gp = mode === 'plan' ? monthData.grossProfit.plan : (monthData.grossProfit.actual ?? monthData.grossProfit.plan);
-            record[col.key] = revenue > 0 ? `${((gp / revenue) * 100).toFixed(1)}%` : '—';
+            const revenue =
+              mode === 'plan'
+                ? data.totalRevenue.plan
+                : (data.totalRevenue.actual ?? data.totalRevenue.plan);
+            const gp =
+              mode === 'plan'
+                ? data.grossProfit.plan
+                : (data.grossProfit.actual ?? data.grossProfit.plan);
+            record[key] =
+              revenue > 0 ? `${((gp / revenue) * 100).toFixed(1)}%` : '—';
           } else if (row.key === 'opex') {
-            const gp = mode === 'plan' ? monthData.grossProfit.plan : (monthData.grossProfit.actual ?? monthData.grossProfit.plan);
-            const ebitda = mode === 'plan' ? monthData.ebitda.plan : (monthData.ebitda.actual ?? monthData.ebitda.plan);
-            record[col.key] = formatCurrency(gp - ebitda);
+            const gp =
+              mode === 'plan'
+                ? data.grossProfit.plan
+                : (data.grossProfit.actual ?? data.grossProfit.plan);
+            const ebitda =
+              mode === 'plan'
+                ? data.ebitda.plan
+                : (data.ebitda.actual ?? data.ebitda.plan);
+            record[key] = formatCurrency(gp - ebitda);
           }
         } else {
-          const value = mode === 'plan' ? monthData[row.field].plan : (monthData[row.field].actual ?? monthData[row.field].plan);
-          record[col.key] = formatCurrency(value);
+          const value =
+            mode === 'plan'
+              ? data[row.field].plan
+              : (data[row.field].actual ?? data[row.field].plan);
+          record[key] = formatCurrency(value);
         }
-      });
+      };
 
-      // Q1-Q4
-      ['q1', 'q2', 'q3', 'q4'].forEach((q) => {
-        const qData = pva[q as 'q1' | 'q2' | 'q3' | 'q4'];
-        if (row.field === null) {
-          if (row.key === 'grossMargin') {
-            const revenue = mode === 'plan' ? qData.totalRevenue.plan : (qData.totalRevenue.actual ?? qData.totalRevenue.plan);
-            const gp = mode === 'plan' ? qData.grossProfit.plan : (qData.grossProfit.actual ?? qData.grossProfit.plan);
-            record[q] = revenue > 0 ? `${((gp / revenue) * 100).toFixed(1)}%` : '—';
-          } else if (row.key === 'opex') {
-            const gp = mode === 'plan' ? qData.grossProfit.plan : (qData.grossProfit.actual ?? qData.grossProfit.plan);
-            const ebitda = mode === 'plan' ? qData.ebitda.plan : (qData.ebitda.actual ?? qData.ebitda.plan);
-            record[q] = formatCurrency(gp - ebitda);
+      if (granularity === 'MONTHLY') {
+        cols.forEach((col) => {
+          const monthData = pva.months.find(
+            (m) => m.month === col.planMonth && m.year === col.planYear,
+          );
+          if (!monthData) {
+            record[col.key] = '—';
+            return;
           }
-        } else {
-          const value = mode === 'plan' ? qData[row.field].plan : (qData[row.field].actual ?? qData[row.field].plan);
-          record[q] = formatCurrency(value);
-        }
-      });
-
-      // FY
-      const fyData = pva.fy;
-      if (row.field === null) {
-        if (row.key === 'grossMargin') {
-          const revenue = mode === 'plan' ? fyData.totalRevenue.plan : (fyData.totalRevenue.actual ?? fyData.totalRevenue.plan);
-          const gp = mode === 'plan' ? fyData.grossProfit.plan : (fyData.grossProfit.actual ?? fyData.grossProfit.plan);
-          record.fy = revenue > 0 ? `${((gp / revenue) * 100).toFixed(1)}%` : '—';
-        } else if (row.key === 'opex') {
-          const gp = mode === 'plan' ? fyData.grossProfit.plan : (fyData.grossProfit.actual ?? fyData.grossProfit.plan);
-          const ebitda = mode === 'plan' ? fyData.ebitda.plan : (fyData.ebitda.actual ?? fyData.ebitda.plan);
-          record.fy = formatCurrency(gp - ebitda);
-        }
+          fillFromPeriod(col.key, monthData);
+        });
+      } else if (granularity === 'QUARTERLY') {
+        (['q1', 'q2', 'q3', 'q4'] as const).forEach((q) => {
+          fillFromPeriod(q, pva[q]);
+        });
       } else {
-        const value = mode === 'plan' ? fyData[row.field].plan : (fyData[row.field].actual ?? fyData[row.field].plan);
-        record.fy = formatCurrency(value);
+        fillFromPeriod('selected', pva.selectedPeriod);
       }
 
       return record;
     });
-  }, [pva, cols, mode]);
+  }, [pva, cols, mode, granularity]);
 
-  const columns = [
-    {
+  const columns = useMemo(() => {
+    const metricCol = {
       title: 'Metric',
       dataIndex: 'label',
       key: 'label',
       fixed: 'left' as const,
       width: 150,
-    },
-    ...cols.map((col) => ({
-      title: `${col.label} (Rs L)`,
-      key: col.key,
-      dataIndex: col.key,
-      width: 110,
-      align: 'right' as const,
-    })),
-    { title: 'Q1 (Rs L)', key: 'q1', dataIndex: 'q1', width: 110, align: 'right' as const },
-    { title: 'Q2 (Rs L)', key: 'q2', dataIndex: 'q2', width: 110, align: 'right' as const },
-    { title: 'Q3 (Rs L)', key: 'q3', dataIndex: 'q3', width: 110, align: 'right' as const },
-    { title: 'Q4 (Rs L)', key: 'q4', dataIndex: 'q4', width: 110, align: 'right' as const },
-    { title: 'FY (Rs L)', key: 'fy', dataIndex: 'fy', width: 110, align: 'right' as const },
-  ];
+    };
+
+    if (granularity === 'MONTHLY') {
+      return [
+        metricCol,
+        ...cols.map((col) => {
+          const selected =
+            col.planMonth === selectedMonth && col.planYear === selectedYear;
+          return {
+            title: `${col.label} (Rs L)`,
+            key: col.key,
+            dataIndex: col.key,
+            width: 110,
+            align: 'right' as const,
+            onHeaderCell: () => ({
+              style: selected
+                ? { background: token.colorPrimaryBg, fontWeight: 600 }
+                : undefined,
+            }),
+            onCell: () => ({
+              style: selected
+                ? { background: token.colorPrimaryBg }
+                : undefined,
+            }),
+          };
+        }),
+      ];
+    }
+
+    if (granularity === 'QUARTERLY') {
+      return [
+        metricCol,
+        ...(['q1', 'q2', 'q3', 'q4'] as const).map((q, i) => {
+          const selected = i + 1 === selectedQuarter;
+          return {
+            title: `${q.toUpperCase()} (Rs L)`,
+            key: q,
+            dataIndex: q,
+            width: 120,
+            align: 'right' as const,
+            onHeaderCell: () => ({
+              style: selected
+                ? { background: token.colorPrimaryBg, fontWeight: 600 }
+                : undefined,
+            }),
+            onCell: () => ({
+              style: selected
+                ? { background: token.colorPrimaryBg }
+                : undefined,
+            }),
+          };
+        }),
+      ];
+    }
+
+    return [
+      metricCol,
+      {
+        title: `${pva.periodLabel} (Rs L)`,
+        key: 'selected',
+        dataIndex: 'selected',
+        width: 160,
+        align: 'right' as const,
+      },
+    ];
+  }, [
+    granularity,
+    cols,
+    selectedMonth,
+    selectedYear,
+    selectedQuarter,
+    pva.periodLabel,
+    token,
+  ]);
 
   return (
     <Card>
-      <Space
-        direction="vertical"
-        size="middle"
-        style={{ width: '100%' }}
-      >
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <div
           style={{
             display: 'flex',
@@ -1316,14 +1626,17 @@ function PlSummaryPanel({ pva, cols }: PlSummaryPanelProps) {
             alignItems: 'center',
           }}
         >
-          <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
-            P&L Summary
-          </Title>
+          <PanelHelpTitle
+            title="P&L Summary"
+            helpTitle="P&L Summary"
+            helpContent={PANEL_HELP.plSummary}
+          />
           <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)}>
             <Radio.Button value="plan">Plan</Radio.Button>
             <Radio.Button value="actual">Actual</Radio.Button>
           </Radio.Group>
         </div>
+        <PeriodSummaryCard pva={pva} token={token} />
         <Table
           dataSource={dataSource}
           columns={columns}
@@ -1356,9 +1669,11 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
 
   return (
     <Card>
-      <Title level={4} style={{ fontFamily: HEADING_FONT }}>
-        Cost per Employee
-      </Title>
+      <PanelHelpTitle
+        title={`Cost per Employee — ${costPerEmp.periodLabel}`}
+        helpTitle="Cost per Employee"
+        helpContent={PANEL_HELP.costPerEmployee}
+      />
       <Tabs
         items={categories.map((cat) => ({
           key: cat.key,
@@ -1368,8 +1683,23 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
               <Table
                 dataSource={[
                   {
+                    key: 'gross',
+                    layer: 'Avg Gross Pay per Head',
+                    amount: formatCurrency(cat.data.grossPayPerHead),
+                  },
+                  {
+                    key: 'contrib',
+                    layer:
+                      cat.data.employerContributionsSource === 'ACTUAL'
+                        ? 'Avg Employer Contributions per Head (actual)'
+                        : 'Avg Employer Contributions per Head (13% estimate)',
+                    amount: formatCurrency(
+                      cat.data.employerContributionsPerHead,
+                    ),
+                  },
+                  {
                     key: 'layer1',
-                    layer: 'Layer 1',
+                    layer: 'Total Layer 1',
                     amount: formatCurrency(cat.data.layer1),
                   },
                   {
@@ -1403,7 +1733,8 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
               {cat.key === 'billable' && (
                 <Space direction="vertical">
                   <Text>
-                    <strong>Minimum Billing Rate:</strong> {formatCurrency(minBillingRate)} Rs L/head
+                    <strong>Minimum Billing Rate:</strong>{' '}
+                    {formatCurrency(minBillingRate)} Rs L/head
                   </Text>
                   <Space>
                     <Text>Target Margin %:</Text>
@@ -1416,7 +1747,8 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
                     />
                   </Space>
                   <Text>
-                    <strong>Target Rate:</strong> {formatCurrency(targetRate)} Rs L/head
+                    <strong>Target Rate:</strong> {formatCurrency(targetRate)}{' '}
+                    Rs L/head
                   </Text>
                 </Space>
               )}
@@ -1430,145 +1762,115 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
 
 interface DeltaViewPanelProps {
   delta: DeltaResult;
-  cols: FyMonthCol[];
   token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function DeltaViewPanel({ delta, cols, token }: DeltaViewPanelProps) {
+function DeltaViewPanel({ delta, token }: DeltaViewPanelProps) {
+  const period = delta.periodTotal;
+
   const dataSource = useMemo(() => {
     const rows = [
-      { key: 'revenue', label: 'Revenue', field: 'totalRevenue' as const, favorPositive: true },
-      { key: 'billableHc', label: 'Billable HC', field: null, favorPositive: true },
-      { key: 'billableRatio', label: 'Billable Ratio %', field: null, favorPositive: true },
-      { key: 'salary', label: 'Salary', field: 'totalSalaryCost' as const, favorPositive: false },
-      { key: 'overhead', label: 'Overhead', field: 'totalOverhead' as const, favorPositive: false },
-      { key: 'grossProfit', label: 'Gross Profit', field: 'grossProfit' as const, favorPositive: true },
-      { key: 'ebitda', label: 'EBITDA', field: 'ebitda' as const, favorPositive: true },
+      {
+        key: 'revenue',
+        label: 'Revenue',
+        value: num(period.totalRevenue),
+        favorPositive: true,
+      },
+      {
+        key: 'billableHc',
+        label: 'Billable HC',
+        value: num(period.hc.billableHc),
+        favorPositive: true,
+        format: 'hc' as const,
+      },
+      {
+        key: 'billableRatio',
+        label: 'Billable Ratio %',
+        value: billableRatio(period.hc.billableHc, period.hc.totalHc),
+        favorPositive: true,
+        format: 'pct' as const,
+      },
+      {
+        key: 'salary',
+        label: 'Salary',
+        value: num(period.totalSalaryCost),
+        favorPositive: false,
+      },
+      {
+        key: 'overhead',
+        label: 'Overhead',
+        value: num(period.totalOverhead),
+        favorPositive: false,
+      },
+      {
+        key: 'grossProfit',
+        label: 'Gross Profit',
+        value: num(period.grossProfit),
+        favorPositive: true,
+      },
+      {
+        key: 'ebitda',
+        label: 'EBITDA',
+        value: num(period.ebitda),
+        favorPositive: true,
+      },
     ];
 
     return rows.map((row) => {
-      const record: Record<string, any> = {
-        key: row.key,
-        label: row.label,
-      };
-
-      let fyTotal = 0;
-
-      cols.forEach((col) => {
-        const monthData = delta.months.find(
-          (m) => m.month === col.planMonth && m.year === col.planYear,
-        );
-        if (!monthData) {
-          record[col.key] = { value: '—', color: undefined };
-          return;
-        }
-
-        let value = 0;
-        if (row.field === null) {
-          if (row.key === 'billableHc') {
-            value = monthData.hc.billableHc;
-          } else if (row.key === 'billableRatio') {
-            value = billableRatio(monthData.hc.billableHc, monthData.hc.totalHc);
-          }
-        } else {
-          value = num(monthData[row.field]);
-        }
-
-        fyTotal += value;
-
-        const color =
-          value === 0
-            ? undefined
-            : row.favorPositive
-            ? value > 0
-              ? token.colorSuccess
-              : token.colorError
-            : value > 0
-            ? token.colorError
-            : token.colorSuccess;
-
-        record[col.key] = {
-          value:
-            row.key === 'billableHc'
-              ? value.toFixed(0)
-              : row.key === 'billableRatio'
-              ? `${value.toFixed(1)}%`
-              : formatCurrency(value),
-          color,
-        };
-      });
-
-      const fyColor =
-        fyTotal === 0
+      const color =
+        row.value === 0
           ? undefined
           : row.favorPositive
-          ? fyTotal > 0
-            ? token.colorSuccess
-            : token.colorError
-          : fyTotal > 0
-          ? token.colorError
-          : token.colorSuccess;
-
-      record.fy = {
-        value:
-          row.key === 'billableHc'
-            ? fyTotal.toFixed(0)
-            : row.key === 'billableRatio'
-            ? `${fyTotal.toFixed(1)}%`
-            : formatCurrency(fyTotal),
-        color: fyColor,
+            ? row.value > 0
+              ? token.colorSuccess
+              : token.colorError
+            : row.value > 0
+              ? token.colorError
+              : token.colorSuccess;
+      const display =
+        row.format === 'hc'
+          ? row.value.toFixed(0)
+          : row.format === 'pct'
+            ? `${row.value.toFixed(1)}%`
+            : formatCurrency(row.value);
+      return {
+        key: row.key,
+        label: row.label,
+        value: display,
+        color,
       };
-
-      return record;
     });
-  }, [delta, cols, token]);
+  }, [period, token]);
 
   const columns = [
     {
       title: 'Metric',
       dataIndex: 'label',
       key: 'label',
-      fixed: 'left' as const,
-      width: 150,
+      width: 180,
     },
-    ...cols.map((col) => ({
-      title: col.label,
-      key: col.key,
-      dataIndex: col.key,
-      width: 100,
-      align: 'right' as const,
-      render: (cell: { value: string; color?: string }) =>
-        cell ? (
-          <span style={{ color: cell.color }}>{cell.value}</span>
-        ) : (
-          '—'
-        ),
-    })),
     {
-      title: 'FY',
-      key: 'fy',
-      dataIndex: 'fy',
-      width: 120,
+      title: `Delta — ${delta.periodLabel}`,
+      dataIndex: 'value',
+      key: 'value',
       align: 'right' as const,
-      render: (cell: { value: string; color?: string }) =>
-        cell ? (
-          <span style={{ color: cell.color }}>{cell.value}</span>
-        ) : (
-          '—'
-        ),
+      render: (text: string, record: { color?: string }) => (
+        <span style={{ color: record.color }}>{text}</span>
+      ),
     },
   ];
 
   return (
     <Card>
-      <Title level={4} style={{ fontFamily: HEADING_FONT }}>
-        Delta View
-      </Title>
+      <PanelHelpTitle
+        title={`Delta View — ${delta.periodLabel}`}
+        helpTitle="Delta View"
+        helpContent={PANEL_HELP.deltaView}
+      />
       <Table
         dataSource={dataSource}
         columns={columns}
         pagination={false}
-        scroll={{ x: true }}
         size="small"
       />
     </Card>

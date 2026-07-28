@@ -23,5 +23,13 @@ public final class SystemAttribute {
     public static final String GROSS_PAY = "GrossPay";
     public static final String NET_PAY = "NetPay";
     public static final String CTC_PER_ANNUM = "CtcPerAnnum";
+    /** Optional employer contribution columns (ADR-045). Unmapped → null (zero in generated sum). */
+    public static final String EPF_CONTRIBUTION = "EpfContribution";
+    public static final String EPS_CONTRIBUTION = "EpsContribution";
+    public static final String EDLI_CONTRIBUTION = "EdliContribution";
+    public static final String EPF_ADMIN_CHARGES = "EpfAdminCharges";
+    public static final String VPF = "Vpf";
+    public static final String NPS_DEDUCTION = "NpsDeduction";
+    public static final String GRATUITY = "Gratuity";
     public static final String LAST_WORKING_DAY = "LastWorkingDay";
 }

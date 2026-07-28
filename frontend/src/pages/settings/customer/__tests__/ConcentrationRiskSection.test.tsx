@@ -6,6 +6,21 @@ import type { ConcentrationRiskConfig } from '@/pages/customers/types';
 import ConcentrationRiskSection from '../ConcentrationRiskSection';
 
 vi.mock('@/pages/customers/api');
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({
+    token: 'test',
+    email: 'admin@cognologix.com',
+    role: 'ADMIN',
+    mustChangePassword: false,
+    isAuthenticated: true,
+    isAdmin: () => true,
+    login: vi.fn(),
+    logout: vi.fn(),
+    clearMustChangePassword: vi.fn(),
+    refreshSession: vi.fn(),
+  }),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
 vi.mock('antd', async (importOriginal) => {
   const actual = await importOriginal<typeof import('antd')>();
   return {

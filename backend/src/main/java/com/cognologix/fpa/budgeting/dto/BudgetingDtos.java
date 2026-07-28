@@ -14,7 +14,13 @@ public final class BudgetingDtos {
             UUID financialYearPlanId,
             String fiscalYear,
             UUID baselineVersionId,
-            List<MonthlyFinancials> months
+            List<MonthlyFinancials> months,
+            /** ADR-049 — always 12 months; highlight fields describe the selected period. */
+            String granularity,
+            String periodLabel,
+            Integer highlightMonth,
+            Integer highlightYear,
+            Integer highlightQuarter
     ) {}
 
     /**
@@ -30,7 +36,11 @@ public final class BudgetingDtos {
             UUID financialYearPlanId,
             String fiscalYear,
             UUID baselineVersionId,
-            List<MonthlyFinancials> months
+            List<MonthlyFinancials> months,
+            String granularity,
+            String periodLabel,
+            /** Aggregated delta for the selected period (ADR-049). */
+            MonthlyFinancials periodTotal
     ) {}
 
     public record PlanVsActualResult(
@@ -42,13 +52,24 @@ public final class BudgetingDtos {
             PeriodTotals q2,
             PeriodTotals q3,
             PeriodTotals q4,
-            PeriodTotals fy
+            PeriodTotals fy,
+            String granularity,
+            String periodLabel,
+            /** Period-scoped totals for Headline KPIs / summary cards (ADR-049). */
+            PeriodTotals selectedPeriod,
+            /** e.g. {@code Actuals: Apr–Jun 2026 (3 of 12 months)} — set for ANNUAL when partial. */
+            String actualsCoverageNote,
+            Integer monthsWithActuals,
+            Integer totalMonthsInFy
     ) {}
 
     public record CostPerEmployeeResult(
             UUID financialYearPlanId,
-            int month,
-            int year,
+            Integer month,
+            Integer year,
+            Integer quarter,
+            String granularity,
+            String periodLabel,
             boolean fromActuals,
             CategoryCost billable,
             CategoryCost bench,
@@ -59,8 +80,11 @@ public final class BudgetingDtos {
 
     public record BuMetricsResult(
             UUID financialYearPlanId,
-            int month,
-            int year,
+            Integer month,
+            Integer year,
+            Integer quarter,
+            String granularity,
+            String periodLabel,
             List<BuMetricRow> rows
     ) {}
 
@@ -87,6 +111,8 @@ public final class BudgetingDtos {
             int month,
             int year,
             boolean hasActuals,
+            /** {@code REVENUE_MODULE}, {@code MANUAL_OVERRIDE}, or null when no revenue actuals. */
+            String revenueSource,
             TriadHc hc,
             TriadSalary salary,
             List<TriadClientRevenue> revenueByClient,
@@ -142,6 +168,10 @@ public final class BudgetingDtos {
     public record CategoryCost(
             String category,
             int headcount,
+            BigDecimal grossPayPerHead,
+            BigDecimal employerContributionsPerHead,
+            /** {@code ACTUAL} when from period_actuals; {@code ESTIMATE_13PCT} for plan months. */
+            String employerContributionsSource,
             BigDecimal layer1,
             BigDecimal layer2,
             BigDecimal layer3,

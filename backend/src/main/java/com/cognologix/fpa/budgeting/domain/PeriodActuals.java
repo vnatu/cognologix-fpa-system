@@ -65,6 +65,27 @@ public class PeriodActuals {
     @Column(name = "actual_management_salaries", precision = 12, scale = 2)
     private BigDecimal actualManagementSalaries;
 
+    @Column(name = "actual_billable_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal actualBillableEmployerContributions;
+
+    @Column(name = "actual_bench_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal actualBenchEmployerContributions;
+
+    @Column(name = "actual_support_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal actualSupportEmployerContributions;
+
+    @Column(name = "actual_leadership_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal actualLeadershipEmployerContributions;
+
+    @Column(name = "actual_management_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal actualManagementEmployerContributions;
+
+    @Column(name = "actual_total_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal actualTotalEmployerContributions;
+
+    @Column(name = "actual_total_payroll_cost", precision = 12, scale = 2)
+    private BigDecimal actualTotalPayrollCost;
+
     @Column(name = "actual_revenue_manual", precision = 12, scale = 2)
     private BigDecimal actualRevenueManual;
 

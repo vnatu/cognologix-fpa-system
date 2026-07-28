@@ -1,8 +1,8 @@
 package com.cognologix.fpa.revenue;
 
-import com.cognologix.fpa.budgeting.BudgetingService;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.general.FxRate;
+import com.cognologix.fpa.general.BackupSheet;
 import com.cognologix.fpa.general.GeneralConfigService;
 import com.cognologix.fpa.people.MappingTemplateApi;
 import com.cognologix.fpa.people.PeoplePayrollService;
@@ -41,10 +41,11 @@ public class RevenueService {
     private final RevenueInvoiceRepository revenueInvoiceRepository;
     private final RevenueCreditNoteRepository revenueCreditNoteRepository;
     private final RevenueExcelParser revenueExcelParser;
+    private final RevenueExcelExporter revenueExcelExporter;
     private final PeoplePayrollService peoplePayrollService;
     private final CustomerService customerService;
     private final GeneralConfigService generalConfigService;
-    private final BudgetingService budgetingService;
+    private final RevenueModuleBackup revenueModuleBackup;
 
     // ── Column mapping (shared import_column_mapping table via People public API) ──
 
@@ -247,8 +248,11 @@ public class RevenueService {
                 .build();
     }
 
+    /**
+     * USD→INR only. INR (and default unmapped currency) keeps amount_inr = amount with no fx_rate_id.
+     */
     private FxConversion convertToInr(BigDecimal amount, RevenueCurrency currency, LocalDate asOf) {
-        if (currency == RevenueCurrency.INR) {
+        if (currency != RevenueCurrency.USD) {
             return new FxConversion(amount, null);
         }
         FxRate rate = generalConfigService.findRateOnDate(USD_INR, asOf)
@@ -335,8 +339,22 @@ public class RevenueService {
                 invoiceTotalInr.subtract(creditTotalInr));
     }
 
+    /**
+     * Net revenue per client for a period.
+     *
+     * @return {@code null} when no active Zoho Books invoice/credit-note upload exists for the
+     *         period (Budgeting falls back to {@code actual_revenue_manual}); otherwise the
+     *         per-client list (may be empty if uploads exist but contain no rows).
+     */
     public List<MonthlyRevenueSummary> getAllClientsMonthlyRevenue(int periodMonth, int periodYear) {
         validatePeriod(periodMonth, periodYear);
+        boolean hasUpload =
+                findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear).isPresent()
+                || findActiveUpload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear).isPresent();
+        if (!hasUpload) {
+            return null;
+        }
+
         Map<String, BigDecimal[]> totals = new LinkedHashMap<>();
 
         findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear)
@@ -390,6 +408,21 @@ public class RevenueService {
             int page,
             int size) {
 
+        List<InvoiceListItem> all = listAllInvoiceItems(customerId, periodMonth, periodYear, status, importType);
+
+        int from = Math.min(page * size, all.size());
+        int to = Math.min(from + size, all.size());
+        int totalPages = size == 0 ? 0 : (int) Math.ceil((double) all.size() / size);
+        return new InvoiceListPage(all.subList(from, to), page, size, all.size(), totalPages);
+    }
+
+    public List<InvoiceListItem> listAllInvoiceItems(
+            String customerId,
+            Integer periodMonth,
+            Integer periodYear,
+            String status,
+            RevenueImportType importType) {
+
         List<UUID> invoiceUploadIds = new ArrayList<>();
         List<UUID> creditUploadIds = new ArrayList<>();
 
@@ -426,11 +459,27 @@ public class RevenueService {
                 .comparing(InvoiceListItem::periodYear).reversed()
                 .thenComparing(InvoiceListItem::periodMonth).reversed()
                 .thenComparing(InvoiceListItem::documentNumber));
+        return all;
+    }
 
-        int from = Math.min(page * size, all.size());
-        int to = Math.min(from + size, all.size());
-        int totalPages = size == 0 ? 0 : (int) Math.ceil((double) all.size() / size);
-        return new InvoiceListPage(all.subList(from, to), page, size, all.size(), totalPages);
+    public byte[] exportInvoices(
+            String customerId,
+            Integer periodMonth,
+            Integer periodYear,
+            String status) {
+        List<InvoiceListItem> items = listAllInvoiceItems(
+                customerId, periodMonth, periodYear, status, RevenueImportType.ZOHO_BOOKS_INVOICES);
+        return revenueExcelExporter.exportInvoices(items);
+    }
+
+    public byte[] exportCreditNotes(
+            String customerId,
+            Integer periodMonth,
+            Integer periodYear,
+            String status) {
+        List<InvoiceListItem> items = listAllInvoiceItems(
+                customerId, periodMonth, periodYear, status, RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES);
+        return revenueExcelExporter.exportCreditNotes(items);
     }
 
     private boolean matchesFilter(
@@ -490,9 +539,17 @@ public class RevenueService {
 
     // ── Dashboard ────────────────────────────────────────────────────────────
 
-    public DashboardResponse getDashboard(int periodMonth, int periodYear) {
+    /**
+     * Builds the Revenue Dashboard. Planned figures are supplied by the caller so this module
+     * does not depend on Budgeting (avoids a Modulith cycle with budgeting → revenue actuals).
+     */
+    public DashboardResponse getDashboard(
+            int periodMonth,
+            int periodYear,
+            PlannedRevenueLookup plannedRevenueLookup) {
         validatePeriod(periodMonth, periodYear);
-        List<MonthlyRevenueSummary> actuals = getAllClientsMonthlyRevenue(periodMonth, periodYear);
+        List<MonthlyRevenueSummary> actuals =
+                Objects.requireNonNullElse(getAllClientsMonthlyRevenue(periodMonth, periodYear), List.of());
 
         List<RevenueVsPlanRow> vsPlan = new ArrayList<>();
         for (MonthlyRevenueSummary actual : actuals) {
@@ -500,10 +557,10 @@ public class RevenueService {
                     customerService.resolveBuCustomer(actual.customerId());
             UUID customerUuid = customer.map(CustomerService.BuCustomerRef::id).orElse(null);
             BigDecimal planned = BigDecimal.ZERO;
-            if (customerUuid != null) {
-                planned = budgetingService.getClientRevenuePlan(customerUuid, periodMonth, periodYear)
-                        .map(BudgetingService.ClientRevenuePlanView::plannedTotal)
-                        .orElse(BigDecimal.ZERO);
+            if (customerUuid != null && plannedRevenueLookup != null) {
+                planned = Objects.requireNonNullElse(
+                        plannedRevenueLookup.plannedTotal(customerUuid, periodMonth, periodYear),
+                        BigDecimal.ZERO);
             }
             String name = customer.map(CustomerService.BuCustomerRef::customerName).orElse(actual.customerId());
             vsPlan.add(new RevenueVsPlanRow(
@@ -620,9 +677,15 @@ public class RevenueService {
                 .toList();
     }
 
+    /**
+     * Parses invoice/credit-note currency. Null/blank (unmapped Currency column) defaults to
+     * {@link RevenueCurrency#INR} so no FX conversion is applied. Only explicit USD uses FX
+     * (ADR-017). Note: Revenue spec §4 mentions customer billing-currency default — product
+     * decision for unmapped Currency is INR (no FX).
+     */
     private static RevenueCurrency parseCurrency(String raw) {
         if (raw == null || raw.isBlank()) {
-            return RevenueCurrency.USD;
+            return RevenueCurrency.INR;
         }
         try {
             return RevenueCurrency.valueOf(raw.trim().toUpperCase(Locale.ROOT));
@@ -659,5 +722,27 @@ public class RevenueService {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
+    }
+
+    /** Callers supply planned totals (e.g. from Budgeting) without creating a module cycle. */
+    @FunctionalInterface
+    public interface PlannedRevenueLookup {
+        BigDecimal plannedTotal(UUID customerId, int month, int year);
+    }
+
+    // ── Backup / restore (ADR-044 Tier 2) ────────────────────────────────────
+
+    public List<BackupSheet> exportBackupSheets() {
+        return revenueModuleBackup.exportBackupSheets();
+    }
+
+    @Transactional
+    public void wipeForRestore() {
+        revenueModuleBackup.wipeRevenueData();
+    }
+
+    @Transactional
+    public Map<String, Integer> restoreBackupSheets(Map<String, List<String[]>> rowsByFile) {
+        return revenueModuleBackup.restoreBackupSheets(rowsByFile);
     }
 }

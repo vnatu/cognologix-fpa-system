@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
+import com.cognologix.fpa.general.ExcelParserUtils;
 
 /**
  * Parses Project Code Excel imports — same column layout as export (ADR-027 extension).
@@ -46,8 +47,8 @@ public class ProjectCodeImportParser {
                 }
                 rows.add(new ParsedProjectCodeImportRow(
                         r + 1,
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_CUSTOMER_CODE))),
-                        cellValue(row, columnIndex.get(normalizeHeader(COL_PROJECT_CODE))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_CUSTOMER_CODE))),
+                        cellValue(row, columnIndex.get(ExcelParserUtils.normalizeHeader(COL_PROJECT_CODE))),
                         optionalCell(row, columnIndex, COL_DESCRIPTION)));
             }
             return rows;
@@ -92,7 +93,7 @@ public class ProjectCodeImportParser {
             if (header == null || header.isBlank()) {
                 continue;
             }
-            columnIndex.put(normalizeHeader(header), cell.getColumnIndex());
+            columnIndex.put(ExcelParserUtils.normalizeHeader(header), cell.getColumnIndex());
         }
         return columnIndex;
     }
@@ -100,7 +101,7 @@ public class ProjectCodeImportParser {
     private static void validateRequiredHeaders(Map<String, Integer> columnIndex) {
         List<String> missing = new ArrayList<>();
         for (String header : REQUIRED_HEADERS) {
-            if (!columnIndex.containsKey(normalizeHeader(header))) {
+            if (!columnIndex.containsKey(ExcelParserUtils.normalizeHeader(header))) {
                 missing.add(header);
             }
         }
@@ -109,9 +110,6 @@ public class ProjectCodeImportParser {
         }
     }
 
-    private static String normalizeHeader(String header) {
-        return header.trim().toLowerCase(Locale.ROOT);
-    }
 
     private static String cellValue(Row row, Integer columnIndex) {
         if (columnIndex == null) {
@@ -121,7 +119,7 @@ public class ProjectCodeImportParser {
     }
 
     private static String optionalCell(Row row, Map<String, Integer> columnIndex, String headerName) {
-        Integer idx = columnIndex.get(normalizeHeader(headerName));
+        Integer idx = columnIndex.get(ExcelParserUtils.normalizeHeader(headerName));
         if (idx == null) {
             return null;
         }

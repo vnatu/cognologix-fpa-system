@@ -56,7 +56,7 @@ public class RevenueInvoice {
     @Enumerated(EnumType.STRING)
     @Column(name = "currency", nullable = false, length = 3)
     @Builder.Default
-    private RevenueCurrency currency = RevenueCurrency.USD;
+    private RevenueCurrency currency = RevenueCurrency.INR;
 
     @Column(name = "project_code", length = 100)
     private String projectCode;

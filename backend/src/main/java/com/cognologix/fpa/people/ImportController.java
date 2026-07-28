@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import com.cognologix.fpa.general.AdminOnly;
 
 @RestController
 @RequestMapping("/api/people/imports")
@@ -39,6 +40,29 @@ public class ImportController {
                         Collectors.toList()));
     }
 
+    @GetMapping("/mappings/export")
+    @Operation(summary = "Export all active People & Payroll column mapping templates as Excel")
+    public ResponseEntity<byte[]> exportMappings() {
+        return excelAttachment(
+                peoplePayrollService.exportMappingTemplates(),
+                "mapping_templates_export.xlsx");
+    }
+
+    @GetMapping("/mappings/import/sample")
+    @Operation(summary = "Download mapping template import template (headers only)")
+    public ResponseEntity<byte[]> downloadMappingImportSample() {
+        return excelAttachment(
+                peoplePayrollService.buildMappingImportSample(),
+                "mapping_templates_import_template.xlsx");
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/mappings/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Import column mapping templates — one row per mapping line, grouped by import type and template name")
+    public SimpleImportResponse importMappings(@RequestPart("file") MultipartFile file) {
+        return peoplePayrollService.importMappingTemplates(file);
+    }
+
     @GetMapping("/mappings/{importType}")
     @Operation(summary = "Get the active template for an import type — 204 when none configured")
     public ResponseEntity<MappingTemplateResponse> getMapping(@PathVariable ImportType importType) {
@@ -47,6 +71,7 @@ public class ImportController {
                 .orElse(ResponseEntity.noContent().build());
     }
 
+    @AdminOnly
     @PostMapping("/mappings")
     @Operation(summary = "Create or replace the active template for an import type")
     public ResponseEntity<MappingTemplateResponse> createMapping(
@@ -58,12 +83,14 @@ public class ImportController {
         return ResponseEntity.status(HttpStatus.CREATED).body(MappingTemplateResponse.from(saved));
     }
 
+    @AdminOnly
     @PostMapping(value = "/parse-headers", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Parse Excel column headers and row count without persisting")
     public ParseHeadersResponse parseHeaders(@RequestPart("file") MultipartFile file) {
         return ParseHeadersResponse.from(excelSnapshotParser.parseHeaders(file));
     }
 
+    @AdminOnly
     @PostMapping(value = "/{periodVersionId}/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload a snapshot Excel file for a period version")
     public SnapshotUploadResponse upload(
@@ -90,5 +117,13 @@ public class ImportController {
             @PathVariable UUID periodVersionId,
             @PathVariable ImportType importType) {
         return peoplePayrollService.getSnapshotDetail(periodVersionId, importType);
+    }
+
+    private static ResponseEntity<byte[]> excelAttachment(byte[] content, String filename) {
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(content);
     }
 }

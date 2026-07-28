@@ -5,6 +5,9 @@ import com.cognologix.fpa.budgeting.repository.*;
 import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.customer.domain.LifecycleStatus;
+import com.cognologix.fpa.expenses.ExpenseService;
+import com.cognologix.fpa.expenses.dto.ExpenseDtos.ExpenseEntryRequest;
+import com.cognologix.fpa.expenses.repository.ExpenseActualRepository;
 import com.cognologix.fpa.people.PeriodFinalisedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +43,8 @@ class BudgetingCalculationsIntegrationTest {
     @Autowired PeriodBuActualsRepository periodBuActualsRepository;
     @Autowired ClientRevenueActualRepository clientRevenueActualRepository;
     @Autowired OverheadActualsRepository overheadActualsRepository;
+    @Autowired ExpenseService expenseService;
+    @Autowired ExpenseActualRepository expenseActualRepository;
     @Autowired HcPlanRepository hcPlanRepository;
     @Autowired SalaryBudgetRepository salaryBudgetRepository;
     @Autowired ClientRevenuePlanRepository clientRevenuePlanRepository;
@@ -54,6 +59,7 @@ class BudgetingCalculationsIntegrationTest {
         periodBuActualsRepository.deleteAll();
         clientRevenueActualRepository.deleteAll();
         overheadActualsRepository.deleteAll();
+        expenseActualRepository.deleteAll();
         periodActualsRepository.deleteAll();
         overheadBudgetRepository.deleteAll();
         clientRevenuePlanRepository.deleteAll();
@@ -106,9 +112,11 @@ class BudgetingCalculationsIntegrationTest {
                 UUID.randomUUID(), 4, 2026,
                 45, 5, 8, 6, 4,
                 bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
                 List.of(new PeriodFinalisedEvent.BuPeriodActual(
                         customerService.findCustomerRef(clientId).orElseThrow().customerCode(),
-                        40, bd("400000")))));
+                        40, bd("400000"), BigDecimal.ZERO, bd("400000")))));
 
         var rf = budgetingService.getRollingForecast(plan.getId());
         assertThat(rf.months()).hasSize(12);
@@ -131,6 +139,8 @@ class BudgetingCalculationsIntegrationTest {
                 UUID.randomUUID(), 4, 2026,
                 45, 5, 8, 6, 4,
                 bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
                 List.of()));
 
         var delta = budgetingService.getDelta(plan.getId());
@@ -152,6 +162,8 @@ class BudgetingCalculationsIntegrationTest {
                 UUID.randomUUID(), 4, 2026,
                 45, 5, 8, 6, 4,
                 bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
                 List.of()));
 
         var pva = budgetingService.getPlanVsActual(plan.getId());
@@ -172,15 +184,16 @@ class BudgetingCalculationsIntegrationTest {
 
     @Test
     void costPerEmployee_layer3AllocatedToBillableOnly() {
-        budgetingService.upsertOverheadActuals(plan.getId(), 4, 2026, List.of(
-                OverheadActuals.builder().overheadLine("office_rent").actualAmount(bd("100000")).build(),
-                OverheadActuals.builder().overheadLine("staff_medical").actualAmount(bd("20000")).build(),
-                OverheadActuals.builder().overheadLine("training_upskilling").actualAmount(bd("10000")).build()
-        ), "test");
+        saveExpenseActuals(4, 2026,
+                entry("office_rent", "100000"),
+                entry("staff_medical", "20000"),
+                entry("training_upskilling", "10000"));
 
         budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
                 UUID.randomUUID(), 4, 2026,
                 50, 10, 10, 5, 5,
+                bd("500000"), bd("80000"), bd("60000"), bd("90000"), bd("100000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 bd("500000"), bd("80000"), bd("60000"), bd("90000"), bd("100000"),
                 List.of()));
 
@@ -195,6 +208,19 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(cost.billable().layer3()).isEqualByComparingTo("2000.00");
     }
 
+    private ExpenseEntryRequest entry(String lineCode, String amount) {
+        UUID categoryId = expenseService.listAllCategories().stream()
+                .filter(c -> lineCode.equals(c.lineCode()))
+                .findFirst()
+                .orElseThrow()
+                .id();
+        return new ExpenseEntryRequest(categoryId, bd(amount), null);
+    }
+
+    private void saveExpenseActuals(int month, int year, ExpenseEntryRequest... entries) {
+        expenseService.saveMonthlyExpenses(month, year, List.of(entries), "test");
+    }
+
     @Test
     void buMetrics_grossMarginCalculation() {
         var code = customerService.findCustomerRef(clientId).orElseThrow().customerCode();
@@ -202,7 +228,9 @@ class BudgetingCalculationsIntegrationTest {
                 UUID.randomUUID(), 4, 2026,
                 50, 10, 8, 6, 4,
                 bd("500000"), bd("50000"), bd("40000"), bd("80000"), bd("100000"),
-                List.of(new PeriodFinalisedEvent.BuPeriodActual(code, 40, bd("400000")))));
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("500000"), bd("50000"), bd("40000"), bd("80000"), bd("100000"),
+                List.of(new PeriodFinalisedEvent.BuPeriodActual(code, 40, bd("400000"), BigDecimal.ZERO, bd("400000")))));
 
         budgetingService.upsertRevenueActuals(plan.getId(), 4, 2026, bd("1100000"),
                 List.of(ClientRevenueActual.builder().customerId(clientId).actualRevenue(bd("1100000")).build()),
@@ -219,6 +247,104 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(row.actualSalaryCost()).isEqualByComparingTo("400000");
         assertThat(row.actualGrossMargin()).isEqualByComparingTo("700000");
         assertThat(row.actualGrossMarginPct()).isEqualByComparingTo("63.64");
+    }
+
+    @Test
+    void planVsActual_monthlySelectedPeriod_matchesSingleMonth() {
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                45, 5, 8, 6, 4,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        var pva = budgetingService.getPlanVsActual(
+                plan.getId(), null, PeriodGranularity.MONTHLY, 4, 2026, null);
+
+        assertThat(pva.granularity()).isEqualTo("MONTHLY");
+        assertThat(pva.periodLabel()).isEqualTo("April 2026");
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("770000");
+        assertThat(pva.selectedPeriod().totalSalaryCost().actual()).isEqualByComparingTo("685000");
+        assertThat(pva.actualsCoverageNote()).isNull();
+    }
+
+    @Test
+    void planVsActual_annualYtd_excludesMonthsWithoutActuals() {
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                45, 5, 8, 6, 4,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        var pva = budgetingService.getPlanVsActual(
+                plan.getId(), null, PeriodGranularity.ANNUAL, null, null, null);
+
+        assertThat(pva.granularity()).isEqualTo("ANNUAL");
+        assertThat(pva.periodLabel()).isEqualTo("FY2627");
+        assertThat(pva.monthsWithActuals()).isEqualTo(1);
+        assertThat(pva.actualsCoverageNote()).contains("1 of 12 months");
+        // YTD plan = April only (May has plan but no actuals)
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("770000");
+        assertThat(pva.selectedPeriod().totalSalaryCost().actual()).isEqualByComparingTo("685000");
+    }
+
+    @Test
+    void planVsActual_quarterlySumsThreeMonths() {
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                45, 5, 8, 6, 4,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        var pva = budgetingService.getPlanVsActual(
+                plan.getId(), null, PeriodGranularity.QUARTERLY, null, 2026, 1);
+
+        assertThat(pva.periodLabel()).isEqualTo("Q1 FY2627");
+        // Apr plan 770k + May plan 825k + Jun plan 0 = 1,595,000
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("1595000");
+    }
+
+    @Test
+    void delta_periodTotal_sumsSelectedMonths() {
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                45, 5, 8, 6, 4,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        var delta = budgetingService.getDelta(plan.getId(), PeriodGranularity.MONTHLY, 4, 2026, null);
+        assertThat(delta.periodTotal().salary().billable()).isEqualByComparingTo("-50000");
+        assertThat(delta.months()).hasSize(12);
+    }
+
+    @Test
+    void findLatestActualsMonth_returnsMostRecentInFyOrder() {
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                45, 5, 8, 6, 4,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 5, 2026,
+                50, 5, 8, 6, 4,
+                bd("500000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("500000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        var latest = budgetingService.findLatestActualsMonth(plan.getId());
+        assertThat(latest).isPresent();
+        assertThat(latest.get().getMonthValue()).isEqualTo(5);
+        assertThat(latest.get().getYear()).isEqualTo(2026);
     }
 
     private static HcPlan hc(int month, int year, int billable) {

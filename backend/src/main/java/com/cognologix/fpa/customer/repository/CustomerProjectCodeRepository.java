@@ -15,10 +15,10 @@ public interface CustomerProjectCodeRepository extends JpaRepository<CustomerPro
 
     Optional<CustomerProjectCode> findByCustomerIdAndProjectCode(UUID customerId, String projectCode);
 
+    /** All project codes for all customers — no customer filter (export / backup). */
     @Query("""
             SELECT pc FROM CustomerProjectCode pc
             JOIN FETCH pc.customer c
-            ORDER BY c.customerCode ASC, pc.projectCode ASC
             """)
     List<CustomerProjectCode> findAllForExport();
 

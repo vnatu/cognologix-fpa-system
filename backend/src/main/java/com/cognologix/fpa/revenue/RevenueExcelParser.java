@@ -1,6 +1,7 @@
 package com.cognologix.fpa.revenue;
 
-
+import com.cognologix.fpa.general.ExcelNumberParser;
+import com.cognologix.fpa.general.ExcelParserUtils;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Component;
@@ -77,29 +78,43 @@ public class RevenueExcelParser {
 
             Map<Integer, String> indexToHeader = new LinkedHashMap<>();
             Set<String> fileHeaders = new LinkedHashSet<>();
+            Map<String, String> fileNormToRaw = new LinkedHashMap<>();
             for (Cell cell : headerRow) {
                 String header = cellValueAsString(cell);
                 if (header == null || header.isBlank()) {
                     continue;
                 }
-                indexToHeader.put(cell.getColumnIndex(), header.trim());
-                fileHeaders.add(header.trim());
+                String raw = header.trim();
+                indexToHeader.put(cell.getColumnIndex(), raw);
+                fileHeaders.add(raw);
+                fileNormToRaw.putIfAbsent(ExcelParserUtils.normalizeHeader(raw), raw);
             }
 
-            Set<String> mappedHeaders = new LinkedHashSet<>(excelColumnToAttribute.keySet());
+            Map<String, String> normalizedToAttr = new LinkedHashMap<>();
+            Map<String, String> normalizedToMappedRaw = new LinkedHashMap<>();
+            for (var entry : excelColumnToAttribute.entrySet()) {
+                String norm = ExcelParserUtils.normalizeHeader(entry.getKey());
+                if (norm.isEmpty()) {
+                    continue;
+                }
+                normalizedToAttr.putIfAbsent(norm, entry.getValue());
+                normalizedToMappedRaw.putIfAbsent(norm, entry.getKey());
+            }
+
             List<String> unmappedColumns = fileHeaders.stream()
-                    .filter(h -> !mappedHeaders.contains(h))
+                    .filter(h -> !normalizedToAttr.containsKey(ExcelParserUtils.normalizeHeader(h)))
                     .sorted()
                     .toList();
-            List<String> missingColumns = mappedHeaders.stream()
-                    .filter(h -> !fileHeaders.contains(h))
+            List<String> missingColumns = normalizedToMappedRaw.entrySet().stream()
+                    .filter(e -> !fileNormToRaw.containsKey(e.getKey()))
+                    .map(Map.Entry::getValue)
                     .sorted()
                     .toList();
 
             // Column index → system attribute (only mapped headers present in the file)
             Map<Integer, String> indexToAttribute = new LinkedHashMap<>();
             for (var entry : indexToHeader.entrySet()) {
-                String attr = excelColumnToAttribute.get(entry.getValue());
+                String attr = normalizedToAttr.get(ExcelParserUtils.normalizeHeader(entry.getValue()));
                 if (attr != null) {
                     indexToAttribute.put(entry.getKey(), attr);
                 }
@@ -185,8 +200,13 @@ public class RevenueExcelParser {
     public static BigDecimal requiredDecimal(Map<String, String> row, String attribute) {
         String v = required(row, attribute);
         try {
-            return new BigDecimal(v.replace(",", ""));
-        } catch (NumberFormatException e) {
+            BigDecimal amount = ExcelNumberParser.parseAmount(v);
+            if (amount == null) {
+                throw new RevenueBadRequestException("Invalid number for " + attribute + ": " + v);
+            }
+            // Zoho Books exports full rupees/currency units; store as Rs Lakhs (ADR-046).
+            return ExcelNumberParser.toRsLakhs(amount);
+        } catch (IllegalArgumentException e) {
             throw new RevenueBadRequestException("Invalid number for " + attribute + ": " + v);
         }
     }
@@ -197,8 +217,9 @@ public class RevenueExcelParser {
             return null;
         }
         try {
-            return new BigDecimal(v.replace(",", ""));
-        } catch (NumberFormatException e) {
+            // Zoho Books exports full rupees/currency units; store as Rs Lakhs (ADR-046).
+            return ExcelNumberParser.toRsLakhs(ExcelNumberParser.parseAmount(v));
+        } catch (IllegalArgumentException e) {
             throw new RevenueBadRequestException("Invalid number for " + attribute + ": " + v);
         }
     }

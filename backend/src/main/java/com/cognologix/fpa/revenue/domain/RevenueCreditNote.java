@@ -51,7 +51,7 @@ public class RevenueCreditNote {
     @Enumerated(EnumType.STRING)
     @Column(name = "currency", nullable = false, length = 3)
     @Builder.Default
-    private RevenueCurrency currency = RevenueCurrency.USD;
+    private RevenueCurrency currency = RevenueCurrency.INR;
 
     @Column(name = "amount_inr", precision = 14, scale = 2)
     private BigDecimal amountInr;

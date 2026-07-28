@@ -2,6 +2,8 @@ package com.cognologix.fpa.people.domain;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -49,4 +51,52 @@ public class PayrollSnapshot {
 
     @Column(name = "ctc_per_annum", precision = 14, scale = 2)
     private BigDecimal ctcPerAnnum;
+
+    @Column(name = "epf_contribution", precision = 12, scale = 2)
+    private BigDecimal epfContribution;
+
+    @Column(name = "eps_contribution", precision = 12, scale = 2)
+    private BigDecimal epsContribution;
+
+    @Column(name = "edli_contribution", precision = 12, scale = 2)
+    private BigDecimal edliContribution;
+
+    @Column(name = "epf_admin_charges", precision = 12, scale = 2)
+    private BigDecimal epfAdminCharges;
+
+    @Column(name = "vpf", precision = 12, scale = 2)
+    private BigDecimal vpf;
+
+    @Column(name = "nps_deduction", precision = 12, scale = 2)
+    private BigDecimal npsDeduction;
+
+    @Column(name = "gratuity", precision = 12, scale = 2)
+    private BigDecimal gratuity;
+
+    /** DB-generated: sum of employer contribution columns (nulls treated as zero). */
+    @Generated(event = {EventType.INSERT, EventType.UPDATE})
+    @Column(name = "total_employer_contributions", precision = 12, scale = 2,
+            insertable = false, updatable = false)
+    private BigDecimal totalEmployerContributions;
+
+    /**
+     * Prefer the DB-generated column when loaded; otherwise sum components
+     * (needed in the same transaction before a refresh).
+     */
+    public BigDecimal resolvedTotalEmployerContributions() {
+        if (totalEmployerContributions != null) {
+            return totalEmployerContributions;
+        }
+        return nz(epfContribution)
+                .add(nz(epsContribution))
+                .add(nz(edliContribution))
+                .add(nz(epfAdminCharges))
+                .add(nz(vpf))
+                .add(nz(npsDeduction))
+                .add(nz(gratuity));
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
+    }
 }

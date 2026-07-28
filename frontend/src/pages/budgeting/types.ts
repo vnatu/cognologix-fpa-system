@@ -31,6 +31,8 @@ export interface ForecastType {
 
 export interface PlanDetail extends PlanSummary {
   forecastTypes: ForecastType[];
+  latestActualsMonth?: number | null;
+  latestActualsYear?: number | null;
 }
 
 export interface HcPlanMonth {
@@ -176,6 +178,15 @@ export interface MonthlyPlanVsActual {
   ebitda: MoneyTriad;
 }
 
+export type PeriodGranularity = 'MONTHLY' | 'QUARTERLY' | 'ANNUAL';
+
+export interface PeriodQuery {
+  granularity: PeriodGranularity;
+  month?: number;
+  year?: number;
+  quarter?: number;
+}
+
 export interface PeriodTotals {
   label: string;
   totalRevenue: MoneyTriad;
@@ -196,6 +207,12 @@ export interface PlanVsActualResult {
   q3: PeriodTotals;
   q4: PeriodTotals;
   fy: PeriodTotals;
+  granularity: PeriodGranularity;
+  periodLabel: string;
+  selectedPeriod: PeriodTotals;
+  actualsCoverageNote: string | null;
+  monthsWithActuals: number;
+  totalMonthsInFy: number;
 }
 
 export interface RollingForecastResult {
@@ -203,6 +220,11 @@ export interface RollingForecastResult {
   fiscalYear: string;
   baselineVersionId: string;
   months: MonthlyFinancials[];
+  granularity: PeriodGranularity;
+  periodLabel: string;
+  highlightMonth: number | null;
+  highlightYear: number | null;
+  highlightQuarter: number | null;
 }
 
 export interface DeltaResult {
@@ -210,11 +232,17 @@ export interface DeltaResult {
   fiscalYear: string;
   baselineVersionId: string;
   months: MonthlyFinancials[];
+  granularity: PeriodGranularity;
+  periodLabel: string;
+  periodTotal: MonthlyFinancials;
 }
 
 export interface CategoryCost {
   category: string;
   headcount: number;
+  grossPayPerHead: number;
+  employerContributionsPerHead: number;
+  employerContributionsSource: 'ACTUAL' | 'ESTIMATE_13PCT';
   layer1: number;
   layer2: number;
   layer3: number;
@@ -223,8 +251,11 @@ export interface CategoryCost {
 
 export interface CostPerEmployeeResult {
   financialYearPlanId: string;
-  month: number;
-  year: number;
+  month: number | null;
+  year: number | null;
+  quarter: number | null;
+  granularity: PeriodGranularity;
+  periodLabel: string;
   fromActuals: boolean;
   billable: CategoryCost;
   bench: CategoryCost;
@@ -253,8 +284,11 @@ export interface BuMetricRow {
 
 export interface BuMetricsResult {
   financialYearPlanId: string;
-  month: number;
-  year: number;
+  month: number | null;
+  year: number | null;
+  quarter: number | null;
+  granularity: PeriodGranularity;
+  periodLabel: string;
   rows: BuMetricRow[];
 }
 

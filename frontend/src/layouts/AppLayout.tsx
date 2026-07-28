@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Button, Space } from 'antd';
+import { useEffect, useState } from 'react';
+import { Outlet, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { Layout, Menu, Button, Space, Tooltip } from 'antd';
 import {
   DashboardOutlined,
   SettingOutlined,
@@ -9,8 +9,10 @@ import {
   ShopOutlined,
   FundProjectionScreenOutlined,
   DollarOutlined,
+  AccountBookOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
+import { fetchMe } from '@/api/users';
 import AppLogo from '@/components/AppLogo';
 import { HEADING_FONT } from '@/theme/antdTheme';
 
@@ -30,6 +32,7 @@ const NAV_ITEMS = [
     label: 'Budgeting & Forecasting',
   },
   { key: '/revenue', icon: <DollarOutlined />, label: 'Revenue' },
+  { key: '/expenses', icon: <AccountBookOutlined />, label: 'Expenses' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -51,7 +54,12 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
     title: 'Revenue',
     subtitle: 'Zoho Books imports, invoices & revenue vs plan',
   },
+  '/expenses': {
+    title: 'Expenses',
+    subtitle: 'Monthly overhead actuals & category setup',
+  },
   '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
+  '/account': { title: 'Account', subtitle: 'Profile & password' },
 };
 
 function resolveTopbarMeta(pathname: string) {
@@ -62,6 +70,7 @@ function resolveTopbarMeta(pathname: string) {
   }
   if (pathname.startsWith('/budgeting')) return TOPBAR_META['/budgeting'];
   if (pathname.startsWith('/revenue')) return TOPBAR_META['/revenue'];
+  if (pathname.startsWith('/expenses')) return TOPBAR_META['/expenses'];
   return { title: '', subtitle: '' };
 }
 
@@ -70,16 +79,39 @@ function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/customer-management')) return '/customer-management';
   if (pathname.startsWith('/budgeting')) return '/budgeting';
   if (pathname.startsWith('/revenue')) return '/revenue';
+  if (pathname.startsWith('/expenses')) return '/expenses';
+  if (pathname.startsWith('/account')) return '';
   return pathname;
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 export default function AppLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { logout } = useAuth();
+  const { logout, mustChangePassword, role, email } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
+  const [displayName, setDisplayName] = useState(email ?? 'User');
+
+  useEffect(() => {
+    fetchMe()
+      .then((me) => setDisplayName(me.fullName))
+      .catch(() => {
+        /* keep email fallback */
+      });
+  }, [email]);
+
+  if (mustChangePassword && pathname !== '/account') {
+    return <Navigate to="/account" replace />;
+  }
 
   const meta = resolveTopbarMeta(pathname);
+  const roleLabel = role === 'ADMIN' ? 'Admin' : role === 'VIEWER' ? 'Viewer' : '';
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -164,8 +196,21 @@ export default function AppLayout() {
           <Menu
             mode="inline"
             selectedKeys={[selectedNavKey(pathname)]}
-            items={NAV_ITEMS}
+            items={NAV_ITEMS.map((item) =>
+              mustChangePassword
+                ? {
+                    ...item,
+                    disabled: true,
+                    label: (
+                      <Tooltip title="Change your password to continue">
+                        <span>{item.label}</span>
+                      </Tooltip>
+                    ),
+                  }
+                : item,
+            )}
             onClick={({ key }) => {
+              if (mustChangePassword) return;
               if (key === '/people-payroll') {
                 navigate('/people-payroll/imports/zoho-people');
               } else if (key === '/customer-management') {
@@ -174,6 +219,8 @@ export default function AppLayout() {
                 navigate('/budgeting/dashboard');
               } else if (key === '/revenue') {
                 navigate('/revenue/imports/zoho-books-invoices');
+              } else if (key === '/expenses') {
+                navigate('/expenses/entry');
               } else {
                 navigate(key);
               }
@@ -182,6 +229,12 @@ export default function AppLayout() {
           />
 
           <div
+            role="button"
+            tabIndex={0}
+            onClick={() => navigate('/account')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') navigate('/account');
+            }}
             style={{
               position: 'absolute',
               bottom: 48,
@@ -192,6 +245,7 @@ export default function AppLayout() {
               display: 'flex',
               alignItems: 'center',
               gap: 10,
+              cursor: 'pointer',
             }}
           >
             <div
@@ -210,7 +264,7 @@ export default function AppLayout() {
                 flexShrink: 0,
               }}
             >
-              AK
+              {initials(displayName)}
             </div>
             {!collapsed && (
               <div style={{ minWidth: 0 }}>
@@ -224,9 +278,9 @@ export default function AppLayout() {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  Anita Krishnan
+                  {displayName}
                 </div>
-                <div style={{ fontSize: 11, color: '#888888' }}>Head of Finance</div>
+                <div style={{ fontSize: 11, color: '#888888' }}>{roleLabel}</div>
               </div>
             )}
           </div>

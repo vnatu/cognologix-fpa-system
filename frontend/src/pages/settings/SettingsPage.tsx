@@ -4,12 +4,14 @@ import GeneralTab from './GeneralTab';
 import PeoplePayrollTab from './PeoplePayrollTab';
 import CustomerManagementTab from './CustomerManagementTab';
 import RevenueTab from './RevenueTab';
+import ExpensesTab from './ExpensesTab';
 
 const TABS = [
   { key: 'general',             label: 'General',             children: <GeneralTab /> },
   { key: 'people-payroll',      label: 'People & Payroll',    children: <PeoplePayrollTab /> },
   { key: 'customer-management', label: 'Customer Management', children: <CustomerManagementTab /> },
   { key: 'revenue',             label: 'Revenue',             children: <RevenueTab /> },
+  { key: 'expenses',            label: 'Expenses',            children: <ExpensesTab /> },
 ];
 
 export default function SettingsPage() {

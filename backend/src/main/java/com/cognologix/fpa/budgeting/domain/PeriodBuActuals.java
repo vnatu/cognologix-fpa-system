@@ -34,4 +34,10 @@ public class PeriodBuActuals {
     @Column(name = "total_gross_pay", nullable = false, precision = 12, scale = 2)
     @Builder.Default
     private BigDecimal totalGrossPay = BigDecimal.ZERO;
+
+    @Column(name = "total_employer_contributions", precision = 12, scale = 2)
+    private BigDecimal totalEmployerContributions;
+
+    @Column(name = "total_payroll_cost", precision = 12, scale = 2)
+    private BigDecimal totalPayrollCost;
 }

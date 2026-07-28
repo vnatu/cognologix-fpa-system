@@ -7,7 +7,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Published when a period version is finalised (ADR-018 / ADR-022).
+ * Published when a period version is finalised (ADR-018 / ADR-022 / ADR-045).
  * Budgeting &amp; Forecasting consumes this event to snapshot HC and salary actuals.
  */
 public record PeriodFinalisedEvent(
@@ -24,9 +24,25 @@ public record PeriodFinalisedEvent(
         BigDecimal supportGrossPay,
         BigDecimal leadershipGrossPay,
         BigDecimal managementGrossPay,
+        BigDecimal billableEmployerContributions,
+        BigDecimal benchEmployerContributions,
+        BigDecimal supportEmployerContributions,
+        BigDecimal leadershipEmployerContributions,
+        BigDecimal managementEmployerContributions,
+        BigDecimal billableTotalPayrollCost,
+        BigDecimal benchTotalPayrollCost,
+        BigDecimal supportTotalPayrollCost,
+        BigDecimal leadershipTotalPayrollCost,
+        BigDecimal managementTotalPayrollCost,
         List<BuPeriodActual> buActuals
 ) {
-    public record BuPeriodActual(String businessUnit, int billableHc, BigDecimal totalGrossPay) {}
+    public record BuPeriodActual(
+            String businessUnit,
+            int billableHc,
+            BigDecimal totalGrossPay,
+            BigDecimal totalEmployerContributions,
+            BigDecimal totalPayrollCost
+    ) {}
 
     public BigDecimal totalGrossPay() {
         return nullSafe(billableGrossPay)
@@ -34,6 +50,22 @@ public record PeriodFinalisedEvent(
                 .add(nullSafe(supportGrossPay))
                 .add(nullSafe(leadershipGrossPay))
                 .add(nullSafe(managementGrossPay));
+    }
+
+    public BigDecimal totalEmployerContributions() {
+        return nullSafe(billableEmployerContributions)
+                .add(nullSafe(benchEmployerContributions))
+                .add(nullSafe(supportEmployerContributions))
+                .add(nullSafe(leadershipEmployerContributions))
+                .add(nullSafe(managementEmployerContributions));
+    }
+
+    public BigDecimal totalPayrollCost() {
+        return nullSafe(billableTotalPayrollCost)
+                .add(nullSafe(benchTotalPayrollCost))
+                .add(nullSafe(supportTotalPayrollCost))
+                .add(nullSafe(leadershipTotalPayrollCost))
+                .add(nullSafe(managementTotalPayrollCost));
     }
 
     public int totalHeadcount() {
@@ -56,11 +88,9 @@ public record PeriodFinalisedEvent(
                 periodMonth,
                 periodYear,
                 0, 0, 0, 0, 0,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 List.of());
     }
 

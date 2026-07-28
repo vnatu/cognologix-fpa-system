@@ -23,10 +23,12 @@ public class JwtTokenProvider {
         this.expirationMs = expirationMs;
     }
 
-    public String generateToken(String username) {
+    public String generateToken(String username, String role, boolean mustChangePassword) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(username)
+                .claim("role", role)
+                .claim("mustChangePassword", mustChangePassword)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expirationMs))
                 .signWith(key)
@@ -35,6 +37,16 @@ public class JwtTokenProvider {
 
     public String extractUsername(String token) {
         return parseClaims(token).getSubject();
+    }
+
+    public String extractRole(String token) {
+        Object role = parseClaims(token).get("role");
+        return role != null ? role.toString() : null;
+    }
+
+    public boolean extractMustChangePassword(String token) {
+        Boolean value = parseClaims(token).get("mustChangePassword", Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     public boolean isValid(String token) {

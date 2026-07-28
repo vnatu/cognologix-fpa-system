@@ -11,6 +11,8 @@ import com.cognologix.fpa.customer.dto.ProjectCodeImportResponse;
 import com.cognologix.fpa.customer.dto.ProjectCodeImportRowError;
 import com.cognologix.fpa.customer.dto.RateCardImportSkipped;
 import com.cognologix.fpa.customer.repository.*;
+import com.cognologix.fpa.general.BackupSheet;
+import com.cognologix.fpa.general.ExcelNumberParser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,7 @@ public class CustomerService {
     private final RateCardImportParser rateCardImportParser;
     private final ProjectCodeImportParser projectCodeImportParser;
     private final CustomerExcelExporter customerExcelExporter;
+    private final CustomerModuleBackup customerModuleBackup;
 
     // ── Customer Master ──────────────────────────────────────────────────────
 
@@ -772,12 +775,12 @@ public class CustomerService {
 
     private static BigDecimal parsePositiveAmount(String raw) {
         try {
-            BigDecimal amount = new BigDecimal(raw.trim().replace(",", ""));
-            if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            BigDecimal amount = ExcelNumberParser.parseAmount(raw);
+            if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
                 return null;
             }
             return amount;
-        } catch (NumberFormatException e) {
+        } catch (IllegalArgumentException e) {
             return null;
         }
     }
@@ -935,6 +938,7 @@ public class CustomerService {
             LifecycleStatus lifecycleStatus =
                     CustomerImportParser.parseLifecycleStatus(row.lifecycleStatusRaw());
             int dsoDays = CustomerImportParser.parseDsoDays(row.dsoDaysRaw());
+            Boolean isInternal = CustomerImportParser.parseOptionalBoolean(row.isInternalRaw());
             String zohoRef = blankToNull(row.zohoBooksCustomerRef());
             String ownerId = blankToNull(row.relationshipOwnerEmployeeId());
 
@@ -946,7 +950,7 @@ public class CustomerService {
                 }
                 try {
                     replaceCustomerFromImport(
-                            existing.get(), customerName, zohoRef, lifecycleStatus, ownerId, dsoDays);
+                            existing.get(), customerName, zohoRef, lifecycleStatus, ownerId, dsoDays, isInternal);
                     updated++;
                 } catch (DataIntegrityViolationException e) {
                     errors.add(new CustomerImportRowError(
@@ -956,7 +960,12 @@ public class CustomerService {
             }
 
             try {
-                createCustomer(customerCode, customerName, zohoRef, ownerId, lifecycleStatus, dsoDays);
+                Customer createdCustomer = createCustomer(
+                        customerCode, customerName, zohoRef, ownerId, lifecycleStatus, dsoDays);
+                if (isInternal != null) {
+                    createdCustomer.setInternal(isInternal);
+                    customerRepository.save(createdCustomer);
+                }
                 created++;
             } catch (IllegalArgumentException | DataIntegrityViolationException e) {
                 errors.add(new CustomerImportRowError(
@@ -973,11 +982,15 @@ public class CustomerService {
                                             String zohoBooksCustomerRef,
                                             LifecycleStatus lifecycleStatus,
                                             String relationshipOwnerEmployeeId,
-                                            int dsoDays) {
+                                            int dsoDays,
+                                            Boolean isInternal) {
         customer.setCustomerName(customerName);
         customer.setZohoBooksCustomerRef(zohoBooksCustomerRef);
         customer.setLifecycleStatus(lifecycleStatus);
         customer.setRelationshipOwnerEmployeeId(relationshipOwnerEmployeeId);
+        if (isInternal != null) {
+            customer.setInternal(isInternal);
+        }
         var terms = commercialTermsRepository.findById(customer.getId())
                 .orElse(CommercialTerms.builder().customer(customer).build());
         terms.setDsoDays(dsoDays);
@@ -995,5 +1008,21 @@ public class CustomerService {
     private static String rootCauseMessage(Exception e) {
         Throwable cause = e.getCause();
         return cause != null && cause.getMessage() != null ? cause.getMessage() : e.getMessage();
+    }
+
+    // ── Backup / restore (ADR-044 Tier 2) ────────────────────────────────────
+
+    public List<BackupSheet> exportBackupSheets() {
+        return customerModuleBackup.exportBackupSheets();
+    }
+
+    @Transactional
+    public void wipeForRestore() {
+        customerModuleBackup.wipeCustomerData();
+    }
+
+    @Transactional
+    public Map<String, Integer> restoreBackupSheets(Map<String, List<String[]>> rowsByFile) {
+        return customerModuleBackup.restoreBackupSheets(rowsByFile);
     }
 }

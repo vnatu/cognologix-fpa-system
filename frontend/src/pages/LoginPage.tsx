@@ -17,10 +17,18 @@ export default function LoginPage() {
       setLoading(true);
       setError(null);
       try {
-        await login(values.username, values.password);
-        navigate('/dashboard', { replace: true });
-      } catch {
-        setError('Incorrect email or password.');
+        const result = await login(values.username, values.password);
+        navigate(result.mustChangePassword ? '/account' : '/dashboard', { replace: true });
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number; data?: { error?: string } } })
+          ?.response?.status;
+        const apiError = (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error;
+        if (status === 429) {
+          setError(apiError ?? 'Too many login attempts. Please try again in 15 minutes.');
+        } else {
+          setError('Incorrect email or password.');
+        }
       } finally {
         setLoading(false);
       }

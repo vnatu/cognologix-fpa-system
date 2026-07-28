@@ -12,6 +12,7 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip as AntTooltip,
   Typography,
   theme,
   notification,
@@ -51,8 +52,8 @@ const TREND_METRIC_OPTIONS: { value: DashboardTrendMetric; label: string }[] = [
   { value: 'BILLABLE_HC', label: 'Billable HC' },
   { value: 'BENCH_HC', label: 'Bench HC' },
   { value: 'BILLABLE_RATIO_PCT', label: 'Billable Ratio %' },
-  { value: 'TOTAL_GROSS_PAY', label: 'Total Gross Pay' },
-  { value: 'BILLABLE_GROSS_PAY', label: 'Billable Gross Pay' },
+  { value: 'TOTAL_GROSS_PAY', label: 'Total Payroll Cost' },
+  { value: 'BILLABLE_GROSS_PAY', label: 'Billable Payroll Cost' },
 ];
 
 type VersionSelection = {
@@ -413,34 +414,13 @@ export default function PeopleDashboardPage() {
 
   const salaryCards: {
     title: string;
-    gross: number | undefined;
-    avg: number | undefined;
+    metrics: DashboardSummary['salaryMetrics']['billable'] | undefined;
   }[] = [
-    {
-      title: 'Billable',
-      gross: salary?.billableGrossPay,
-      avg: salary?.avgPerHeadBillable,
-    },
-    {
-      title: 'Bench',
-      gross: salary?.benchGrossPay,
-      avg: salary?.avgPerHeadBench,
-    },
-    {
-      title: 'Support',
-      gross: salary?.supportGrossPay,
-      avg: salary?.avgPerHeadSupport,
-    },
-    {
-      title: 'Leadership',
-      gross: salary?.leadershipGrossPay,
-      avg: salary?.avgPerHeadLeadership,
-    },
-    {
-      title: 'Management',
-      gross: salary?.managementGrossPay,
-      avg: salary?.avgPerHeadManagement,
-    },
+    { title: 'Billable', metrics: salary?.billable },
+    { title: 'Bench', metrics: salary?.bench },
+    { title: 'Support', metrics: salary?.support },
+    { title: 'Leadership', metrics: salary?.leadership },
+    { title: 'Management', metrics: salary?.management },
   ];
 
   return (
@@ -529,23 +509,39 @@ export default function PeopleDashboardPage() {
             Salary Metrics
           </Title>
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-            {salaryCards.map((card) => (
-              <Col xs={24} sm={12} md={8} lg={4} xl={4} key={card.title}>
-                <Card size="small" title={card.title}>
-                  <Statistic
-                    title="Gross Pay"
-                    value={card.gross ?? 0}
-                    formatter={(v) => formatCurrency(Number(v))}
-                  />
-                  <div style={{ marginTop: 12 }}>
-                    <Text type="secondary">Avg per Head</Text>
-                    <div style={{ fontSize: 16, fontWeight: 600 }}>
-                      {formatCurrency(card.avg)}
+            {salaryCards.map((card) => {
+              const m = card.metrics;
+              const breakdown = (
+                <span>
+                  Gross Pay {formatCurrency(m?.grossPay)} + Employer Contributions{' '}
+                  {formatCurrency(m?.totalEmployerContributions)} = Total
+                </span>
+              );
+              return (
+                <Col xs={24} sm={12} md={8} lg={4} xl={4} key={card.title}>
+                  <Card size="small" title={card.title}>
+                    <AntTooltip title={breakdown}>
+                      <Statistic
+                        title="Total Payroll Cost"
+                        value={m?.totalPayrollCost ?? 0}
+                        formatter={(v) => formatCurrency(Number(v))}
+                      />
+                    </AntTooltip>
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {breakdown}
+                      </Text>
                     </div>
-                  </div>
-                </Card>
-              </Col>
-            ))}
+                    <div style={{ marginTop: 12 }}>
+                      <Text type="secondary">Avg Total Payroll Cost / Head</Text>
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>
+                        {formatCurrency(m?.avgTotalPayrollCostPerHead)}
+                      </div>
+                    </div>
+                  </Card>
+                </Col>
+              );
+            })}
           </Row>
 
           <Title level={5} style={{ fontFamily: HEADING_FONT }}>

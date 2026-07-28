@@ -88,10 +88,10 @@ Regular invoices exported from Zoho Books. Finance downloads the invoice list ex
 | CustomerName         | Customer Name                 | No           | Reference only — CustomerCode is authoritative                      |
 | InvoiceDate          | Invoice Date                  | Yes          | Stored for audit and DSO calculation                                |
 | Status               | Status                        | Yes          | Paid / Partially Paid / Sent / Overdue / Void                       |
-| Amount               | Total                         | Yes          | Invoice amount in original currency                                 |
-| Balance              | Balance                       | No           | Outstanding amount — used for DSO informational display             |
+| Amount               | Total                         | Yes          | Invoice amount in original currency; Zoho exports full units — stored as Rs Lakhs (÷100,000) on import (ADR-046) |
+| Balance              | Balance                       | No           | Outstanding amount — used for DSO informational display; stored as Rs Lakhs (ADR-046) |
 | DueDate              | Due Date                      | No           | Used for overdue flag calculation                                   |
-| Currency             | Currency                      | No           | USD or INR — defaults to customer's billing currency if not present |
+| Currency             | Currency                      | No           | USD or INR — defaults to **INR** when unmapped/blank (no FX). Explicit USD applies FX (ADR-017). |
 | ProjectCode          | Project-Code                  | No           | Stored for reference only — not used in revenue aggregation         |
 
 *Invoice Month / Service Month / Service Year fields in Zoho Books exports are unreliable (Invoice Month is deprecated; Service Month/Year are custom fields not always present). Finance tags the period manually at upload time — consistent with People & Payroll's period selection pattern.*
@@ -107,8 +107,8 @@ Credit notes exported from Zoho Books as a separate export. Credit notes reduce 
 | CustomerName         | Customer Name                 | No           | Reference only                                                                          |
 | CreditNoteDate       | Credit Note Date              | Yes          | Stored for audit                                                                        |
 | Status               | Status                        | Yes          | Open / Closed / Void                                                                    |
-| Amount               | Total                         | Yes          | Credit note amount — stored as positive, treated as negative in net revenue calculation |
-| Currency             | Currency                      | No           | USD or INR                                                                              |
+| Amount               | Total                         | Yes          | Credit note amount — Zoho full units stored as Rs Lakhs (ADR-046); treated as negative in net revenue calculation |
+| Currency             | Currency                      | No           | USD or INR — defaults to **INR** when unmapped/blank (no FX). Explicit USD applies FX (ADR-017). |
 
 Credit notes are stored as separate records (not merged with invoices) so Finance can see the full audit trail of what was invoiced and what was credited independently. Net Revenue per client per period = Sum of Invoice Amounts − Sum of Credit Note Amounts for that customer and period.
 
