@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  BuAnalysisResult,
   BuMetricsResult,
   ClientRevenuePlanEntry,
   CostPerEmployeeResult,
@@ -229,6 +230,16 @@ export const fetchBuMetrics = (
         ...periodParams(period),
         ...(forecastTypeId ? { forecastTypeId } : {}),
       },
+    })
+    .then((r) => r.data);
+
+export const fetchBuAnalysis = (
+  planId: string,
+  period: PeriodQuery,
+): Promise<BuAnalysisResult> =>
+  axios
+    .get<BuAnalysisResult>(`${base(planId)}/bu-analysis`, {
+      params: periodParams(period),
     })
     .then((r) => r.data);
 

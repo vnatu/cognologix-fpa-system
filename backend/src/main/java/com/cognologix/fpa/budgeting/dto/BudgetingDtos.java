@@ -88,6 +88,62 @@ public final class BudgetingDtos {
             List<BuMetricRow> rows
     ) {}
 
+    /** BU Analysis — dedicated sub-section under Budgeting &amp; Forecasting (ADR-051). */
+    public record BuAnalysisResult(
+            UUID financialYearPlanId,
+            Integer month,
+            Integer year,
+            Integer quarter,
+            String granularity,
+            String periodLabel,
+            BigDecimal totalCompanyPayrollCost,
+            BigDecimal totalCompanyRevenue,
+            int totalCompanyHc,
+            List<ExternalBuAnalysisRow> externalBUs,
+            List<InternalBuAnalysisRow> internalBUs
+    ) {}
+
+    public record ExternalBuAnalysisRow(
+            String customerCode,
+            String customerName,
+            int totalHc,
+            int billableHc,
+            int nonBillableHc,
+            BigDecimal totalGrossPay,
+            BigDecimal billableGrossPay,
+            BigDecimal nonBillableGrossPay,
+            BigDecimal totalPayrollCost,
+            BigDecimal billablePayrollCost,
+            BigDecimal nonBillablePayrollCost,
+            BigDecimal avgPayrollCostPerHead,
+            BigDecimal buCostPctOfTotal,
+            BigDecimal buRevenuePctOfTotal,
+            BigDecimal actualRevenue,
+            BigDecimal grossMargin,
+            BigDecimal grossMarginPct,
+            List<PositionBreakdownRow> positionBreakdown
+    ) {}
+
+    public record InternalBuAnalysisRow(
+            String customerCode,
+            String customerName,
+            int totalHc,
+            int billableHc,
+            int nonBillableHc,
+            BigDecimal totalGrossPay,
+            BigDecimal totalPayrollCost,
+            BigDecimal avgPayrollCostPerHead,
+            BigDecimal buCostPctOfTotal,
+            List<PositionBreakdownRow> positionBreakdown
+    ) {}
+
+    public record PositionBreakdownRow(
+            String title,
+            int headcount,
+            BigDecimal avgPayrollCost,
+            BigDecimal pctOfBuHc
+    ) {}
+
     public record MonthlyFinancials(
             int month,
             int year,

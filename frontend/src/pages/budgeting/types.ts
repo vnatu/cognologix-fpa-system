@@ -292,6 +292,61 @@ export interface BuMetricsResult {
   rows: BuMetricRow[];
 }
 
+export interface PositionBreakdownRow {
+  title: string;
+  headcount: number;
+  avgPayrollCost: number;
+  pctOfBuHc: number;
+}
+
+export interface ExternalBuAnalysisRow {
+  customerCode: string;
+  customerName: string;
+  totalHc: number;
+  billableHc: number;
+  nonBillableHc: number;
+  totalGrossPay: number;
+  billableGrossPay: number;
+  nonBillableGrossPay: number;
+  totalPayrollCost: number;
+  billablePayrollCost: number;
+  nonBillablePayrollCost: number;
+  avgPayrollCostPerHead: number;
+  buCostPctOfTotal: number;
+  buRevenuePctOfTotal: number;
+  actualRevenue: number;
+  grossMargin: number;
+  grossMarginPct: number;
+  positionBreakdown: PositionBreakdownRow[];
+}
+
+export interface InternalBuAnalysisRow {
+  customerCode: string;
+  customerName: string;
+  totalHc: number;
+  billableHc: number;
+  nonBillableHc: number;
+  totalGrossPay: number;
+  totalPayrollCost: number;
+  avgPayrollCostPerHead: number;
+  buCostPctOfTotal: number;
+  positionBreakdown: PositionBreakdownRow[];
+}
+
+export interface BuAnalysisResult {
+  financialYearPlanId: string;
+  month: number | null;
+  year: number | null;
+  quarter: number | null;
+  granularity: PeriodGranularity;
+  periodLabel: string;
+  totalCompanyPayrollCost: number;
+  totalCompanyRevenue: number;
+  totalCompanyHc: number;
+  externalBUs: ExternalBuAnalysisRow[];
+  internalBUs: InternalBuAnalysisRow[];
+}
+
 export interface FyMonthCol {
   key: string;
   label: string;

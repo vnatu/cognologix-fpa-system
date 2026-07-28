@@ -1225,4 +1225,20 @@ ADR-037 treated overhead actuals as manual entry into Budgeting (`overhead_actua
 
 ---
 
+# ADR-051: BU Analysis — Dedicated Sub-Section Under Budgeting & Forecasting
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+BU Metrics was a single panel on the Budgeting & Forecasting Dashboard. Finance needs deeper BU analysis including position-level salary breakdown, billable vs non-billable splits, and cost/revenue as % of total.
+ 
+**Decision**
+New BU Analysis sub-section under Budgeting & Forecasting nav alongside Dashboard, Plan Setup, Scenario Comparison. Two tabs: External BUs (client BUs) and Internal BUs (Management, Leadership, Pool, L&D, BEF). Per BU: billable vs non-billable HC, salary cost split, avg salary cost per title (from Zoho People `title` field — not job_level), position-wise HC as % of total BU HC, BU cost as % of overall salary cost (pie chart), BU revenue as % of overall revenue (pie chart, external only). Current BU Metrics dashboard panel (Revenue, Gross Margin, Avg salary per head) moved into this section. Data from master_record per period.
+ 
+**Consequences**
+- (+) Deeper BU analysis for cost management and client profitability decisions.
+- (+) Internal BUs tracked separately from external clients — no mixing.
+- (−) Panel 6 (BU Metrics) removed from dashboard — Finance accesses via dedicated sub-section.
+---
+ 
 *(Further ADRs to be added as decisions are finalized.)*

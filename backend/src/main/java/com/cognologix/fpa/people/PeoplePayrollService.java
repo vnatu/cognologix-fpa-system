@@ -693,6 +693,44 @@ public class PeoplePayrollService {
         return records;
     }
 
+    /**
+     * Active master-record facts for the latest FINALISED version of a calendar period
+     * (Budgeting BU Analysis — ADR-051). Empty when the period or finalised version is missing.
+     */
+    public List<MasterRecordFact> findActiveMasterRecordFacts(int periodMonth, int periodYear) {
+        Optional<Period> periodOpt = periodRepository.findByPeriodMonthAndPeriodYear(periodMonth, periodYear);
+        if (periodOpt.isEmpty()) {
+            return List.of();
+        }
+        List<PeriodVersion> finalised = periodVersionRepository
+                .findByPeriodIdAndLatestFinalisedTrue(periodOpt.get().getId());
+        if (finalised.isEmpty()) {
+            return List.of();
+        }
+        PeriodVersion version = finalised.getFirst();
+        List<MasterRecord> records = masterRecordRepository.findByPeriodVersionId(version.getId());
+        List<MasterRecordFact> facts = new ArrayList<>();
+        for (MasterRecord r : records) {
+            if (r.getReconciliationStatus() == ReconciliationStatus.AUTO_MATCHED_EXITED
+                    || r.getReconciliationStatus() == ReconciliationStatus.UNMATCHED) {
+                continue;
+            }
+            Hibernate.initialize(r.getPeopleSnapshot());
+            String title = null;
+            if (r.getPeopleSnapshot() != null && r.getPeopleSnapshot().getTitle() != null
+                    && !r.getPeopleSnapshot().getTitle().isBlank()) {
+                title = r.getPeopleSnapshot().getTitle().trim();
+            }
+            facts.add(new MasterRecordFact(
+                    r.getBusinessUnit(),
+                    r.isBillable(),
+                    title,
+                    r.getGrossPay() != null ? r.getGrossPay() : BigDecimal.ZERO,
+                    r.resolvedTotalPayrollCost()));
+        }
+        return facts;
+    }
+
     public MasterSummary summarizeMaster(UUID periodVersionId) {
         List<MasterRecord> records = findMasterRecords(periodVersionId);
 
@@ -1373,6 +1411,15 @@ public class PeoplePayrollService {
             int billableHc,
             BigDecimal totalGrossPay,
             BigDecimal totalEmployerContributions,
+            BigDecimal totalPayrollCost
+    ) {}
+
+    /** Lightweight master-record row for cross-module BU Analysis (ADR-051). */
+    public record MasterRecordFact(
+            String businessUnit,
+            boolean billable,
+            String title,
+            BigDecimal grossPay,
             BigDecimal totalPayrollCost
     ) {}
 

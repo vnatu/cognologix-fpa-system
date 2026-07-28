@@ -5,10 +5,27 @@ import com.cognologix.fpa.budgeting.repository.*;
 import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.customer.domain.LifecycleStatus;
+import com.cognologix.fpa.customer.repository.CustomerRepository;
 import com.cognologix.fpa.expenses.ExpenseService;
 import com.cognologix.fpa.expenses.dto.ExpenseDtos.ExpenseEntryRequest;
 import com.cognologix.fpa.expenses.repository.ExpenseActualRepository;
+import com.cognologix.fpa.people.EmployeeRegistry;
 import com.cognologix.fpa.people.PeriodFinalisedEvent;
+import com.cognologix.fpa.people.domain.ExitStatus;
+import com.cognologix.fpa.people.domain.ImportType;
+import com.cognologix.fpa.people.domain.MasterRecord;
+import com.cognologix.fpa.people.domain.PeopleSnapshot;
+import com.cognologix.fpa.people.domain.Period;
+import com.cognologix.fpa.people.domain.PeriodStatus;
+import com.cognologix.fpa.people.domain.PeriodVersion;
+import com.cognologix.fpa.people.domain.ReconciliationStatus;
+import com.cognologix.fpa.people.domain.SnapshotUpload;
+import com.cognologix.fpa.people.repository.EmployeeRegistryRepository;
+import com.cognologix.fpa.people.repository.MasterRecordRepository;
+import com.cognologix.fpa.people.repository.PeopleSnapshotRepository;
+import com.cognologix.fpa.people.repository.PeriodRepository;
+import com.cognologix.fpa.people.repository.PeriodVersionRepository;
+import com.cognologix.fpa.people.repository.SnapshotUploadRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +66,13 @@ class BudgetingCalculationsIntegrationTest {
     @Autowired SalaryBudgetRepository salaryBudgetRepository;
     @Autowired ClientRevenuePlanRepository clientRevenuePlanRepository;
     @Autowired OverheadBudgetRepository overheadBudgetRepository;
+    @Autowired CustomerRepository customerRepository;
+    @Autowired PeriodRepository periodRepository;
+    @Autowired PeriodVersionRepository periodVersionRepository;
+    @Autowired MasterRecordRepository masterRecordRepository;
+    @Autowired EmployeeRegistryRepository employeeRegistryRepository;
+    @Autowired SnapshotUploadRepository snapshotUploadRepository;
+    @Autowired PeopleSnapshotRepository peopleSnapshotRepository;
 
     private FinancialYearPlan plan;
     private ForecastType normal;
@@ -247,6 +271,118 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(row.actualSalaryCost()).isEqualByComparingTo("400000");
         assertThat(row.actualGrossMargin()).isEqualByComparingTo("700000");
         assertThat(row.actualGrossMarginPct()).isEqualByComparingTo("63.64");
+    }
+
+    @Test
+    void buAnalysis_splitsExternalAndInternalWithPositionBreakdown() {
+        var external = customerService.findCustomerRef(clientId).orElseThrow();
+        var internalCust = customerService.createCustomer(
+                "INT" + System.nanoTime(),
+                "Leadership Internal " + System.nanoTime(),
+                null, null, LifecycleStatus.ACTIVE, null);
+        internalCust.setInternal(true);
+        customerRepository.save(internalCust);
+
+        periodRepository.findByPeriodMonthAndPeriodYear(4, 2026).ifPresent(existing -> {
+            for (PeriodVersion v : periodVersionRepository.findByPeriodIdOrderByVersionNumberDesc(existing.getId())) {
+                masterRecordRepository.findByPeriodVersionId(v.getId())
+                        .forEach(masterRecordRepository::delete);
+                peopleSnapshotRepository.findByPeriodVersionId(v.getId())
+                        .forEach(peopleSnapshotRepository::delete);
+                snapshotUploadRepository.findByPeriodVersionId(v.getId())
+                        .forEach(snapshotUploadRepository::delete);
+                periodVersionRepository.delete(v);
+            }
+            periodRepository.delete(existing);
+        });
+
+        Period period = periodRepository.save(Period.builder()
+                .periodMonth(4).periodYear(2026).build());
+        PeriodVersion version = periodVersionRepository.save(PeriodVersion.builder()
+                .period(period).versionNumber(1)
+                .status(PeriodStatus.FINALISED).latestFinalised(true)
+                .createdBy("test").build());
+
+        saveMasterForBu(version, external.customerCode(), true, "100000", "Senior Engineer");
+        saveMasterForBu(version, external.customerCode(), true, "200000", "Senior Engineer");
+        saveMasterForBu(version, external.customerCode(), false, "80000", "Analyst");
+        saveMasterForBu(version, internalCust.getCustomerCode(), false, "300000", "VP Engineering");
+
+        budgetingService.upsertRevenueActuals(plan.getId(), 4, 2026, bd("900000"),
+                List.of(ClientRevenueActual.builder()
+                        .customerId(clientId).actualRevenue(bd("900000")).build()),
+                "test");
+
+        var analysis = budgetingService.getBuAnalysis(
+                plan.getId(), PeriodGranularity.MONTHLY, 4, 2026, null);
+
+        assertThat(analysis.totalCompanyHc()).isEqualTo(4);
+        assertThat(analysis.totalCompanyPayrollCost()).isEqualByComparingTo("680000");
+        assertThat(analysis.totalCompanyRevenue()).isEqualByComparingTo("900000");
+
+        assertThat(analysis.externalBUs()).hasSize(1);
+        var ext = analysis.externalBUs().getFirst();
+        assertThat(ext.customerCode()).isEqualTo(external.customerCode());
+        assertThat(ext.totalHc()).isEqualTo(3);
+        assertThat(ext.billableHc()).isEqualTo(2);
+        assertThat(ext.nonBillableHc()).isEqualTo(1);
+        assertThat(ext.totalPayrollCost()).isEqualByComparingTo("380000");
+        assertThat(ext.actualRevenue()).isEqualByComparingTo("900000");
+        assertThat(ext.grossMargin()).isEqualByComparingTo("520000");
+        assertThat(ext.buCostPctOfTotal()).isEqualByComparingTo("55.88");
+        assertThat(ext.buRevenuePctOfTotal()).isEqualByComparingTo("100.00");
+        assertThat(ext.positionBreakdown()).isNotEmpty();
+        assertThat(ext.positionBreakdown().getFirst().title()).isEqualTo("Senior Engineer");
+        assertThat(ext.positionBreakdown().getFirst().headcount()).isEqualTo(2);
+
+        assertThat(analysis.internalBUs()).hasSize(1);
+        var intl = analysis.internalBUs().getFirst();
+        assertThat(intl.customerCode()).isEqualTo(internalCust.getCustomerCode());
+        assertThat(intl.totalHc()).isEqualTo(1);
+        assertThat(intl.totalPayrollCost()).isEqualByComparingTo("300000");
+        assertThat(intl.buCostPctOfTotal()).isEqualByComparingTo("44.12");
+    }
+
+    private void saveMasterForBu(
+            PeriodVersion version, String businessUnit, boolean billable, String grossPay, String title) {
+        EmployeeRegistry registry = employeeRegistryRepository.save(EmployeeRegistry.builder()
+                .employeeId("BUA-" + System.nanoTime())
+                .fullName("BU Analysis Emp")
+                .exitStatus(ExitStatus.ACTIVE)
+                .build());
+        SnapshotUpload upload = snapshotUploadRepository.save(SnapshotUpload.builder()
+                .periodVersion(version)
+                .importType(ImportType.ZOHO_PEOPLE)
+                .originalFilename("test.xlsx")
+                .uploadedBy("test")
+                .rowCount(1)
+                .build());
+        PeopleSnapshot people = peopleSnapshotRepository.save(PeopleSnapshot.builder()
+                .snapshotUpload(upload)
+                .periodVersion(version)
+                .employeeId(registry.getEmployeeId())
+                .fullName(registry.getFullName())
+                .practiceUnit("Product Engineering")
+                .businessUnit(businessUnit)
+                .billableStatus(billable ? "Y" : "N")
+                .title(title)
+                .build());
+        masterRecordRepository.save(MasterRecord.builder()
+                .periodVersion(version)
+                .employeeRegistry(registry)
+                .peopleSnapshot(people)
+                .practiceUnit("Product Engineering")
+                .businessUnit(businessUnit)
+                .billableStatus(billable ? "Y" : "N")
+                .grossPay(new BigDecimal(grossPay))
+                .billable(billable)
+                .bench(!billable)
+                .support(false)
+                .leadership(false)
+                .management(false)
+                .reconciliationStatus(ReconciliationStatus.MATCHED)
+                .builtBy("test")
+                .build());
     }
 
     @Test

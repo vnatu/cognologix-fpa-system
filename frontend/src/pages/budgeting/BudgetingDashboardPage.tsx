@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
-  Button,
   Card,
   Col,
   Empty,
@@ -46,7 +44,6 @@ import {
   TYPE_LABELS,
 } from './utils';
 import type {
-  BuMetricsResult,
   CostPerEmployeeResult,
   DeltaResult,
   FyMonthCol,
@@ -58,7 +55,6 @@ import type {
   RollingForecastResult,
 } from './types';
 import {
-  fetchBuMetrics,
   fetchCostPerEmployee,
   fetchDelta,
   fetchPlan,
@@ -80,8 +76,6 @@ const PANEL_HELP = {
     'Compares planned headcount against actual headcount per category for the selected period. Billable = employees deployed on client projects. Bench = delivery staff not yet deployed. Support = non-delivery staff (HR, Admin, Finance). Leadership = senior management. Management = co-founders.',
   pvaCosts:
     'Compares planned salary and overhead costs against actuals. Salary actuals flow automatically from finalised People & Payroll periods. Overhead actuals are entered manually. Total Payroll Cost includes gross pay plus employer contributions (EPF, EPS, EDLI, Gratuity etc.).',
-  buMetrics:
-    "Gross Margin per client = Revenue minus Salary Cost allocated to that client. Gross Margin % shows how much of each rupee of revenue remains after direct staff costs. Click 'View Employees' to see individual employee details for that client in People & Payroll.",
   plSummary:
     'Consolidated Profit & Loss statement. Revenue flows from client invoices. COGS (Cost of Goods Sold) = billable and bench staff salaries + delivery overheads. Gross Profit = Revenue minus COGS. OpEx = support, leadership, and management costs plus non-delivery overheads. EBITDA = Gross Profit minus OpEx.',
   costPerEmployee:
@@ -131,7 +125,6 @@ function PanelHelpTitle({
 
 export default function BudgetingDashboardPage() {
   const { token } = theme.useToken();
-  const navigate = useNavigate();
   const [plans, setPlans] = useState<PlanSummary[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanDetail | null>(null);
@@ -144,7 +137,6 @@ export default function BudgetingDashboardPage() {
   const [rf, setRf] = useState<RollingForecastResult | null>(null);
   const [delta, setDelta] = useState<DeltaResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [buMetrics, setBuMetrics] = useState<BuMetricsResult | null>(null);
   const [costPerEmp, setCostPerEmp] = useState<CostPerEmployeeResult | null>(
     null,
   );
@@ -204,19 +196,15 @@ export default function BudgetingDashboardPage() {
     async (planId: string, typeId: string | null, period: PeriodQuery) => {
       setLoading(true);
       try {
-        const [pvaData, rfData, deltaData, buData, costData] = await Promise.all(
-          [
-            fetchPlanVsActual(planId, typeId ?? undefined, period),
-            fetchRollingForecast(planId, period),
-            fetchDelta(planId, period),
-            fetchBuMetrics(planId, period, typeId ?? undefined),
-            fetchCostPerEmployee(planId, period, typeId ?? undefined),
-          ],
-        );
+        const [pvaData, rfData, deltaData, costData] = await Promise.all([
+          fetchPlanVsActual(planId, typeId ?? undefined, period),
+          fetchRollingForecast(planId, period),
+          fetchDelta(planId, period),
+          fetchCostPerEmployee(planId, period, typeId ?? undefined),
+        ]);
         setPva(pvaData);
         setRf(rfData);
         setDelta(deltaData);
-        setBuMetrics(buData);
         setCostPerEmp(costData);
       } catch (error) {
         console.error('Failed to load dashboard data', error);
@@ -367,14 +355,6 @@ export default function BudgetingDashboardPage() {
             <PvaHcPanel pva={pva} token={token} />
 
             <PvaCostsPanel pva={pva} token={token} />
-
-            {buMetrics && (
-              <BuMetricsPanel
-                buMetrics={buMetrics}
-                token={token}
-                navigate={navigate}
-              />
-            )}
 
             <PlSummaryPanel
               pva={pva}
@@ -1220,169 +1200,6 @@ function PvaCostsPanel({ pva, token }: PvaCostsPanelProps) {
           </Col>
         </Row>
       </Space>
-    </Card>
-  );
-}
-
-interface BuMetricsPanelProps {
-  buMetrics: BuMetricsResult;
-  token: ReturnType<typeof theme.useToken>['token'];
-  navigate: (path: string) => void;
-}
-
-function BuMetricsPanel({ buMetrics, navigate }: BuMetricsPanelProps) {
-  const dataSource = useMemo(() => {
-    return buMetrics.rows
-      .filter((r) => !r.internal)
-      .map((r) => ({
-        key: r.customerId,
-        customer: r.customerName,
-        plannedRevenue: formatCurrency(r.plannedRevenue),
-        actualRevenue:
-          r.actualRevenue != null ? formatCurrency(r.actualRevenue) : '—',
-        plannedSalaryCost: formatCurrency(r.plannedSalaryCost),
-        actualSalaryCost:
-          r.actualSalaryCost != null
-            ? formatCurrency(r.actualSalaryCost)
-            : '—',
-        plannedBillableHc: r.plannedBillableHc ?? '—',
-        actualBillableHc: r.actualBillableHc ?? '—',
-        plannedGrossMargin: formatCurrency(r.plannedGrossMargin),
-        actualGrossMargin:
-          r.actualGrossMargin != null
-            ? formatCurrency(r.actualGrossMargin)
-            : '—',
-        plannedGrossMarginPct: `${r.plannedGrossMarginPct.toFixed(1)}%`,
-        actualGrossMarginPct:
-          r.actualGrossMarginPct != null
-            ? `${r.actualGrossMarginPct.toFixed(1)}%`
-            : '—',
-        avgSalaryPerHead:
-          r.avgSalaryPerHead != null
-            ? formatCurrency(r.avgSalaryPerHead)
-            : '—',
-        customerName: r.customerName,
-      }));
-  }, [buMetrics.rows]);
-
-  const columns = [
-    {
-      title: 'Customer',
-      dataIndex: 'customer',
-      key: 'customer',
-      fixed: 'left' as const,
-      width: 150,
-    },
-    {
-      title: 'Planned Revenue (Rs L)',
-      dataIndex: 'plannedRevenue',
-      key: 'plannedRevenue',
-      align: 'right' as const,
-      width: 140,
-    },
-    {
-      title: 'Actual Revenue (Rs L)',
-      dataIndex: 'actualRevenue',
-      key: 'actualRevenue',
-      align: 'right' as const,
-      width: 140,
-    },
-    {
-      title: 'Planned Salary Cost (Rs L)',
-      dataIndex: 'plannedSalaryCost',
-      key: 'plannedSalaryCost',
-      align: 'right' as const,
-      width: 160,
-    },
-    {
-      title: 'Actual Salary Cost (Rs L)',
-      dataIndex: 'actualSalaryCost',
-      key: 'actualSalaryCost',
-      align: 'right' as const,
-      width: 160,
-    },
-    {
-      title: 'Planned Billable HC',
-      dataIndex: 'plannedBillableHc',
-      key: 'plannedBillableHc',
-      align: 'right' as const,
-      width: 140,
-    },
-    {
-      title: 'Actual Billable HC',
-      dataIndex: 'actualBillableHc',
-      key: 'actualBillableHc',
-      align: 'right' as const,
-      width: 140,
-    },
-    {
-      title: 'Planned Gross Margin (Rs L)',
-      dataIndex: 'plannedGrossMargin',
-      key: 'plannedGrossMargin',
-      align: 'right' as const,
-      width: 180,
-    },
-    {
-      title: 'Actual Gross Margin (Rs L)',
-      dataIndex: 'actualGrossMargin',
-      key: 'actualGrossMargin',
-      align: 'right' as const,
-      width: 180,
-    },
-    {
-      title: 'Planned GM %',
-      dataIndex: 'plannedGrossMarginPct',
-      key: 'plannedGrossMarginPct',
-      align: 'right' as const,
-      width: 120,
-    },
-    {
-      title: 'Actual GM %',
-      dataIndex: 'actualGrossMarginPct',
-      key: 'actualGrossMarginPct',
-      align: 'right' as const,
-      width: 120,
-    },
-    {
-      title: 'Avg Salary/Head (Rs L)',
-      dataIndex: 'avgSalaryPerHead',
-      key: 'avgSalaryPerHead',
-      align: 'right' as const,
-      width: 160,
-    },
-    {
-      title: 'Action',
-      key: 'action',
-      width: 140,
-      render: (_: unknown, record: { customerName: string }) => (
-        <Button
-          size="small"
-          onClick={() =>
-            navigate(
-              `/people-payroll/master?bu=${encodeURIComponent(record.customerName)}`,
-            )
-          }
-        >
-          View Employees
-        </Button>
-      ),
-    },
-  ];
-
-  return (
-    <Card>
-      <PanelHelpTitle
-        title={`BU Metrics — ${buMetrics.periodLabel}`}
-        helpTitle="BU Metrics"
-        helpContent={PANEL_HELP.buMetrics}
-      />
-      <Table
-        dataSource={dataSource}
-        columns={columns}
-        pagination={false}
-        scroll={{ x: true }}
-        size="small"
-      />
     </Card>
   );
 }

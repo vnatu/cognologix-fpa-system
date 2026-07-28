@@ -438,6 +438,23 @@ public class BudgetingController {
                 planId, granularity, month, year, quarter, forecastTypeId);
     }
 
+    @GetMapping("/{planId}/bu-analysis")
+    @Operation(summary = "BU Analysis — external/internal BU cost, revenue, and position breakdown (ADR-051)")
+    public BuAnalysisResult buAnalysis(
+            @PathVariable UUID planId,
+            @RequestParam(defaultValue = "MONTHLY") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter) {
+        if (granularity == PeriodGranularity.MONTHLY) {
+            if (month == null || year == null) {
+                throw new IllegalArgumentException("month and year are required for MONTHLY granularity");
+            }
+            validateMonthYear(month, year);
+        }
+        return budgetingService.getBuAnalysis(planId, granularity, month, year, quarter);
+    }
+
     @AdminOnly
     @PutMapping("/{planId}/actuals/{month}/{year}/revenue")
     @Operation(summary = "Manual Override — enter revenue actuals when Zoho Books data is unavailable for the period")

@@ -3,6 +3,7 @@ import { Layout, Menu } from 'antd';
 import {
   DashboardOutlined,
   FormOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 
@@ -18,6 +19,11 @@ const MENU_ITEMS: MenuProps['items'] = [
     key: '/budgeting/plan-setup',
     icon: <FormOutlined />,
     label: 'Plan Setup',
+  },
+  {
+    key: '/budgeting/bu-analysis',
+    icon: <ApartmentOutlined />,
+    label: 'BU Analysis',
   },
 ];
 
