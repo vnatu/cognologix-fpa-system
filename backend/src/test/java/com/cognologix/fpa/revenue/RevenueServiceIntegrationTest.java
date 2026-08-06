@@ -118,6 +118,42 @@ class RevenueServiceIntegrationTest {
         assertThat(inv.getAmountInr()).isEqualByComparingTo("83500.00");
         assertThat(inv.getFxRateId()).isNotNull();
         assertThat(inv.getCustomerId()).isEqualTo("ACME");
+        assertThat(inv.getAmountUsd()).isNull();
+    }
+
+    @Test
+    void uploadInvoices_storesRawAmountUsdWithoutLakhsConversion() throws Exception {
+        UUID mappingWithUsd = revenueService.saveMappingTemplate(
+                RevenueImportType.ZOHO_BOOKS_INVOICES,
+                "Invoices With USD",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Invoice#", RevenueSystemAttribute.INVOICE_NUMBER),
+                        new PeoplePayrollService.MappingLineInput("Customer Code", RevenueSystemAttribute.CUSTOMER_CODE),
+                        new PeoplePayrollService.MappingLineInput("Customer Name", RevenueSystemAttribute.CUSTOMER_NAME),
+                        new PeoplePayrollService.MappingLineInput("Invoice Date", RevenueSystemAttribute.INVOICE_DATE),
+                        new PeoplePayrollService.MappingLineInput("Status", RevenueSystemAttribute.STATUS),
+                        new PeoplePayrollService.MappingLineInput("Total", RevenueSystemAttribute.AMOUNT),
+                        new PeoplePayrollService.MappingLineInput("USD Amount", RevenueSystemAttribute.AMOUNT_USD),
+                        new PeoplePayrollService.MappingLineInput("Balance", RevenueSystemAttribute.BALANCE),
+                        new PeoplePayrollService.MappingLineInput("Due Date", RevenueSystemAttribute.DUE_DATE),
+                        new PeoplePayrollService.MappingLineInput("Currency", RevenueSystemAttribute.CURRENCY),
+                        new PeoplePayrollService.MappingLineInput("Project-Code", RevenueSystemAttribute.PROJECT_CODE)
+                )).id();
+
+        var result = revenueService.uploadInvoices(
+                6, 2026,
+                xlsx(
+                        List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
+                                "Total", "USD Amount", "Balance", "Due Date", "Currency", "Project-Code"),
+                        List.of(List.of("INV-USD", "ACME", "Acme Corp", "2026-06-15", "Sent",
+                                "100000000.00", "$37,250.00", "100000000.00", "2026-07-15", "USD", "PROJ1"))),
+                mappingWithUsd,
+                "finance");
+
+        assertThat(result.rowsImported()).isEqualTo(1);
+        var inv = revenueInvoiceRepository.findByRevenueUploadId(result.uploadId()).getFirst();
+        assertThat(inv.getAmount()).isEqualByComparingTo("1000.000");
+        assertThat(inv.getAmountUsd()).isEqualByComparingTo("37250.00");
     }
 
     @Test
@@ -223,7 +259,7 @@ class RevenueServiceIntegrationTest {
 
         BigDecimal amountSum = invoices.stream().map(i -> i.getAmount()).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal amountInrSum = invoices.stream().map(i -> i.getAmountInr()).reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(amountSum).isEqualByComparingTo("31.17");
+        assertThat(amountSum).isEqualByComparingTo("31.163");
         assertThat(amountInrSum).isEqualByComparingTo(amountSum);
         assertThat(invoices).allSatisfy(inv -> {
             assertThat(inv.getCurrency().name()).isEqualTo("INR");
@@ -286,6 +322,70 @@ class RevenueServiceIntegrationTest {
         assertThat(cn.getAmount()).isEqualByComparingTo("2.50");
         assertThat(cn.getAmountInr()).isEqualByComparingTo("2.50");
         assertThat(cn.getFxRateId()).isNull();
+    }
+
+    @Test
+    void dashboard_supportsMonthlyQuarterlyAnnualGranularity() throws Exception {
+        // Apr + May 2026 invoices (Q1 FY2627)
+        revenueService.uploadInvoices(
+                4, 2026,
+                xlsx(
+                        List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
+                                "Total", "Balance", "Due Date", "Currency", "Project-Code"),
+                        List.of(List.of("INV-APR", "ACME", "Acme Corp", "2026-04-10", "Sent",
+                                "1000000.00", "1000000.00", "2026-05-10", "INR", ""))),
+                invoiceMappingId,
+                "finance");
+        revenueService.uploadInvoices(
+                5, 2026,
+                xlsx(
+                        List.of("Invoice#", "Customer Code", "Customer Name", "Invoice Date", "Status",
+                                "Total", "Balance", "Due Date", "Currency", "Project-Code"),
+                        List.of(List.of("INV-MAY", "ACME", "Acme Corp", "2026-05-10", "Sent",
+                                "2000000.00", "2000000.00", "2026-06-10", "INR", ""))),
+                invoiceMappingId,
+                "finance");
+
+        var periods = revenueService.listPeriodsWithData();
+        assertThat(periods).extracting(p -> p.month() + "-" + p.year())
+                .contains("4-2026", "5-2026");
+
+        var monthly = revenueService.getDashboard(
+                4, 2026, "MONTHLY", null, (id, m, y) -> BigDecimal.ZERO);
+        assertThat(monthly.granularity()).isEqualTo("MONTHLY");
+        assertThat(monthly.periodLabel()).isEqualTo("April 2026");
+        assertThat(monthly.monthsCovered()).hasSize(1);
+        assertThat(monthly.revenueVsPlan()).hasSize(1);
+        assertThat(monthly.revenueVsPlan().getFirst().actualNetRevenueInr())
+                .isEqualByComparingTo("10.00");
+        assertThat(monthly.invoiceStatusSummary()).anySatisfy(b -> {
+            assertThat(b.status()).isEqualTo("Sent");
+            assertThat(b.count()).isEqualTo(1);
+        });
+
+        var quarterly = revenueService.getDashboard(
+                4, 2026, "QUARTERLY", 1, (id, m, y) -> BigDecimal.ZERO);
+        assertThat(quarterly.granularity()).isEqualTo("QUARTERLY");
+        assertThat(quarterly.quarter()).isEqualTo(1);
+        assertThat(quarterly.periodLabel()).isEqualTo("Q1 FY2627");
+        assertThat(quarterly.monthsCovered()).hasSize(2);
+        assertThat(quarterly.revenueVsPlan().getFirst().actualNetRevenueInr())
+                .isEqualByComparingTo("30.00"); // 10 + 20
+        assertThat(quarterly.invoiceStatusSummary()).anySatisfy(b -> {
+            assertThat(b.status()).isEqualTo("Sent");
+            assertThat(b.count()).isEqualTo(2);
+        });
+        assertThat(quarterly.actualsCoverageNote()).contains("2 of 3");
+
+        var annual = revenueService.getDashboard(
+                4, 2026, "ANNUAL", null, (id, m, y) -> BigDecimal.ZERO);
+        assertThat(annual.granularity()).isEqualTo("ANNUAL");
+        assertThat(annual.periodLabel()).isEqualTo("FY2627");
+        assertThat(annual.monthsCovered()).hasSize(2);
+        assertThat(annual.revenueVsPlan().getFirst().actualNetRevenueInr())
+                .isEqualByComparingTo("30.00");
+        assertThat(annual.actualsCoverageNote()).contains("2 of 12");
+        assertThat(annual.dso()).isNotEmpty();
     }
 
     private static MockMultipartFile xlsx(List<String> headers, List<List<String>> rows) throws Exception {

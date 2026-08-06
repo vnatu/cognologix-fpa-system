@@ -150,8 +150,14 @@ export default function InvoicesPage() {
     }
   };
 
+  const showUsdColumn = useMemo(
+    () => rows.some((r) => r.amountUsd != null),
+    [rows],
+  );
+
   const columns: ColumnsType<InvoiceListItem> = useMemo(
-    () => [
+    () => {
+      const cols: ColumnsType<InvoiceListItem> = [
       {
         title: 'Type',
         dataIndex: 'importType',
@@ -189,6 +195,23 @@ export default function InvoicesPage() {
         align: 'right',
         render: (v: number) => formatCurrency(v),
       },
+      ];
+      if (showUsdColumn) {
+        cols.push({
+          title: 'Amount (USD)',
+          dataIndex: 'amountUsd',
+          key: 'amountUsd',
+          align: 'right',
+          render: (v: number | null) =>
+            v == null
+              ? '—'
+              : `$${v.toLocaleString('en-US', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}`,
+        });
+      }
+      cols.push(
       {
         title: 'INR Equivalent',
         dataIndex: 'amountInr',
@@ -214,8 +237,10 @@ export default function InvoicesPage() {
         align: 'right',
         render: (v: number | null) => (v == null ? '—' : formatCurrency(v)),
       },
-    ],
-    [formatDate],
+      );
+      return cols;
+    },
+    [formatDate, showUsdColumn],
   );
 
   const uploadColumns: ColumnsType<UploadSummary> = [

@@ -2,7 +2,7 @@ import type { ThemeConfig } from 'antd';
 
 /**
  * Centralized Ant Design theme — single source of truth for all brand values.
- * Hex values are defined here only; never hardcoded in components (ADR-014).
+ * Hex values are defined here only; never hardcoded in components.
  *
  * Token reference: https://ant.design/docs/react/customize-theme
  */
@@ -18,7 +18,7 @@ export const antdTheme: ThemeConfig = {
     colorBgLayout: '#f7f6f4',   // Light BG — sidebar/content areas
     colorBgContainer: '#ffffff', // Card/form surfaces
 
-    // Typography — Lato for body text (ADR-014)
+    // Typography — Lato for body text
     fontFamily: "'Lato', system-ui, sans-serif",
     fontSize: 14,
 
@@ -46,7 +46,7 @@ export const antdTheme: ThemeConfig = {
   },
   components: {
     Layout: {
-      // Header bar — Black #232323 per ADR-013
+      // Header bar — Black #232323
       headerBg: '#232323',
       headerHeight: 64,
       // Sidebar
@@ -64,7 +64,7 @@ export const antdTheme: ThemeConfig = {
   },
 };
 
-// Heading font — Montserrat (ADR-014).
+// Heading font — Montserrat.
 // Applied via className on Typography.Title or a wrapper element,
 // since Ant Design has no dedicated heading-font token.
 export const HEADING_FONT = "'Montserrat', 'Trebuchet MS', system-ui, sans-serif";

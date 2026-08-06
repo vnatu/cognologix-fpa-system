@@ -181,7 +181,7 @@ export default function ColumnMappingEditor({
   );
 }
 
-/** Build initial mappings from a saved template and file headers (normalized match — ADR-047). */
+/** Build initial mappings from a saved template and file headers (normalized match). */
 export function buildInitialMappings(
   headers: string[],
   templateLines: Array<{ excelColumnName: string; systemAttribute: string }>,

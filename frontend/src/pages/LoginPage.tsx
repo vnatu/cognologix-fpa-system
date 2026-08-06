@@ -1,16 +1,51 @@
-import { useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Form, Input, Button, Alert } from 'antd';
 import { MailOutlined, LockOutlined } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import AppLogo from '@/components/AppLogo';
 import { HEADING_FONT } from '@/theme/antdTheme';
 
+function messageFromParam(
+  raw: string | null,
+): { type: 'warning' | 'info'; text: string } | null {
+  if (raw === 'session_expired') {
+    return {
+      type: 'warning',
+      text: 'Your session has expired. Please log in again.',
+    };
+  }
+  if (raw === 'inactivity') {
+    return {
+      type: 'info',
+      text: 'You were logged out due to inactivity.',
+    };
+  }
+  return null;
+}
+
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const [searchParams] = useSearchParams();
+  const { login, isAuthenticated } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sessionMessage, setSessionMessage] = useState(() =>
+    messageFromParam(searchParams.get('message')),
+  );
+
+  useEffect(() => {
+    const sync = () => setSessionMessage(messageFromParam(searchParams.get('message')));
+    sync();
+    window.addEventListener('fpa-login-message', sync);
+    return () => window.removeEventListener('fpa-login-message', sync);
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleSubmit = useCallback(
     async (values: { username: string; password: string }) => {
@@ -36,9 +71,10 @@ export default function LoginPage() {
     [login, navigate],
   );
 
+  const sessionAlert = useMemo(() => sessionMessage, [sessionMessage]);
+
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      {/* ── Left brand panel — Black #232323, per ADR-013 ── */}
       <div
         style={{
           width: '44%',
@@ -52,33 +88,45 @@ export default function LoginPage() {
           overflow: 'hidden',
         }}
       >
-        {/* Subtle ring texture */}
         <svg
           aria-hidden="true"
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 0, pointerEvents: 'none' }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            zIndex: 0,
+            pointerEvents: 'none',
+          }}
           xmlns="http://www.w3.org/2000/svg"
         >
           <defs>
             <pattern id="rings" width="118" height="118" patternUnits="userSpaceOnUse">
               <g fill="none" stroke="#ffffff" strokeOpacity="0.05" strokeWidth="1.3">
-                <circle cx="0"   cy="0"   r="59" />
-                <circle cx="118" cy="0"   r="59" />
-                <circle cx="0"   cy="118" r="59" />
+                <circle cx="0" cy="0" r="59" />
+                <circle cx="118" cy="0" r="59" />
+                <circle cx="0" cy="118" r="59" />
                 <circle cx="118" cy="118" r="59" />
-                <circle cx="59"  cy="59"  r="59" />
+                <circle cx="59" cy="59" r="59" />
               </g>
-              <circle cx="59" cy="59" r="59" fill="none" stroke="#f05756" strokeOpacity="0.07" strokeWidth="1.3" />
+              <circle
+                cx="59"
+                cy="59"
+                r="59"
+                fill="none"
+                stroke="#f05756"
+                strokeOpacity="0.07"
+                strokeWidth="1.3"
+              />
             </pattern>
           </defs>
           <rect width="100%" height="100%" fill="url(#rings)" />
         </svg>
 
-        {/* Logo — dark variant: gradient glyph + white wordmark */}
         <div style={{ position: 'relative', zIndex: 1 }}>
           <AppLogo variant="dark" height={30} />
         </div>
 
-        {/* Tagline */}
         <div style={{ position: 'relative', zIndex: 1 }}>
           <h2
             style={{
@@ -91,7 +139,9 @@ export default function LoginPage() {
               margin: '0 0 16px',
             }}
           >
-            Plan with<br />confidence.
+            Plan with
+            <br />
+            confidence.
           </h2>
           <p
             style={{
@@ -122,7 +172,6 @@ export default function LoginPage() {
         </span>
       </div>
 
-      {/* ── Right form panel — white ── */}
       <div
         style={{
           flex: 1,
@@ -150,13 +199,17 @@ export default function LoginPage() {
             Welcome back. Enter your details to continue.
           </p>
 
-          {error && (
+          {sessionAlert && (
             <Alert
-              type="error"
-              message={error}
+              type={sessionAlert.type}
+              message={sessionAlert.text}
               showIcon
               style={{ marginBottom: 20 }}
             />
+          )}
+
+          {error && (
+            <Alert type="error" message={error} showIcon style={{ marginBottom: 20 }} />
           )}
 
           <Form layout="vertical" onFinish={handleSubmit} requiredMark={false}>
@@ -175,7 +228,9 @@ export default function LoginPage() {
             </Form.Item>
 
             <Form.Item
-              label={<span style={{ fontWeight: 700, color: '#555555', fontSize: 13 }}>Password</span>}
+              label={
+                <span style={{ fontWeight: 700, color: '#555555', fontSize: 13 }}>Password</span>
+              }
               name="password"
               rules={[{ required: true, message: 'Enter your password.' }]}
             >

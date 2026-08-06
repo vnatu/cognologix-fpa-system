@@ -33,9 +33,14 @@ public class ExpenseService {
     private final ExpenseExcelIO expenseExcelIO;
 
     public List<CategoryGroupResponse> getCategories() {
+        // Group case-insensitively so "Facilities" / "facilities" stay one section.
+        Map<String, String> canonicalGroup = new LinkedHashMap<>();
         Map<String, List<CategoryResponse>> grouped = new LinkedHashMap<>();
         for (ExpenseCategory category : categoryRepository.findByActiveTrueOrderBySortOrderAsc()) {
-            grouped.computeIfAbsent(category.getCategoryGroup(), g -> new ArrayList<>())
+            String raw = category.getCategoryGroup() != null ? category.getCategoryGroup().trim() : "";
+            String key = raw.toLowerCase(Locale.ROOT);
+            String display = canonicalGroup.computeIfAbsent(key, k -> raw);
+            grouped.computeIfAbsent(display, g -> new ArrayList<>())
                     .add(toCategoryResponse(category));
         }
         return grouped.entrySet().stream()
@@ -71,7 +76,7 @@ public class ExpenseService {
 
         ExpenseCategory category = ExpenseCategory.builder()
                 .lineCode(code)
-                .categoryGroup(categoryGroup.trim())
+                .categoryGroup(normalizeCategoryGroup(categoryGroup))
                 .displayName(displayName.trim())
                 .description(blankToNull(description))
                 .active(true)
@@ -363,6 +368,46 @@ public class ExpenseService {
                 category.getDescription(),
                 category.isActive(),
                 category.getSortOrder());
+    }
+
+    /**
+     * Trim, title-case, then reuse an existing group's spelling when it matches
+     * case-insensitively — prevents orphan sections from casing/whitespace drift.
+     */
+    String normalizeCategoryGroup(String categoryGroup) {
+        String titled = toTitleCase(categoryGroup.trim());
+        if (titled.length() > 50) {
+            throw new IllegalArgumentException("Category group must be at most 50 characters");
+        }
+        return categoryRepository.findAllByOrderBySortOrderAsc().stream()
+                .map(ExpenseCategory::getCategoryGroup)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(g -> !g.isEmpty() && g.equalsIgnoreCase(titled))
+                .findFirst()
+                .orElse(titled);
+    }
+
+    /** Capitalize the first letter of each whitespace-separated word; lower-case the rest. */
+    static String toTitleCase(String input) {
+        if (input == null || input.isEmpty()) {
+            return input;
+        }
+        StringBuilder sb = new StringBuilder(input.length());
+        boolean capitalizeNext = true;
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (Character.isWhitespace(c)) {
+                sb.append(c);
+                capitalizeNext = true;
+            } else if (capitalizeNext) {
+                sb.append(Character.toUpperCase(c));
+                capitalizeNext = false;
+            } else {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
     }
 
     private static String blankToNull(String value) {

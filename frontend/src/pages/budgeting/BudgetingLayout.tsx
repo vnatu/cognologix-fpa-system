@@ -4,6 +4,7 @@ import {
   DashboardOutlined,
   FormOutlined,
   ApartmentOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 
@@ -16,14 +17,19 @@ const MENU_ITEMS: MenuProps['items'] = [
     label: 'Dashboard',
   },
   {
+    key: '/budgeting/bu-analysis',
+    icon: <ApartmentOutlined />,
+    label: 'BU Analysis',
+  },
+  {
     key: '/budgeting/plan-setup',
     icon: <FormOutlined />,
     label: 'Plan Setup',
   },
   {
-    key: '/budgeting/bu-analysis',
-    icon: <ApartmentOutlined />,
-    label: 'BU Analysis',
+    key: '/budgeting/plan-summary',
+    icon: <FileSearchOutlined />,
+    label: 'Plan Summary',
   },
 ];
 

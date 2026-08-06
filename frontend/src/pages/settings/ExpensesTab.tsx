@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AutoComplete,
   Button,
@@ -14,38 +14,33 @@ import {
 import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useIsAdmin } from '@/components/AdminGate';
+import { useExpenseCategories } from '@/contexts/ExpenseCategoryContext';
 import { HEADING_FONT } from '@/theme/antdTheme';
-import { addCategory, deactivateCategory, fetchAllCategories } from '../expenses/api';
+import { addCategory, deactivateCategory } from '../expenses/api';
 import type { ExpenseCategory } from '../expenses/types';
 
 const { Text } = Typography;
 
 export default function ExpensesTab() {
   const isAdmin = useIsAdmin();
-  const [loading, setLoading] = useState(true);
-  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+  const { categories, reloadCategories } = useExpenseCategories();
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setCategories(await fetchAllCategories());
-    } catch {
-      notification.error({ message: 'Failed to load expense categories' });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
+  /** Distinct groups (case-insensitive); keep first-seen spelling for the dropdown. */
   const groupOptions = useMemo(() => {
-    const groups = [...new Set(categories.map((c) => c.categoryGroup))].sort();
-    return groups.map((g) => ({ value: g }));
+    const seen = new Map<string, string>();
+    for (const c of categories) {
+      const trimmed = c.categoryGroup.trim();
+      const key = trimmed.toLowerCase();
+      if (trimmed && !seen.has(key)) {
+        seen.set(key, trimmed);
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b)).map((g) => ({
+      value: g,
+    }));
   }, [categories]);
 
   const handleAdd = async () => {
@@ -61,7 +56,7 @@ export default function ExpensesTab() {
       notification.success({ message: 'Category added' });
       setModalOpen(false);
       form.resetFields();
-      await load();
+      reloadCategories();
     } catch (e) {
       if (e && typeof e === 'object' && 'errorFields' in e) return;
       notification.error({ message: 'Failed to add category' });
@@ -80,7 +75,7 @@ export default function ExpensesTab() {
         try {
           await deactivateCategory(category.id);
           notification.success({ message: 'Category deactivated' });
-          await load();
+          reloadCategories();
         } catch {
           notification.error({ message: 'Failed to deactivate category' });
         }
@@ -162,7 +157,7 @@ export default function ExpensesTab() {
         )}
       </div>
 
-      {loading ? (
+      {categories.length === 0 ? (
         <Skeleton active paragraph={{ rows: 8 }} />
       ) : (
         <Table<ExpenseCategory>

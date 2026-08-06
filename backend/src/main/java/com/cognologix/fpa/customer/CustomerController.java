@@ -132,9 +132,9 @@ public class CustomerController {
     @AdminOnly
     @PostMapping("/{id}/rate-cards")
     @Operation(summary = "Create a new rate card with name, type, currency, and effective date. " +
-            "Optional projectCodeIds associates the card with one or more projects; empty = blended (ADR-035). " +
+            "Optional projectCodeIds associates the card with one or more projects; empty = blended. " +
             "Does not auto-close existing cards — Finance manages effective dates. " +
-            "Currency applies to all lines in the card (ADR-020).")
+            "Currency applies to all lines in the card.")
     public ResponseEntity<RateCardResponse> createRateCard(
             @PathVariable UUID id,
             @Valid @RequestBody CreateRateCardRequest req) {
@@ -153,7 +153,7 @@ public class CustomerController {
     @AdminOnly
     @PutMapping("/{id}/rate-cards/{rateCardId}")
     @Operation(summary = "Edit rate card via versioning — closes current at effectiveTo, " +
-            "creates a new version from effectiveFrom (ADR-035). Both dates required. " +
+            "creates a new version from effectiveFrom. Both dates required. " +
             "projectCodeIds null inherits current associations; empty = blended.")
     public ResponseEntity<RateCardResponse> updateRateCard(
             @PathVariable UUID id,

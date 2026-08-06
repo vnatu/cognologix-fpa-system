@@ -169,12 +169,13 @@ class PeopleModuleBackup {
                     str(snap.getJobLevel()),
                     str(snap.getJobSubLevel()),
                     str(snap.getTitle()),
-                    snap.getDateOfJoining() != null ? snap.getDateOfJoining().toString() : ""));
+                    snap.getDateOfJoining() != null ? snap.getDateOfJoining().toString() : "",
+                    snap.getEmployeeStatus() != null ? snap.getEmployeeStatus().name() : EmployeeStatus.ACTIVE.name()));
         }
         return new BackupSheet(FILE_PEOPLE_SNAPSHOTS,
                 new String[]{"period_month", "period_year", "period_version_number", "import_type",
                         "employee_id", "full_name", "practice_unit", "business_unit", "bu_code", "project_code",
-                        "billable_status", "job_level", "job_sub_level", "title", "date_of_joining"},
+                        "billable_status", "job_level", "job_sub_level", "title", "date_of_joining", "employee_status"},
                 rows);
     }
 
@@ -238,14 +239,16 @@ class PeopleModuleBackup {
                     String.valueOf(mr.isManagement()),
                     mr.getReconciliationStatus().name(),
                     str(mr.getBillingCustomerCode()),
-                    str(mr.getDataQualityFlags())));
+                    str(mr.getDataQualityFlags()),
+                    mr.getEmployeeStatus() != null ? mr.getEmployeeStatus().name() : EmployeeStatus.ACTIVE.name()));
         }
         return new BackupSheet(FILE_MASTER_RECORDS,
                 new String[]{"period_month", "period_year", "period_version_number", "employee_id",
                         "practice_unit", "business_unit", "billable_status", "job_level", "gross_pay",
                         "total_employer_contributions",
                         "is_delivery_pu", "is_billable", "is_bench", "is_support", "is_leadership",
-                        "is_management", "reconciliation_status", "billing_customer_code", "data_quality_flags"},
+                        "is_management", "reconciliation_status", "billing_customer_code", "data_quality_flags",
+                        "employee_status"},
                 rows);
     }
 
@@ -495,6 +498,7 @@ class PeopleModuleBackup {
                         .jobSubLevel(cell(row, 12))
                         .title(cell(row, 13))
                         .dateOfJoining(parseDate(cell(row, 14), "date_of_joining"))
+                        .employeeStatus(parseEmployeeStatus(cell(row, 15)))
                         .build());
                 count++;
             } catch (RuntimeException ignored) {
@@ -575,6 +579,7 @@ class PeopleModuleBackup {
                         .reconciliationStatus(ReconciliationStatus.valueOf(requireCell(row, 16, "reconciliation_status")))
                         .billingCustomerCode(cell(row, 17))
                         .dataQualityFlags(cell(row, 18))
+                        .employeeStatus(parseEmployeeStatus(cell(row, 19)))
                         .builtBy(RESTORE_UPLOAD_BY)
                         .build());
                 count++;
@@ -583,6 +588,13 @@ class PeopleModuleBackup {
             }
         }
         return count;
+    }
+
+    private static EmployeeStatus parseEmployeeStatus(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return EmployeeStatus.ACTIVE;
+        }
+        return EmployeeStatus.valueOf(raw.trim());
     }
 
     private record PeriodVersionKey(int month, int year, int versionNumber) {}

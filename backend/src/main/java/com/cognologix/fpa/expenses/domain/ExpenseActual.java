@@ -32,7 +32,7 @@ public class ExpenseActual {
     @JoinColumn(name = "expense_category_id", nullable = false)
     private ExpenseCategory expenseCategory;
 
-    @Column(name = "amount", nullable = false, precision = 12, scale = 2)
+    @Column(name = "amount", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal amount = BigDecimal.ZERO;
 

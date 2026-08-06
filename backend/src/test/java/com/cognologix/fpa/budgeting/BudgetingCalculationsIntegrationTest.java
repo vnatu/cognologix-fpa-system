@@ -198,9 +198,9 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(apr.hc().actual().billableHc()).isEqualTo(45);
         assertThat(apr.hc().variance().billableHc()).isEqualTo(-5);
 
-        assertThat(apr.totalSalaryCost().plan()).isEqualByComparingTo("770000");
+        assertThat(apr.totalSalaryCost().plan()).isEqualByComparingTo("870100.00");
         assertThat(apr.totalSalaryCost().actual()).isEqualByComparingTo("685000");
-        assertThat(apr.totalSalaryCost().variance()).isEqualByComparingTo("-85000");
+        assertThat(apr.totalSalaryCost().variance()).isEqualByComparingTo("-185100.00");
 
         assertThat(pva.q1()).isNotNull();
         assertThat(pva.fy()).isNotNull();
@@ -400,7 +400,7 @@ class BudgetingCalculationsIntegrationTest {
 
         assertThat(pva.granularity()).isEqualTo("MONTHLY");
         assertThat(pva.periodLabel()).isEqualTo("April 2026");
-        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("770000");
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("870100.00");
         assertThat(pva.selectedPeriod().totalSalaryCost().actual()).isEqualByComparingTo("685000");
         assertThat(pva.actualsCoverageNote()).isNull();
     }
@@ -422,9 +422,45 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(pva.periodLabel()).isEqualTo("FY2627");
         assertThat(pva.monthsWithActuals()).isEqualTo(1);
         assertThat(pva.actualsCoverageNote()).contains("1 of 12 months");
-        // YTD plan = April only (May has plan but no actuals)
-        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("770000");
+        // YTD plan = April only (May has plan but no actuals) — plan payroll cost = 770000 × 1.13
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("870100.00");
         assertThat(pva.selectedPeriod().totalSalaryCost().actual()).isEqualByComparingTo("685000");
+    }
+
+    @Test
+    void pnlFormulas_cogsOpexEbitdaUsePayrollCostNotGrossAlone() {
+        saveExpenseActuals(4, 2026,
+                entry("training_upskilling", "10000"),
+                entry("subcontractors", "20000"),
+                entry("office_rent", "50000"));
+
+        // Billable/bench payroll cost = gross + contrib; OpEx uses support/leadership/management payroll
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                50, 10, 8, 6, 4,
+                bd("500000"), bd("100000"), bd("80000"), bd("90000"), bd("70000"),
+                bd("50000"), bd("10000"), bd("8000"), bd("9000"), bd("7000"),
+                bd("550000"), bd("110000"), bd("88000"), bd("99000"), bd("77000"),
+                List.of()));
+
+        budgetingService.upsertRevenueActuals(plan.getId(), 4, 2026, bd("2000000"),
+                List.of(ClientRevenueActual.builder().customerId(clientId).actualRevenue(bd("2000000")).build()),
+                "test");
+
+        var rf = budgetingService.getRollingForecast(plan.getId());
+        var apr = rf.months().stream().filter(m -> m.month() == 4 && m.year() == 2026).findFirst().orElseThrow();
+
+        // COGS = billable 550000 + bench 110000 + delivery OH 30000 = 690000
+        assertThat(apr.totalCogs()).isEqualByComparingTo("690000");
+        // Gross Profit = 2000000 - 690000 = 1310000
+        assertThat(apr.grossProfit()).isEqualByComparingTo("1310000");
+        // OpEx = support 88000 + leadership 99000 + management 77000 + non-delivery OH 50000 + variable 0
+        //      = 314000
+        assertThat(apr.totalOpex()).isEqualByComparingTo("314000");
+        // EBITDA = 1310000 - 314000 = 996000
+        assertThat(apr.ebitda()).isEqualByComparingTo("996000");
+        // statutoryBenefits = sum of employer contribs (not added again into OpEx)
+        assertThat(apr.statutoryBenefits()).isEqualByComparingTo("84000");
     }
 
     @Test
@@ -441,8 +477,8 @@ class BudgetingCalculationsIntegrationTest {
                 plan.getId(), null, PeriodGranularity.QUARTERLY, null, 2026, 1);
 
         assertThat(pva.periodLabel()).isEqualTo("Q1 FY2627");
-        // Apr plan 770k + May plan 825k + Jun plan 0 = 1,595,000
-        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("1595000");
+        // Apr plan 770k + May plan 825k + Jun plan 0 = 1,595,000 gross → ×1.13 payroll proxy
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("1802350.00");
     }
 
     @Test
@@ -458,6 +494,59 @@ class BudgetingCalculationsIntegrationTest {
         var delta = budgetingService.getDelta(plan.getId(), PeriodGranularity.MONTHLY, 4, 2026, null);
         assertThat(delta.periodTotal().salary().billable()).isEqualByComparingTo("-50000");
         assertThat(delta.months()).hasSize(12);
+    }
+
+    @Test
+    void delta_billableRatioPct_isActualPercentMinusPlanPercent_notRatioOfHcDeltas() {
+        // Plan: 61 billable / 97 total = 62.89%
+        var baseline = budgetingService.getActiveBaseline(plan.getId()).orElseThrow();
+        var aprPlan = hcPlanRepository
+                .findByForecastVersionIdAndPlanMonthAndPlanYear(baseline.getId(), 4, 2026)
+                .orElseThrow();
+        aprPlan.setPlannedBillableHc(61);
+        aprPlan.setPlannedBenchHc(12);
+        aprPlan.setPlannedSupportHc(10);
+        aprPlan.setPlannedLeadershipHc(8);
+        aprPlan.setPlannedManagementHc(6); // 61+12+10+8+6 = 97
+        hcPlanRepository.save(aprPlan);
+
+        // Actual: 63 billable / 98 total = 64.29%
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                63, 15, 10, 6, 4, // 63+15+10+6+4 = 98
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        var rf = budgetingService.getRollingForecast(
+                plan.getId(), PeriodGranularity.MONTHLY, 4, 2026, null);
+        var aprRf = rf.months().stream()
+                .filter(m -> m.month() == 4 && m.year() == 2026).findFirst().orElseThrow();
+        assertThat(aprRf.billableRatioPct()).isEqualByComparingTo("64.29");
+
+        var pva = budgetingService.getPlanVsActual(
+                plan.getId(), null, PeriodGranularity.MONTHLY, 4, 2026, null);
+        var aprPva = pva.months().stream()
+                .filter(m -> m.month() == 4 && m.year() == 2026).findFirst().orElseThrow();
+        // Plan side 61/97×100 = 62.89; Actual side 63/98×100 = 64.29
+        BigDecimal planRatio = BigDecimal.valueOf(aprPva.hc().plan().billableHc())
+                .multiply(new BigDecimal("100"))
+                .divide(BigDecimal.valueOf(aprPva.hc().plan().totalHc()), 2, java.math.RoundingMode.HALF_UP);
+        BigDecimal actualRatio = BigDecimal.valueOf(aprPva.hc().actual().billableHc())
+                .multiply(new BigDecimal("100"))
+                .divide(BigDecimal.valueOf(aprPva.hc().actual().totalHc()), 2, java.math.RoundingMode.HALF_UP);
+        assertThat(planRatio).isEqualByComparingTo("62.89");
+        assertThat(actualRatio).isEqualByComparingTo("64.29");
+
+        var delta = budgetingService.getDelta(plan.getId(), PeriodGranularity.MONTHLY, 4, 2026, null);
+        // Must be Actual% − Plan% = +1.40 — NOT ratio of HC deltas (2/1×100 = 200)
+        assertThat(delta.periodTotal().billableRatioPct()).isEqualByComparingTo("1.40");
+        var aprDelta = delta.months().stream()
+                .filter(m -> m.month() == 4 && m.year() == 2026).findFirst().orElseThrow();
+        assertThat(aprDelta.billableRatioPct()).isEqualByComparingTo("1.40");
+        assertThat(aprDelta.hc().billableHc()).isEqualTo(2);
+        assertThat(aprDelta.hc().totalHc()).isEqualTo(1);
     }
 
     @Test

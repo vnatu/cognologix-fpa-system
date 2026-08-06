@@ -47,10 +47,12 @@ class AuthAndUserManagementIntegrationTest {
     @Autowired LoginAttemptRepository loginAttemptRepository;
     @Autowired PasswordEncoder passwordEncoder;
     @Autowired JwtTokenProvider jwtTokenProvider;
+    @Autowired RefreshTokenRateLimiter refreshTokenRateLimiter;
 
     @BeforeEach
     void cleanAttempts() {
         loginAttemptRepository.deleteAll();
+        refreshTokenRateLimiter.clear();
     }
 
     @Test
@@ -200,6 +202,57 @@ class AuthAndUserManagementIntegrationTest {
                 .getResponse()
                 .getContentAsString();
         return objectMapper.readTree(body).get("token").asText();
+    }
+
+    @Test
+    void refresh_withValidJwt_returnsNewValidToken() throws Exception {
+        ensureUser("refresh@cognologix.com", "Refresh User", UserRole.ADMIN, "Secret123!", false);
+        String original = loginToken("refresh@cognologix.com", "Secret123!");
+
+        var body = mockMvc.perform(post("/api/auth/refresh")
+                        .header("Authorization", "Bearer " + original))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").isString())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String refreshed = objectMapper.readTree(body).get("token").asText();
+        assertThat(refreshed).isNotBlank();
+        assertThat(jwtTokenProvider.isValid(refreshed)).isTrue();
+        assertThat(jwtTokenProvider.extractUsername(refreshed)).isEqualTo("refresh@cognologix.com");
+        assertThat(jwtPayload(refreshed).get("exp").asLong())
+                .isGreaterThanOrEqualTo(jwtPayload(original).get("exp").asLong());
+    }
+
+    @Test
+    void refresh_withExpiredJwt_returns401() throws Exception {
+        ensureUser("expired-refresh@cognologix.com", "Expired", UserRole.VIEWER, "Secret123!", false);
+        String expired = jwtTokenProvider.generateToken(
+                "expired-refresh@cognologix.com", "VIEWER", false, -1_000L);
+
+        mockMvc.perform(post("/api/auth/refresh")
+                        .header("Authorization", "Bearer " + expired))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void refresh_rateLimited_returns429() throws Exception {
+        ensureUser("refresh-limit@cognologix.com", "Limit User", UserRole.ADMIN, "Secret123!", false);
+        String token = loginToken("refresh-limit@cognologix.com", "Secret123!");
+        refreshTokenRateLimiter.clear();
+
+        for (int i = 0; i < RefreshTokenRateLimiter.LIMIT; i++) {
+            mockMvc.perform(post("/api/auth/refresh")
+                            .header("Authorization", "Bearer " + token))
+                    .andExpect(status().isOk());
+        }
+
+        mockMvc.perform(post("/api/auth/refresh")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.error")
+                        .value("Too many token refresh requests. Please try again later."));
     }
 
     private static JsonNode jwtPayload(String token) throws Exception {

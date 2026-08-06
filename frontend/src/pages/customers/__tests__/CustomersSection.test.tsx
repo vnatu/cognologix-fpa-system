@@ -18,6 +18,10 @@ vi.mock('@/context/AuthContext', () => ({
     logout: vi.fn(),
     clearMustChangePassword: vi.fn(),
     refreshSession: vi.fn(),
+    refreshAccessToken: vi.fn(),
+    setBeforeLogout: vi.fn(),
+    onApiActivity: vi.fn(),
+    registerActivityListener: vi.fn(() => () => {}),
   }),
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));

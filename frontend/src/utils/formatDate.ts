@@ -39,11 +39,11 @@ export function formatDateTime(
   return `${formatDate(date, format)} ${parsed.format('HH:mm')}`;
 }
 
-/** Indian Rupee formatting — ₹X,XX,XXX via en-IN grouping. */
+/** Indian Rupee formatting — ₹X,XX,XXX.XXX via en-IN grouping (3 dp for Rs Lakhs). */
 export function formatCurrency(amount: number | null | undefined): string {
-  if (amount == null || Number.isNaN(amount)) return '—';
-  return `₹${Number(amount).toLocaleString('en-IN', {
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 0,
-  })}`;
+  if (amount == null) return '—';
+  return '₹' + amount.toLocaleString('en-IN', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3
+  });
 }

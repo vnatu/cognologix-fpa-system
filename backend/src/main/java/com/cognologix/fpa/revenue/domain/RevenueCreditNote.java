@@ -45,7 +45,7 @@ public class RevenueCreditNote {
     private String status;
 
     /** Stored as positive; treated as negative in net revenue calculations (ADR-040). */
-    @Column(name = "amount", nullable = false, precision = 14, scale = 2)
+    @Column(name = "amount", nullable = false, precision = 14, scale = 3)
     private BigDecimal amount;
 
     @Enumerated(EnumType.STRING)
@@ -53,8 +53,15 @@ public class RevenueCreditNote {
     @Builder.Default
     private RevenueCurrency currency = RevenueCurrency.INR;
 
-    @Column(name = "amount_inr", precision = 14, scale = 2)
+    @Column(name = "amount_inr", precision = 14, scale = 3)
     private BigDecimal amountInr;
+
+    /**
+     * Raw USD dollars as credited (ADR-061). Null when unmapped / INR.
+     * Not converted to Rs Lakhs and not used in analytics.
+     */
+    @Column(name = "amount_usd", precision = 14, scale = 2)
+    private BigDecimal amountUsd;
 
     /** ADR-017 — FX rate used for USD→INR conversion. */
     @Column(name = "fx_rate_id")

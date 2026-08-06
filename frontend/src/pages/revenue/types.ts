@@ -71,6 +71,8 @@ export interface InvoiceListItem {
   currency: RevenueCurrency;
   projectCode: string | null;
   amountInr: number | null;
+  /** Raw USD as invoiced — no conversion. Null for INR / unmapped. */
+  amountUsd: number | null;
 }
 
 export interface InvoiceListPage {
@@ -89,6 +91,8 @@ export interface RevenueVsPlanRow {
   actualNetRevenueInr: number;
   variance: number;
   varianceInr: number;
+  /** Net raw USD when any AmountUsd present; otherwise null. */
+  actualAmountUsd: number | null;
 }
 
 export interface InvoiceStatusBucket {
@@ -107,9 +111,28 @@ export interface DsoRow {
   unpaidInvoiceCount: number;
 }
 
+export type RevenueDashboardGranularity = 'MONTHLY' | 'QUARTERLY' | 'ANNUAL';
+
+export interface MonthCovered {
+  month: number;
+  year: number;
+  label: string;
+}
+
+export interface PeriodWithData {
+  month: number;
+  year: number;
+  label: string;
+}
+
 export interface DashboardResponse {
   periodMonth: number;
   periodYear: number;
+  granularity: RevenueDashboardGranularity;
+  quarter: number | null;
+  periodLabel: string;
+  monthsCovered: MonthCovered[];
+  actualsCoverageNote: string | null;
   revenueVsPlan: RevenueVsPlanRow[];
   invoiceStatusSummary: InvoiceStatusBucket[];
   dso: DsoRow[];

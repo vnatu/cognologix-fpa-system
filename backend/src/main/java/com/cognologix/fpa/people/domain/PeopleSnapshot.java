@@ -60,4 +60,10 @@ public class PeopleSnapshot {
 
     @Column(name = "date_of_joining")
     private LocalDate dateOfJoining;
+
+    /** ACTIVE from Zoho People; EXITED from Zoho People Exited (ADR-060). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "employee_status", nullable = false, length = 10)
+    @Builder.Default
+    private EmployeeStatus employeeStatus = EmployeeStatus.ACTIVE;
 }

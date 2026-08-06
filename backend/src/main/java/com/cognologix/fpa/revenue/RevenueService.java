@@ -215,6 +215,7 @@ public class RevenueService {
                 .currency(currency)
                 .projectCode(RevenueExcelParser.optional(row, RevenueSystemAttribute.PROJECT_CODE))
                 .amountInr(fx.amountInr())
+                .amountUsd(RevenueExcelParser.optionalUsdAmount(row, RevenueSystemAttribute.AMOUNT_USD))
                 .fxRateId(fx.fxRateId())
                 .build();
     }
@@ -232,6 +233,10 @@ public class RevenueService {
         BigDecimal amount = RevenueExcelParser.requiredDecimal(row, RevenueSystemAttribute.AMOUNT).abs();
         RevenueCurrency currency = parseCurrency(RevenueExcelParser.optional(row, RevenueSystemAttribute.CURRENCY));
         FxConversion fx = convertToInr(amount, currency, creditNoteDate);
+        BigDecimal amountUsd = RevenueExcelParser.optionalUsdAmount(row, RevenueSystemAttribute.AMOUNT_USD);
+        if (amountUsd != null) {
+            amountUsd = amountUsd.abs();
+        }
 
         return RevenueCreditNote.builder()
                 .revenueUpload(upload)
@@ -244,6 +249,7 @@ public class RevenueService {
                 .amount(amount)
                 .currency(currency)
                 .amountInr(fx.amountInr())
+                .amountUsd(amountUsd)
                 .fxRateId(fx.fxRateId())
                 .build();
     }
@@ -257,8 +263,9 @@ public class RevenueService {
         }
         FxRate rate = generalConfigService.findRateOnDate(USD_INR, asOf)
                 .orElseThrow(() -> new RevenueBadRequestException(
-                        "No USD_INR FX rate effective on " + asOf + " (ADR-017)"));
-        BigDecimal amountInr = amount.multiply(rate.getRate()).setScale(2, RoundingMode.HALF_UP);
+                        "No USD_INR FX rate effective on " + asOf
+                                + ". Add an FX rate in Settings → General before importing USD amounts."));
+        BigDecimal amountInr = amount.multiply(rate.getRate()).setScale(3, RoundingMode.HALF_UP);
         return new FxConversion(amountInr, rate.getId());
     }
 
@@ -516,7 +523,8 @@ public class RevenueService {
                 inv.getDueDate(),
                 inv.getCurrency(),
                 inv.getProjectCode(),
-                inv.getAmountInr());
+                inv.getAmountInr(),
+                inv.getAmountUsd());
     }
 
     private InvoiceListItem toCreditItem(RevenueCreditNote note) {
@@ -534,7 +542,8 @@ public class RevenueService {
                 null,
                 note.getCurrency(),
                 null,
-                note.getAmountInr());
+                note.getAmountInr(),
+                note.getAmountUsd());
     }
 
     // ── Dashboard ────────────────────────────────────────────────────────────
@@ -542,77 +551,140 @@ public class RevenueService {
     /**
      * Builds the Revenue Dashboard. Planned figures are supplied by the caller so this module
      * does not depend on Budgeting (avoids a Modulith cycle with budgeting → revenue actuals).
+     *
+     * <p>Granularity (ADR-049 pattern applied to Revenue):
+     * <ul>
+     *   <li>{@code MONTHLY} — single month (path {@code periodMonth}/{@code periodYear})</li>
+     *   <li>{@code QUARTERLY} — sum of 3 Indian-FY months for {@code quarter} (1=Apr–Jun … 4=Jan–Mar)</li>
+     *   <li>{@code ANNUAL} — sum of FY months that have invoice/credit-note uploads</li>
+     * </ul>
      */
     public DashboardResponse getDashboard(
             int periodMonth,
             int periodYear,
+            String granularityRaw,
+            Integer quarter,
             PlannedRevenueLookup plannedRevenueLookup) {
         validatePeriod(periodMonth, periodYear);
-        List<MonthlyRevenueSummary> actuals =
-                Objects.requireNonNullElse(getAllClientsMonthlyRevenue(periodMonth, periodYear), List.of());
+        String granularity = normalizeGranularity(granularityRaw);
+        int resolvedQuarter = resolveQuarter(granularity, quarter, periodMonth);
 
-        List<RevenueVsPlanRow> vsPlan = new ArrayList<>();
-        for (MonthlyRevenueSummary actual : actuals) {
-            Optional<CustomerService.BuCustomerRef> customer =
-                    customerService.resolveBuCustomer(actual.customerId());
-            UUID customerUuid = customer.map(CustomerService.BuCustomerRef::id).orElse(null);
-            BigDecimal planned = BigDecimal.ZERO;
-            if (customerUuid != null && plannedRevenueLookup != null) {
-                planned = Objects.requireNonNullElse(
-                        plannedRevenueLookup.plannedTotal(customerUuid, periodMonth, periodYear),
-                        BigDecimal.ZERO);
+        List<int[]> scopeMonths = monthsInScope(granularity, periodMonth, periodYear, resolvedQuarter);
+        List<int[]> monthsWithData = scopeMonths.stream()
+                .filter(my -> hasActiveUpload(my[0], my[1]))
+                .toList();
+
+        // ANNUAL aggregates only months with data; MONTHLY/QUARTERLY iterate the full scope
+        List<int[]> aggregateMonths = "ANNUAL".equals(granularity) ? monthsWithData : scopeMonths;
+
+        Map<String, VsPlanAccum> vsPlanMap = new LinkedHashMap<>();
+        Map<String, InvoiceStatusBucketAccum> statusMap = new LinkedHashMap<>();
+        Map<String, DsoAccum> dsoMap = new LinkedHashMap<>();
+        LocalDate today = LocalDate.now();
+
+        for (int[] my : aggregateMonths) {
+            int month = my[0];
+            int year = my[1];
+            List<MonthlyRevenueSummary> actuals =
+                    Objects.requireNonNullElse(getAllClientsMonthlyRevenue(month, year), List.of());
+            for (MonthlyRevenueSummary actual : actuals) {
+                Optional<CustomerService.BuCustomerRef> customer =
+                        customerService.resolveBuCustomer(actual.customerId());
+                UUID customerUuid = customer.map(CustomerService.BuCustomerRef::id).orElse(null);
+                BigDecimal planned = BigDecimal.ZERO;
+                if (customerUuid != null && plannedRevenueLookup != null) {
+                    planned = Objects.requireNonNullElse(
+                            plannedRevenueLookup.plannedTotal(customerUuid, month, year),
+                            BigDecimal.ZERO);
+                }
+                VsPlanAccum acc = vsPlanMap.computeIfAbsent(actual.customerId(), k -> {
+                    VsPlanAccum a = new VsPlanAccum();
+                    a.customerName = customer
+                            .map(CustomerService.BuCustomerRef::customerName)
+                            .orElse(actual.customerId());
+                    return a;
+                });
+                acc.planned = acc.planned.add(planned);
+                acc.actual = acc.actual.add(actual.netRevenue());
+                acc.actualInr = acc.actualInr.add(actual.netRevenueInr());
             }
-            String name = customer.map(CustomerService.BuCustomerRef::customerName).orElse(actual.customerId());
-            vsPlan.add(new RevenueVsPlanRow(
-                    actual.customerId(),
-                    name,
-                    planned,
-                    actual.netRevenue(),
-                    actual.netRevenueInr(),
-                    actual.netRevenue().subtract(planned),
-                    actual.netRevenueInr().subtract(planned)));
+
+            findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, month, year)
+                    .ifPresent(upload -> {
+                        for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(upload.getId())) {
+                            if (inv.getAmountUsd() != null) {
+                                VsPlanAccum vs = vsPlanMap.computeIfAbsent(inv.getCustomerId(), k -> {
+                                    VsPlanAccum a = new VsPlanAccum();
+                                    a.customerName = customerService.resolveBuCustomer(inv.getCustomerId())
+                                            .map(CustomerService.BuCustomerRef::customerName)
+                                            .orElse(inv.getCustomerId());
+                                    return a;
+                                });
+                                vs.actualUsd = vs.actualUsd.add(inv.getAmountUsd());
+                                vs.hasUsd = true;
+                            }
+                            String st = inv.getStatus() != null ? inv.getStatus() : "Unknown";
+                            InvoiceStatusBucketAccum acc = statusMap.computeIfAbsent(
+                                    st, k -> new InvoiceStatusBucketAccum());
+                            acc.count++;
+                            acc.total = acc.total.add(inv.getAmount());
+                            acc.totalInr = acc.totalInr.add(nullToZero(inv.getAmountInr()));
+
+                            if (isPaidStatus(inv.getStatus()) || isVoidStatus(inv.getStatus())) {
+                                continue;
+                            }
+                            if (inv.getInvoiceDate() == null) {
+                                continue;
+                            }
+                            DsoAccum dso = dsoMap.computeIfAbsent(inv.getCustomerId(), k -> new DsoAccum());
+                            long days = ChronoUnit.DAYS.between(inv.getInvoiceDate(), today);
+                            dso.totalDays += Math.max(days, 0);
+                            dso.count++;
+                            dso.outstanding = dso.outstanding.add(nullToZero(inv.getBalance()));
+                            if (dso.oldestInvoiceDate == null
+                                    || inv.getInvoiceDate().isBefore(dso.oldestInvoiceDate)) {
+                                dso.oldestInvoiceDate = inv.getInvoiceDate();
+                            }
+                        }
+                    });
+
+            findActiveUpload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, month, year)
+                    .ifPresent(upload -> {
+                        for (RevenueCreditNote note : revenueCreditNoteRepository.findByRevenueUploadId(upload.getId())) {
+                            if (note.getAmountUsd() != null) {
+                                VsPlanAccum vs = vsPlanMap.computeIfAbsent(note.getCustomerId(), k -> {
+                                    VsPlanAccum a = new VsPlanAccum();
+                                    a.customerName = customerService.resolveBuCustomer(note.getCustomerId())
+                                            .map(CustomerService.BuCustomerRef::customerName)
+                                            .orElse(note.getCustomerId());
+                                    return a;
+                                });
+                                vs.actualUsd = vs.actualUsd.subtract(note.getAmountUsd());
+                                vs.hasUsd = true;
+                            }
+                        }
+                    });
         }
 
-        Map<String, InvoiceStatusBucketAccum> statusMap = new LinkedHashMap<>();
-        findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear)
-                .ifPresent(upload -> {
-                    for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(upload.getId())) {
-                        String st = inv.getStatus() != null ? inv.getStatus() : "Unknown";
-                        InvoiceStatusBucketAccum acc = statusMap.computeIfAbsent(
-                                st, k -> new InvoiceStatusBucketAccum());
-                        acc.count++;
-                        acc.total = acc.total.add(inv.getAmount());
-                        acc.totalInr = acc.totalInr.add(nullToZero(inv.getAmountInr()));
-                    }
-                });
+        List<RevenueVsPlanRow> vsPlan = vsPlanMap.entrySet().stream()
+                .map(e -> new RevenueVsPlanRow(
+                        e.getKey(),
+                        e.getValue().customerName,
+                        e.getValue().planned,
+                        e.getValue().actual,
+                        e.getValue().actualInr,
+                        e.getValue().actual.subtract(e.getValue().planned),
+                        e.getValue().actualInr.subtract(e.getValue().planned),
+                        e.getValue().hasUsd ? e.getValue().actualUsd : null))
+                .sorted(Comparator.comparing(RevenueVsPlanRow::customerId))
+                .toList();
+
         List<InvoiceStatusBucket> statusSummary = statusMap.entrySet().stream()
                 .map(e -> new InvoiceStatusBucket(
                         e.getKey(), e.getValue().count, e.getValue().total, e.getValue().totalInr))
                 .sorted(Comparator.comparing(InvoiceStatusBucket::status))
                 .toList();
 
-        Map<String, DsoAccum> dsoMap = new LinkedHashMap<>();
-        LocalDate today = LocalDate.now();
-        findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear)
-                .ifPresent(upload -> {
-                    for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(upload.getId())) {
-                        if (isPaidStatus(inv.getStatus()) || isVoidStatus(inv.getStatus())) {
-                            continue;
-                        }
-                        if (inv.getInvoiceDate() == null) {
-                            continue;
-                        }
-                        DsoAccum acc = dsoMap.computeIfAbsent(inv.getCustomerId(), k -> new DsoAccum());
-                        // Informational DSO: days from invoice date to today for unpaid invoices
-                        long days = ChronoUnit.DAYS.between(inv.getInvoiceDate(), today);
-                        acc.totalDays += Math.max(days, 0);
-                        acc.count++;
-                        acc.outstanding = acc.outstanding.add(nullToZero(inv.getBalance()));
-                        if (acc.oldestInvoiceDate == null || inv.getInvoiceDate().isBefore(acc.oldestInvoiceDate)) {
-                            acc.oldestInvoiceDate = inv.getInvoiceDate();
-                        }
-                    }
-                });
         List<DsoRow> dsoRows = dsoMap.entrySet().stream()
                 .map(e -> {
                     Optional<CustomerService.BuCustomerRef> customer =
@@ -630,7 +702,203 @@ public class RevenueService {
                 .sorted(Comparator.comparing(DsoRow::customerId))
                 .toList();
 
-        return new DashboardResponse(periodMonth, periodYear, vsPlan, statusSummary, dsoRows);
+        List<MonthCovered> monthsCovered = monthsWithData.stream()
+                .map(my -> new MonthCovered(my[0], my[1], monthLabel(my[0], my[1])))
+                .toList();
+
+        String periodLabel = periodLabel(granularity, periodMonth, periodYear, resolvedQuarter);
+        String coverageNote = coverageNote(granularity, monthsCovered, scopeMonths.size());
+
+        int responseMonth = "QUARTERLY".equals(granularity)
+                ? firstMonthOfQuarter(resolvedQuarter)
+                : ("ANNUAL".equals(granularity) ? 4 : periodMonth);
+        int responseYear = "ANNUAL".equals(granularity)
+                ? fiscalStartYear(periodMonth, periodYear)
+                : ("QUARTERLY".equals(granularity)
+                        ? yearForQuarterMonth(resolvedQuarter, periodMonth, periodYear)
+                        : periodYear);
+
+        return new DashboardResponse(
+                responseMonth,
+                responseYear,
+                granularity,
+                "QUARTERLY".equals(granularity) ? resolvedQuarter : null,
+                periodLabel,
+                monthsCovered,
+                coverageNote,
+                vsPlan,
+                statusSummary,
+                dsoRows);
+    }
+
+    /** Active invoice/credit-note periods for the dashboard month selector. */
+    public List<PeriodWithData> listPeriodsWithData() {
+        return revenueUploadRepository.findAll().stream()
+                .filter(u -> u.getStatus() == RevenueUploadStatus.ACTIVE)
+                .filter(u -> u.getImportType() == RevenueImportType.ZOHO_BOOKS_INVOICES
+                        || u.getImportType() == RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES)
+                .map(u -> new int[]{u.getPeriodMonth(), u.getPeriodYear()})
+                .collect(Collectors.toMap(
+                        my -> my[1] * 100 + my[0],
+                        my -> my,
+                        (a, b) -> a))
+                .values().stream()
+                .sorted(Comparator
+                        .comparingInt((int[] my) -> fiscalSortKey(my[0], my[1]))
+                        .reversed())
+                .map(my -> new PeriodWithData(my[0], my[1], monthLabel(my[0], my[1])))
+                .toList();
+    }
+
+    private boolean hasActiveUpload(int periodMonth, int periodYear) {
+        return findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear).isPresent()
+                || findActiveUpload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear).isPresent();
+    }
+
+    private static String normalizeGranularity(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "MONTHLY";
+        }
+        String g = raw.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("MONTHLY", "QUARTERLY", "ANNUAL").contains(g)) {
+            throw new RevenueBadRequestException(
+                    "granularity must be MONTHLY, QUARTERLY, or ANNUAL");
+        }
+        return g;
+    }
+
+    private static int resolveQuarter(String granularity, Integer quarter, int periodMonth) {
+        if (!"QUARTERLY".equals(granularity)) {
+            return quarterForMonth(periodMonth);
+        }
+        if (quarter == null) {
+            return quarterForMonth(periodMonth);
+        }
+        if (quarter < 1 || quarter > 4) {
+            throw new RevenueBadRequestException("quarter must be between 1 and 4");
+        }
+        return quarter;
+    }
+
+    private static List<int[]> monthsInScope(
+            String granularity, int periodMonth, int periodYear, int quarter) {
+        if ("MONTHLY".equals(granularity)) {
+            return List.of(new int[]{periodMonth, periodYear});
+        }
+        int fyStart = fiscalStartYear(periodMonth, periodYear);
+        if ("QUARTERLY".equals(granularity)) {
+            int[] months = monthsOfQuarter(quarter);
+            List<int[]> result = new ArrayList<>(3);
+            for (int m : months) {
+                result.add(new int[]{m, m >= 4 ? fyStart : fyStart + 1});
+            }
+            return result;
+        }
+        // ANNUAL — full Indian FY containing periodMonth/periodYear
+        int[] months = {4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3};
+        List<int[]> result = new ArrayList<>(12);
+        for (int m : months) {
+            result.add(new int[]{m, m >= 4 ? fyStart : fyStart + 1});
+        }
+        return result;
+    }
+
+    private static int[] monthsOfQuarter(int quarter) {
+        return switch (quarter) {
+            case 2 -> new int[]{7, 8, 9};
+            case 3 -> new int[]{10, 11, 12};
+            case 4 -> new int[]{1, 2, 3};
+            default -> new int[]{4, 5, 6};
+        };
+    }
+
+    private static int firstMonthOfQuarter(int quarter) {
+        return monthsOfQuarter(quarter)[0];
+    }
+
+    private static int quarterForMonth(int month) {
+        if (month >= 4 && month <= 6) return 1;
+        if (month >= 7 && month <= 9) return 2;
+        if (month >= 10 && month <= 12) return 3;
+        return 4;
+    }
+
+    private static int fiscalStartYear(int periodMonth, int periodYear) {
+        return periodMonth >= 4 ? periodYear : periodYear - 1;
+    }
+
+    private static int yearForQuarterMonth(int quarter, int periodMonth, int periodYear) {
+        int fyStart = fiscalStartYear(periodMonth, periodYear);
+        return quarter <= 3 ? fyStart : fyStart + 1;
+    }
+
+    private static String fiscalYearLabel(int periodMonth, int periodYear) {
+        int start = fiscalStartYear(periodMonth, periodYear);
+        int startYy = start % 100;
+        int endYy = (start + 1) % 100;
+        return String.format("FY%02d%02d", startYy, endYy);
+    }
+
+    private static String periodLabel(
+            String granularity, int periodMonth, int periodYear, int quarter) {
+        return switch (granularity) {
+            case "QUARTERLY" -> "Q" + quarter + " " + fiscalYearLabel(periodMonth, periodYear);
+            case "ANNUAL" -> fiscalYearLabel(periodMonth, periodYear);
+            default -> monthLabel(periodMonth, periodYear);
+        };
+    }
+
+    private static String monthLabel(int month, int year) {
+        String[] names = {
+                "", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+        };
+        return names[month] + " " + year;
+    }
+
+    private static String shortMonth(int month) {
+        String[] names = {
+                "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        };
+        return names[month];
+    }
+
+    private static String coverageNote(
+            String granularity, List<MonthCovered> monthsCovered, int scopeSize) {
+        if (!"ANNUAL".equals(granularity) && !"QUARTERLY".equals(granularity)) {
+            return null;
+        }
+        if (monthsCovered.isEmpty()) {
+            return "Data available: none (0 of " + scopeSize + " months)";
+        }
+        MonthCovered first = monthsCovered.getFirst();
+        MonthCovered last = monthsCovered.getLast();
+        String range = first.month() == last.month() && first.year() == last.year()
+                ? shortMonth(first.month()) + " " + first.year()
+                : shortMonth(first.month()) + "–" + shortMonth(last.month()) + " " + last.year();
+        // If years differ (e.g. Apr–Mar), show both years on ends
+        if (first.year() != last.year()) {
+            range = shortMonth(first.month()) + " " + first.year()
+                    + "–" + shortMonth(last.month()) + " " + last.year();
+        }
+        return "Data available: " + range + " (" + monthsCovered.size() + " of " + scopeSize + " months)";
+    }
+
+    /** Sort key for Indian FY order (Apr…Mar) ascending. */
+    private static int fiscalSortKey(int month, int year) {
+        int fyStart = fiscalStartYear(month, year);
+        int order = month >= 4 ? month - 4 : month + 8;
+        return fyStart * 12 + order;
+    }
+
+    private static class VsPlanAccum {
+        String customerName;
+        BigDecimal planned = BigDecimal.ZERO;
+        BigDecimal actual = BigDecimal.ZERO;
+        BigDecimal actualInr = BigDecimal.ZERO;
+        BigDecimal actualUsd = BigDecimal.ZERO;
+        boolean hasUsd;
     }
 
     private static class InvoiceStatusBucketAccum {

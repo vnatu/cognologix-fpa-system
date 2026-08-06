@@ -16,6 +16,8 @@ import lombok.Setter;
 public class GeneralConfig {
 
     public static final String DATE_FORMAT_KEY = "date_format";
+    public static final String JWT_EXPIRY_HOURS_KEY = "jwt_expiry_hours";
+    public static final String INACTIVITY_TIMEOUT_MINUTES_KEY = "inactivity_timeout_minutes";
 
     @Id
     @Column(name = "config_key", length = 100)

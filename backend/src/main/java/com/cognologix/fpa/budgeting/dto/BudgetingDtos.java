@@ -160,7 +160,13 @@ public final class BudgetingDtos {
             BigDecimal totalCogs,
             BigDecimal grossProfit,
             BigDecimal totalOpex,
-            BigDecimal ebitda
+            BigDecimal ebitda,
+            /**
+             * Billable Ratio % = (billableHc ÷ totalHc) × 100.
+             * Always a percentage (e.g. 64.29), never a 0–1 decimal.
+             * For Delta months/periodTotal this is Actual% − Plan% (percentage points).
+             */
+            BigDecimal billableRatioPct
     ) {}
 
     public record MonthlyPlanVsActual(

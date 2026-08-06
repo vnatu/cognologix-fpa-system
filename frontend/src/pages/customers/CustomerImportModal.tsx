@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import * as XLSX from 'xlsx';
 import {
   Button,
   Collapse,
@@ -47,7 +46,8 @@ interface Props {
   onImported: () => void;
 }
 
-export function downloadCustomerImportTemplate(): void {
+export async function downloadCustomerImportTemplate(): Promise<void> {
+  const XLSX = await import('xlsx');
   const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Customers');

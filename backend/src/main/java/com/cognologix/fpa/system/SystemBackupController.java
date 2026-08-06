@@ -25,7 +25,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/system")
 @RequiredArgsConstructor
-@Tag(name = "System Backup & Restore", description = "Full replace backup/restore (ADR-044 Tier 2)")
+@Tag(name = "System Backup & Restore", description = "Full replace backup/restore")
 public class SystemBackupController {
 
     private final SystemBackupService systemBackupService;

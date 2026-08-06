@@ -5,8 +5,9 @@ import java.math.RoundingMode;
 
 /**
  * Shared numeric parsing for Excel/Zoho imports across modules.
- * Strips currency symbols (e.g. ₹) and grouping commas so Indian-format
- * values like {@code ₹1,14,47,529.60} parse correctly.
+ * Strips currency symbols (e.g. ₹, $) and grouping commas so Indian-format
+ * values like {@code ₹1,14,47,529.60} and USD values like {@code $20,640.00}
+ * parse correctly.
  *
  * <p>Zoho Books / Zoho Payroll export amounts in full rupees (or full currency units).
  * The FP&amp;A system stores monetary values in Rs Lakhs — use {@link #toRsLakhs(BigDecimal)}
@@ -19,7 +20,7 @@ public final class ExcelNumberParser {
     private ExcelNumberParser() {}
 
     /**
-     * Cleans a raw Excel/Zoho numeric cell value: removes ₹, commas, and trims.
+     * Cleans a raw Excel/Zoho numeric cell value: removes ₹ / $, commas, and trims.
      * Returns null when the input is null/blank or cleans to empty.
      */
     public static String cleanNumeric(String raw) {
@@ -27,6 +28,7 @@ public final class ExcelNumberParser {
             return null;
         }
         String cleaned = raw.replace("₹", "")
+                .replace("$", "")
                 .replace(",", "")
                 .trim();
         return cleaned.isEmpty() ? null : cleaned;
@@ -51,13 +53,13 @@ public final class ExcelNumberParser {
 
     /**
      * Converts a full-rupee (or full currency-unit) amount from Zoho exports into Rs Lakhs.
-     * Null-safe. Scale 2, {@link RoundingMode#HALF_UP}.
+     * Null-safe. Scale 3, {@link RoundingMode#HALF_UP} (ADR-055).
      */
     public static BigDecimal toRsLakhs(BigDecimal fullRupeeAmount) {
         if (fullRupeeAmount == null) {
             return null;
         }
-        return fullRupeeAmount.divide(ONE_LAKH, 2, RoundingMode.HALF_UP);
+        return fullRupeeAmount.divide(ONE_LAKH, 3, RoundingMode.HALF_UP);
     }
 
     /**

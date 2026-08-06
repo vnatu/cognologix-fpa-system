@@ -560,7 +560,7 @@ public class BudgetingExcelIO {
             if (value == null) {
                 return BigDecimal.ZERO;
             }
-            value = value.setScale(2, RoundingMode.HALF_UP);
+            value = value.setScale(3, RoundingMode.HALF_UP);
             if (value.signum() < 0) {
                 errors.add(new PlanInputImportRowError(rowNumber, header + " must be >= 0"));
                 return null;

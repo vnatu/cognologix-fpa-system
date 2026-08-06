@@ -134,6 +134,8 @@ export interface MonthlyFinancials {
   grossProfit: number;
   totalOpex: number;
   ebitda: number;
+  /** Billable Ratio % = (billableHc / totalHc) × 100. Delta: Actual% − Plan%. */
+  billableRatioPct: number;
 }
 
 export interface TriadHc {

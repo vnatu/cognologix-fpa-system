@@ -5,6 +5,7 @@ import {
   Col,
   Empty,
   Row,
+  Segmented,
   Select,
   Skeleton,
   Space,
@@ -26,49 +27,122 @@ import {
 import { HEADING_FONT } from '@/theme/antdTheme';
 import { useDateFormat } from '@/context/DateFormatContext';
 import { formatCurrency } from '@/utils/formatDate';
-import { fetchDashboard } from './api';
-import {
-  MONTH_OPTIONS,
-  toLakhs,
-  yearOptions,
-} from './constants';
+import { fetchDashboard, fetchDashboardPeriods } from './api';
 import type {
   DashboardResponse,
   DsoRow,
+  PeriodWithData,
+  RevenueDashboardGranularity,
   RevenueVsPlanRow,
 } from './types';
 
 const { Title, Text } = Typography;
 
+/** Dashboard money fields are already Rs Lakhs (ADR-046) — do not divide by 100000. */
 function formatRsL(amount: number | null | undefined): string {
-  const lakhs = toLakhs(amount);
-  return formatCurrency(lakhs);
+  return formatCurrency(amount);
+}
+
+function quarterForMonth(month: number): number {
+  if (month >= 4 && month <= 6) return 1;
+  if (month >= 7 && month <= 9) return 2;
+  if (month >= 10 && month <= 12) return 3;
+  return 4;
+}
+
+function fiscalStartYear(month: number, year: number): number {
+  return month >= 4 ? year : year - 1;
+}
+
+function fiscalYearLabel(month: number, year: number): string {
+  const start = fiscalStartYear(month, year);
+  return `FY${String(start % 100).padStart(2, '0')}${String((start + 1) % 100).padStart(2, '0')}`;
+}
+
+function periodKey(month: number, year: number): string {
+  return `${year}-${month}`;
 }
 
 export default function RevenueDashboardPage() {
   const { token } = theme.useToken();
   const { formatDate } = useDateFormat();
-  const now = new Date();
-  const [periodMonth, setPeriodMonth] = useState(now.getMonth() + 1);
-  const [periodYear, setPeriodYear] = useState(now.getFullYear());
+  const [granularity, setGranularity] =
+    useState<RevenueDashboardGranularity>('MONTHLY');
+  const [periodMonth, setPeriodMonth] = useState(4);
+  const [periodYear, setPeriodYear] = useState(new Date().getFullYear());
+  const [selectedQuarter, setSelectedQuarter] = useState(1);
+  const [availablePeriods, setAvailablePeriods] = useState<PeriodWithData[]>([]);
+  const [periodsLoaded, setPeriodsLoaded] = useState(false);
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    fetchDashboardPeriods()
+      .then((periods) => {
+        setAvailablePeriods(periods);
+        if (periods.length > 0) {
+          // API returns newest-first (Indian FY order)
+          const latest = periods[0];
+          setPeriodMonth(latest.month);
+          setPeriodYear(latest.year);
+          setSelectedQuarter(quarterForMonth(latest.month));
+        }
+      })
+      .catch(() => {
+        notification.error({ message: 'Failed to load revenue periods' });
+      })
+      .finally(() => setPeriodsLoaded(true));
+  }, []);
+
   const load = useCallback(async () => {
+    if (!periodsLoaded) return;
     setLoading(true);
     try {
-      setData(await fetchDashboard(periodMonth, periodYear));
+      setData(
+        await fetchDashboard(
+          periodMonth,
+          periodYear,
+          granularity,
+          granularity === 'QUARTERLY' ? selectedQuarter : undefined,
+        ),
+      );
     } catch {
       notification.error({ message: 'Failed to load revenue dashboard' });
       setData(null);
     } finally {
       setLoading(false);
     }
-  }, [periodMonth, periodYear]);
+  }, [
+    periodsLoaded,
+    periodMonth,
+    periodYear,
+    granularity,
+    selectedQuarter,
+  ]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const monthOptions = useMemo(
+    () =>
+      availablePeriods.map((p) => ({
+        value: periodKey(p.month, p.year),
+        label: p.label,
+        month: p.month,
+        year: p.year,
+      })),
+    [availablePeriods],
+  );
+
+  const quarterOptions = useMemo(() => {
+    const fy = fiscalYearLabel(periodMonth, periodYear);
+    return [1, 2, 3, 4].map((q) => ({
+      value: String(q),
+      label: `Q${q} ${fy}`,
+      quarter: q,
+    }));
+  }, [periodMonth, periodYear]);
 
   const statusTotals = useMemo(() => {
     const buckets = data?.invoiceStatusSummary ?? [];
@@ -123,7 +197,25 @@ export default function RevenueDashboardPage() {
       dataIndex: 'actualNetRevenueInr',
       key: 'actual',
       align: 'right',
-      render: (v: number) => formatRsL(v),
+      render: (v: number, r) => (
+        <div>
+          <div>{formatRsL(v)}</div>
+          {r.actualAmountUsd != null && r.key !== '__total__' && (
+            <Text
+              style={{
+                color: token.colorTextSecondary,
+                fontSize: 12,
+              }}
+            >
+              USD: $
+              {r.actualAmountUsd.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </Text>
+          )}
+        </div>
+      ),
     },
     {
       title: 'Variance (Rs L)',
@@ -186,6 +278,7 @@ export default function RevenueDashboardPage() {
       actualNetRevenueInr: totals.actualNetRevenueInr,
       variance: 0,
       varianceInr: totals.varianceInr,
+      actualAmountUsd: null,
     });
     return rows;
   }, [data]);
@@ -197,8 +290,7 @@ export default function RevenueDashboardPage() {
       dataIndex: 'avgDaysOutstanding',
       key: 'avg',
       align: 'right',
-      render: (v: number | null) =>
-        v == null ? '—' : v.toFixed(1),
+      render: (v: number | null) => (v == null ? '—' : v.toFixed(1)),
     },
     {
       title: 'Oldest Outstanding Invoice Date',
@@ -215,6 +307,8 @@ export default function RevenueDashboardPage() {
     },
   ];
 
+  const periodTitle = data?.periodLabel ?? '';
+
   return (
     <div style={{ padding: 24 }}>
       <Space
@@ -228,29 +322,89 @@ export default function RevenueDashboardPage() {
         <Title level={4} style={{ fontFamily: HEADING_FONT, margin: 0 }}>
           Revenue Dashboard
         </Title>
-        <Space>
-          <Select
-            style={{ width: 160 }}
-            value={periodMonth}
-            options={MONTH_OPTIONS}
-            onChange={setPeriodMonth}
+        <Space wrap>
+          <Text type="secondary">Granularity</Text>
+          <Segmented
+            value={granularity}
+            onChange={(v) => {
+              const g = v as RevenueDashboardGranularity;
+              setGranularity(g);
+              if (g === 'QUARTERLY') {
+                setSelectedQuarter(quarterForMonth(periodMonth));
+              }
+            }}
+            options={[
+              { label: 'Monthly', value: 'MONTHLY' },
+              { label: 'Quarterly', value: 'QUARTERLY' },
+              { label: 'Annual', value: 'ANNUAL' },
+            ]}
           />
-          <Select
-            style={{ width: 110 }}
-            value={periodYear}
-            options={yearOptions().map((y) => ({
-              label: String(y),
-              value: y,
-            }))}
-            onChange={setPeriodYear}
-          />
+          {granularity === 'MONTHLY' && (
+            <Select
+              style={{ minWidth: 180 }}
+              placeholder="Select month"
+              value={
+                monthOptions.some(
+                  (o) => o.value === periodKey(periodMonth, periodYear),
+                )
+                  ? periodKey(periodMonth, periodYear)
+                  : undefined
+              }
+              onChange={(val) => {
+                const opt = monthOptions.find((o) => o.value === val);
+                if (opt) {
+                  setPeriodMonth(opt.month);
+                  setPeriodYear(opt.year);
+                  setSelectedQuarter(quarterForMonth(opt.month));
+                }
+              }}
+              options={monthOptions.map((o) => ({
+                label: o.label,
+                value: o.value,
+              }))}
+              notFoundContent="No months with invoice data"
+            />
+          )}
+          {granularity === 'QUARTERLY' && (
+            <Select
+              style={{ minWidth: 160 }}
+              value={String(selectedQuarter)}
+              onChange={(val) => {
+                const q = Number(val);
+                setSelectedQuarter(q);
+                // Anchor path month/year to first month of quarter within current FY
+                const fyStart = fiscalStartYear(periodMonth, periodYear);
+                const firstMonth = q === 1 ? 4 : q === 2 ? 7 : q === 3 ? 10 : 1;
+                setPeriodMonth(firstMonth);
+                setPeriodYear(q === 4 ? fyStart + 1 : fyStart);
+              }}
+              options={quarterOptions.map((o) => ({
+                label: o.label,
+                value: o.value,
+              }))}
+            />
+          )}
         </Space>
       </Space>
 
-      {loading ? (
+      {!periodsLoaded || loading ? (
         <Skeleton active paragraph={{ rows: 12 }} />
       ) : (
         <>
+          {periodTitle && (
+            <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+              Period: {periodTitle}
+            </Text>
+          )}
+          {data?.actualsCoverageNote && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={data.actualsCoverageNote}
+            />
+          )}
+
           <Card
             title={
               <span style={{ fontFamily: HEADING_FONT }}>
@@ -332,7 +486,9 @@ export default function RevenueDashboardPage() {
                   </Pie>
                   <Tooltip
                     formatter={(value) =>
-                      formatRsL(typeof value === 'number' ? value : Number(value))
+                      formatRsL(
+                        typeof value === 'number' ? value : Number(value),
+                      )
                     }
                   />
                   <Legend />
@@ -360,7 +516,9 @@ export default function RevenueDashboardPage() {
               columns={dsoColumns}
               dataSource={data?.dso ?? []}
               pagination={false}
-              locale={{ emptyText: <Empty description="No outstanding invoices" /> }}
+              locale={{
+                emptyText: <Empty description="No outstanding invoices" />,
+              }}
             />
           </Card>
         </>

@@ -62,7 +62,7 @@ export const updateCustomer = (
 export const exportCustomers = (): Promise<void> =>
   downloadBlob('/api/customers/export', 'customers_export.xlsx');
 
-// ── Customer Import (ADR-027) ─────────────────────────────────────────────────
+// ── Customer Import ───────────────────────────────────────────────────────────
 
 export const checkCustomerImportConflicts = (
   file: File,

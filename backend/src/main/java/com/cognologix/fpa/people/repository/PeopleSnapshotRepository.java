@@ -1,5 +1,6 @@
 package com.cognologix.fpa.people.repository;
 
+import com.cognologix.fpa.people.domain.EmployeeStatus;
 import com.cognologix.fpa.people.domain.PeopleSnapshot;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -22,5 +23,14 @@ public interface PeopleSnapshotRepository extends JpaRepository<PeopleSnapshot, 
     @Query("DELETE FROM PeopleSnapshot p WHERE p.periodVersion.id = :periodVersionId")
     void deleteByPeriodVersionId(@Param("periodVersionId") UUID periodVersionId);
 
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM PeopleSnapshot p WHERE p.periodVersion.id = :periodVersionId"
+            + " AND p.employeeStatus = :employeeStatus")
+    void deleteByPeriodVersionIdAndEmployeeStatus(
+            @Param("periodVersionId") UUID periodVersionId,
+            @Param("employeeStatus") EmployeeStatus employeeStatus);
+
     long countByPeriodVersionId(UUID periodVersionId);
+
+    long countByPeriodVersionIdAndEmployeeStatus(UUID periodVersionId, EmployeeStatus employeeStatus);
 }

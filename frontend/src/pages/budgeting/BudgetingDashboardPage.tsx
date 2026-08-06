@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
+  Button,
   Card,
   Col,
+  Dropdown,
   Empty,
   Popover,
   Radio,
@@ -17,7 +19,7 @@ import {
   Typography,
   InputNumber,
 } from 'antd';
-import { QuestionCircleOutlined } from '@ant-design/icons';
+import { DownloadOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import {
   Line,
   LineChart,
@@ -31,6 +33,9 @@ import {
 } from 'recharts';
 import { formatCurrency } from '@/utils/formatDate';
 import { HEADING_FONT } from '@/theme/antdTheme';
+import FormulaTooltip from '@/components/FormulaTooltip';
+import { FORMULAS } from './formulas';
+import type { FormulaDef } from './formulas';
 import {
   buildFyMonthCols,
   buildFyMonthOptions,
@@ -61,6 +66,8 @@ import {
   fetchPlans,
   fetchPlanVsActual,
   fetchRollingForecast,
+  downloadBudgetingReport,
+  type BudgetingReportType,
 } from './api';
 
 const { Title, Text } = Typography;
@@ -77,12 +84,27 @@ const PANEL_HELP = {
   pvaCosts:
     'Compares planned salary and overhead costs against actuals. Salary actuals flow automatically from finalised People & Payroll periods. Overhead actuals are entered manually. Total Payroll Cost includes gross pay plus employer contributions (EPF, EPS, EDLI, Gratuity etc.).',
   plSummary:
-    'Consolidated Profit & Loss statement. Revenue flows from client invoices. COGS (Cost of Goods Sold) = billable and bench staff salaries + delivery overheads. Gross Profit = Revenue minus COGS. OpEx = support, leadership, and management costs plus non-delivery overheads. EBITDA = Gross Profit minus OpEx.',
+    'Consolidated Profit & Loss. COGS = Billable + Bench Payroll Cost + Delivery Overheads. Gross Profit = Revenue − COGS. OpEx = Support + Leadership + Management Payroll Cost + Non-Delivery Overheads + Variable Pay. EBITDA = Gross Profit − OpEx. Payroll Cost = Gross Pay + Employer Contributions.',
   costPerEmployee:
     'Fully loaded cost per head by employee category using Full Absorption Costing. Layer 1 = direct salary + employer statutory contributions. Layer 2 = direct overhead per head (insurance, software, training). Layer 3 = shared overhead allocated to billable employees only (rent, electricity etc.). The Minimum Billing Rate for billable staff = Layer 1 + 2 + 3 — this is your break-even rate for client negotiations.',
   deltaView:
     'Delta = Rolling Forecast minus Baseline. Shows how your current trajectory differs from your original plan. For Revenue and Margin: positive delta = tracking above plan (good). For Costs: negative delta = tracking below plan (good = under-budget). Traffic light colors: green = favorable, red = unfavorable.',
 } as const;
+
+function MetricTitle({
+  label,
+  formula,
+}: {
+  label: string;
+  formula: FormulaDef;
+}) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {label}
+      <FormulaTooltip {...formula} />
+    </span>
+  );
+}
 
 function PanelHelpTitle({
   title,
@@ -334,6 +356,36 @@ export default function BudgetingDashboardPage() {
                 }))}
               />
             )}
+            {selectedPlanId && (
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      key: 'ROLLING_FORECAST',
+                      label: 'Rolling Forecast',
+                    },
+                    { key: 'PLAN_VS_ACTUAL', label: 'Plan vs Actual' },
+                    { key: 'DELTA', label: 'Delta' },
+                    { key: 'PL_SUMMARY', label: 'P&L Summary' },
+                    {
+                      key: 'COST_PER_EMPLOYEE',
+                      label: 'Cost per Employee',
+                    },
+                    { key: 'BU_ANALYSIS', label: 'BU Analysis' },
+                  ],
+                  onClick: ({ key }) => {
+                    void downloadBudgetingReport(
+                      selectedPlanId,
+                      key as BudgetingReportType,
+                      periodQuery,
+                      selectedTypeId ?? undefined,
+                    );
+                  },
+                }}
+              >
+                <Button icon={<DownloadOutlined />}>Export Report</Button>
+              </Dropdown>
+            )}
           </Space>
         </Card>
 
@@ -466,7 +518,7 @@ function HeadlineKPIsPanel({ pva, token }: HeadlineKPIsPanelProps) {
         <Row gutter={16}>
           <Col span={8}>
             <Statistic
-              title="Total Revenue (Rs L)"
+              title={<MetricTitle label="Total Revenue (Rs L)" formula={FORMULAS.totalRevenue} />}
               value={formatCurrency(
                 totals.totalRevenue.actual ?? totals.totalRevenue.plan,
               )}
@@ -493,7 +545,7 @@ function HeadlineKPIsPanel({ pva, token }: HeadlineKPIsPanelProps) {
           </Col>
           <Col span={8}>
             <Statistic
-              title="EBITDA (Rs L)"
+              title={<MetricTitle label="EBITDA (Rs L)" formula={FORMULAS.ebitda} />}
               value={formatCurrency(totals.ebitda.actual ?? totals.ebitda.plan)}
               valueStyle={{
                 color:
@@ -517,7 +569,7 @@ function HeadlineKPIsPanel({ pva, token }: HeadlineKPIsPanelProps) {
           </Col>
           <Col span={8}>
             <Statistic
-              title="Billable Ratio %"
+              title={<MetricTitle label="Billable Ratio %" formula={FORMULAS.billableRatio} />}
               value={billableRatio(
                 totalHcActual > 0 ? billableHcActual : billableHcPlan,
                 totalHcActual > 0 ? totalHcActual : totalHcPlan,
@@ -1175,6 +1227,50 @@ function PvaCostsPanel({ pva, token }: PvaCostsPanelProps) {
           helpTitle="Plan vs Actual: Costs"
           helpContent={PANEL_HELP.pvaCosts}
         />
+        <Row gutter={[16, 16]}>
+          {(
+            [
+              [
+                'Total Payroll Cost',
+                pva.selectedPeriod.totalSalaryCost,
+                FORMULAS.totalPayrollCost,
+              ],
+              ['COGS', pva.selectedPeriod.totalCogs, FORMULAS.cogs],
+              [
+                'Gross Profit',
+                pva.selectedPeriod.grossProfit,
+                FORMULAS.grossProfit,
+              ],
+              [
+                'OpEx',
+                {
+                  plan:
+                    pva.selectedPeriod.grossProfit.plan -
+                    pva.selectedPeriod.ebitda.plan,
+                  actual:
+                    pva.selectedPeriod.grossProfit.actual != null &&
+                    pva.selectedPeriod.ebitda.actual != null
+                      ? pva.selectedPeriod.grossProfit.actual -
+                        pva.selectedPeriod.ebitda.actual
+                      : null,
+                  variance: null as number | null,
+                },
+                FORMULAS.opex,
+              ],
+              ['EBITDA', pva.selectedPeriod.ebitda, FORMULAS.ebitda],
+            ] as const
+          ).map(([label, triad, formula]) => (
+            <Col xs={24} sm={12} md={8} lg={4} xl={4} key={label}>
+              <Statistic
+                title={<MetricTitle label={`${label}`} formula={formula} />}
+                value={formatCurrency(triad.actual ?? triad.plan)}
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Plan {formatCurrency(triad.plan)}
+              </Text>
+            </Col>
+          ))}
+        </Row>
         <Row gutter={16}>
           <Col span={12}>
             <Card title="Salary" size="small">
@@ -1269,22 +1365,24 @@ function PlSummaryPanel({
 
   const dataSource = useMemo(() => {
     const rows = [
-      { key: 'revenue', label: 'Total Revenue', field: 'totalRevenue' as const },
-      { key: 'cogs', label: 'Total COGS', field: 'totalCogs' as const },
+      { key: 'revenue', label: 'Total Revenue', field: 'totalRevenue' as const, formula: FORMULAS.totalRevenue },
+      { key: 'cogs', label: 'Total COGS', field: 'totalCogs' as const, formula: FORMULAS.cogs },
       {
         key: 'grossProfit',
         label: 'Gross Profit',
         field: 'grossProfit' as const,
+        formula: FORMULAS.grossProfit,
       },
-      { key: 'grossMargin', label: 'Gross Margin %', field: null },
-      { key: 'opex', label: 'Total OpEx', field: null },
-      { key: 'ebitda', label: 'EBITDA', field: 'ebitda' as const },
+      { key: 'grossMargin', label: 'Gross Margin %', field: null, formula: FORMULAS.grossMarginPct },
+      { key: 'opex', label: 'Total OpEx', field: null, formula: FORMULAS.opex },
+      { key: 'ebitda', label: 'EBITDA', field: 'ebitda' as const, formula: FORMULAS.ebitda },
+      { key: 'ebitdaMargin', label: 'EBITDA Margin %', field: null, formula: FORMULAS.ebitdaMarginPct },
     ];
 
     return rows.map((row) => {
-      const record: Record<string, string> = {
+      const record: Record<string, ReactNode> = {
         key: row.key,
-        label: row.label,
+        label: <MetricTitle label={row.label} formula={row.formula} />,
       };
 
       const fillFromPeriod = (
@@ -1318,6 +1416,17 @@ function PlSummaryPanel({
                 ? data.ebitda.plan
                 : (data.ebitda.actual ?? data.ebitda.plan);
             record[key] = formatCurrency(gp - ebitda);
+          } else if (row.key === 'ebitdaMargin') {
+            const revenue =
+              mode === 'plan'
+                ? data.totalRevenue.plan
+                : (data.totalRevenue.actual ?? data.totalRevenue.plan);
+            const ebitda =
+              mode === 'plan'
+                ? data.ebitda.plan
+                : (data.ebitda.actual ?? data.ebitda.plan);
+            record[key] =
+              revenue > 0 ? `${((ebitda / revenue) * 100).toFixed(1)}%` : '—';
           }
         } else {
           const value =
@@ -1516,22 +1625,36 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
                   },
                   {
                     key: 'layer1',
-                    layer: 'Total Layer 1',
+                    layer: (
+                      <MetricTitle
+                        label="Total Layer 1"
+                        formula={FORMULAS.layer1}
+                      />
+                    ),
                     amount: formatCurrency(cat.data.layer1),
                   },
                   {
                     key: 'layer2',
-                    layer: 'Layer 2',
+                    layer: (
+                      <MetricTitle label="Layer 2" formula={FORMULAS.layer2} />
+                    ),
                     amount: formatCurrency(cat.data.layer2),
                   },
                   {
                     key: 'layer3',
-                    layer: 'Layer 3',
+                    layer: (
+                      <MetricTitle label="Layer 3" formula={FORMULAS.layer3} />
+                    ),
                     amount: formatCurrency(cat.data.layer3),
                   },
                   {
                     key: 'total',
-                    layer: 'Total',
+                    layer: (
+                      <MetricTitle
+                        label="Total"
+                        formula={FORMULAS.totalCostPerHead}
+                      />
+                    ),
                     amount: formatCurrency(cat.data.total),
                   },
                 ]}
@@ -1550,7 +1673,10 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
               {cat.key === 'billable' && (
                 <Space direction="vertical">
                   <Text>
-                    <strong>Minimum Billing Rate:</strong>{' '}
+                    <MetricTitle
+                      label="Minimum Billing Rate:"
+                      formula={FORMULAS.minBillingRate}
+                    />{' '}
                     {formatCurrency(minBillingRate)} Rs L/head
                   </Text>
                   <Space>
@@ -1603,7 +1729,7 @@ function DeltaViewPanel({ delta, token }: DeltaViewPanelProps) {
       {
         key: 'billableRatio',
         label: 'Billable Ratio %',
-        value: billableRatio(period.hc.billableHc, period.hc.totalHc),
+        value: num(period.billableRatioPct),
         favorPositive: true,
         format: 'pct' as const,
       },

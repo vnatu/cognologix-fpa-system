@@ -25,6 +25,9 @@ import {
 } from 'recharts';
 import { formatCurrency } from '@/utils/formatDate';
 import { HEADING_FONT } from '@/theme/antdTheme';
+import FormulaTooltip from '@/components/FormulaTooltip';
+import { FORMULAS } from './formulas';
+import type { FormulaDef } from './formulas';
 import {
   buildFyMonthOptions,
   buildFyQuarterOptions,
@@ -44,6 +47,21 @@ import type {
 import { fetchBuAnalysis, fetchPlan, fetchPlans } from './api';
 
 const { Title, Text } = Typography;
+
+function MetricTitle({
+  label,
+  formula,
+}: {
+  label: string;
+  formula: FormulaDef;
+}) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {label}
+      <FormulaTooltip {...formula} />
+    </span>
+  );
+}
 
 export default function BuAnalysisPage() {
   const { token } = theme.useToken();
@@ -296,7 +314,12 @@ export default function BuAnalysisPage() {
       render: (v: number) => formatCurrency(v),
     },
     {
-      title: 'Gross Margin (Rs L)',
+      title: (
+        <MetricTitle
+          label="Gross Margin (Rs L)"
+          formula={FORMULAS.buGrossMargin}
+        />
+      ),
       dataIndex: 'grossMargin',
       key: 'grossMargin',
       align: 'right',
@@ -312,7 +335,12 @@ export default function BuAnalysisPage() {
       ),
     },
     {
-      title: 'Gross Margin %',
+      title: (
+        <MetricTitle
+          label="Gross Margin %"
+          formula={FORMULAS.buGrossMarginPct}
+        />
+      ),
       dataIndex: 'grossMarginPct',
       key: 'grossMarginPct',
       align: 'right',
@@ -328,7 +356,12 @@ export default function BuAnalysisPage() {
       ),
     },
     {
-      title: 'BU Cost % of Total',
+      title: (
+        <MetricTitle
+          label="BU Cost % of Total"
+          formula={FORMULAS.buCostPct}
+        />
+      ),
       dataIndex: 'buCostPctOfTotal',
       key: 'buCostPctOfTotal',
       align: 'right',
@@ -336,7 +369,12 @@ export default function BuAnalysisPage() {
       render: (v: number) => `${Number(v).toFixed(1)}%`,
     },
     {
-      title: 'BU Revenue % of Total',
+      title: (
+        <MetricTitle
+          label="BU Revenue % of Total"
+          formula={FORMULAS.buRevenuePct}
+        />
+      ),
       dataIndex: 'buRevenuePctOfTotal',
       key: 'buRevenuePctOfTotal',
       align: 'right',

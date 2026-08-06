@@ -4,6 +4,7 @@ import type {
   InvoiceListPage,
   MappingTemplate,
   ParseHeadersResponse,
+  PeriodWithData,
   RevenueImportType,
   UploadResult,
   UploadSummary,
@@ -136,9 +137,22 @@ export const exportCreditNotes = (params: InvoiceExportParams): Promise<void> =>
 export const fetchDashboard = (
   periodMonth: number,
   periodYear: number,
+  granularity: 'MONTHLY' | 'QUARTERLY' | 'ANNUAL' = 'MONTHLY',
+  quarter?: number,
 ): Promise<DashboardResponse> =>
   axios
     .get<DashboardResponse>(
       `/api/revenue/dashboard/${periodMonth}/${periodYear}`,
+      {
+        params: {
+          granularity,
+          ...(granularity === 'QUARTERLY' && quarter != null ? { quarter } : {}),
+        },
+      },
     )
+    .then((r) => r.data);
+
+export const fetchDashboardPeriods = (): Promise<PeriodWithData[]> =>
+  axios
+    .get<PeriodWithData[]>('/api/revenue/dashboard/periods')
     .then((r) => r.data);

@@ -80,6 +80,9 @@ export default function MasterDataPage() {
   const [warningsOnlyFilter, setWarningsOnlyFilter] = useState(
     searchParams.get('hasWarnings') === 'true',
   );
+  const [employeeStatusFilter, setEmployeeStatusFilter] = useState<
+    'ACTIVE' | 'EXITED' | undefined
+  >(undefined);
 
   const [reconcileRecord, setReconcileRecord] = useState<MasterRecord | null>(
     null,
@@ -179,9 +182,19 @@ export default function MasterDataPage() {
       ) {
         return false;
       }
+      if (employeeStatusFilter && r.employeeStatus !== employeeStatusFilter) {
+        return false;
+      }
       return true;
     });
-  }, [records, statusFilter, classificationFilter, buFilter, warningsOnlyFilter]);
+  }, [
+    records,
+    statusFilter,
+    classificationFilter,
+    buFilter,
+    warningsOnlyFilter,
+    employeeStatusFilter,
+  ]);
 
   const formatDataQualityWarnings = (flags: string | null) => {
     if (!flags) return [];
@@ -287,6 +300,16 @@ export default function MasterDataPage() {
       title: 'Classification',
       key: 'classification',
       render: (_, r) => getClassification(r),
+    },
+    {
+      title: 'Employee Status',
+      dataIndex: 'employeeStatus',
+      key: 'employeeStatus',
+      render: (status: string) => (
+        <Tag color={status === 'EXITED' ? 'orange' : 'green'}>
+          {status === 'EXITED' ? 'Exited' : 'Active'}
+        </Tag>
+      ),
     },
     {
       title: 'Gross Pay',
@@ -460,6 +483,19 @@ export default function MasterDataPage() {
           value={buFilter}
           onChange={setBuFilter}
           options={businessUnits.map((bu) => ({ value: bu, label: bu }))}
+        />
+        <Select
+          allowClear
+          placeholder="Employee status"
+          style={{ minWidth: 160 }}
+          value={employeeStatusFilter}
+          onChange={(value) =>
+            setEmployeeStatusFilter(value as 'ACTIVE' | 'EXITED' | undefined)
+          }
+          options={[
+            { value: 'ACTIVE', label: 'Active' },
+            { value: 'EXITED', label: 'Exited' },
+          ]}
         />
         <Select
           allowClear
