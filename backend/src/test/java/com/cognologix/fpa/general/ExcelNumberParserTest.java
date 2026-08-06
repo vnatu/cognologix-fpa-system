@@ -10,6 +10,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ExcelNumberParserTest {
 
     @Test
+    void parseAmount_handlesUsdDollarFormat() {
+        assertThat(ExcelNumberParser.parseAmount("$20,640.00"))
+                .isEqualByComparingTo("20640.00");
+        assertThat(ExcelNumberParser.parseAmount("$314,750.00"))
+                .isEqualByComparingTo("314750.00");
+        assertThat(ExcelNumberParser.parseAmount("$")).isNull();
+    }
+
+    @Test
     void parseAmount_handlesIndianRupeeFormat() {
         assertThat(ExcelNumberParser.parseAmount("₹1,14,47,529.60"))
                 .isEqualByComparingTo("11447529.60");
@@ -35,11 +44,11 @@ class ExcelNumberParserTest {
     @Test
     void toRsLakhs_dividesByOneLakh() {
         assertThat(ExcelNumberParser.toRsLakhs(new BigDecimal("11447529.60")))
-                .isEqualByComparingTo("114.48");
+                .isEqualByComparingTo("114.475");
         assertThat(ExcelNumberParser.toRsLakhs(new BigDecimal("100000")))
-                .isEqualByComparingTo("1.00");
+                .isEqualByComparingTo("1.000");
         assertThat(ExcelNumberParser.toRsLakhs(new BigDecimal("50000")))
-                .isEqualByComparingTo("0.50");
+                .isEqualByComparingTo("0.500");
         assertThat(ExcelNumberParser.toRsLakhs(null)).isNull();
     }
 

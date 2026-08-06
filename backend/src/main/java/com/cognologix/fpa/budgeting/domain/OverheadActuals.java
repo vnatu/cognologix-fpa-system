@@ -35,7 +35,7 @@ public class OverheadActuals {
     @Column(name = "overhead_line", nullable = false, length = 100)
     private String overheadLine;
 
-    @Column(name = "actual_amount", nullable = false, precision = 12, scale = 2)
+    @Column(name = "actual_amount", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal actualAmount = BigDecimal.ZERO;
 

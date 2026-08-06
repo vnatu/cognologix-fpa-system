@@ -18,6 +18,8 @@ public final class RevenueSystemAttribute {
     public static final String DUE_DATE = "DueDate";
     public static final String CURRENCY = "Currency";
     public static final String PROJECT_CODE = "ProjectCode";
+    /** Raw USD dollars as invoiced — optional, no FX / lakhs conversion (ADR-061). */
+    public static final String AMOUNT_USD = "AmountUsd";
 
     // ZOHO_BOOKS_CREDIT_NOTES
     public static final String CREDIT_NOTE_NUMBER = "CreditNoteNumber";

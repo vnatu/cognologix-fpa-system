@@ -205,6 +205,9 @@ public class PeoplePayrollService {
                     .management(flags.management())
                     .billingCustomerCode(billingCustomerCode)
                     .dataQualityFlags(dataQualityFlags)
+                    .employeeStatus(people.getEmployeeStatus() != null
+                            ? people.getEmployeeStatus()
+                            : EmployeeStatus.ACTIVE)
                     .reconciliationStatus(status)
                     .build()));
         }
@@ -225,7 +228,11 @@ public class PeoplePayrollService {
                 continue;
             }
 
-            if (registryOpt.isPresent() && registryOpt.get().getExitStatus() == ExitStatus.EXITED) {
+            // Payroll-only rows (absent from people_snapshot): ADR-062
+            // AUTO_MATCHED_EXITED only for F&F + registry EXITED; regular payroll is always UNMATCHED.
+            if (payroll.getImportType() == ImportType.ZOHO_PAYROLL_FNF
+                    && registryOpt.isPresent()
+                    && registryOpt.get().getExitStatus() == ExitStatus.EXITED) {
                 EmployeeRegistry registry = registryOpt.get();
                 matchedRegistryIds.add(registry.getId());
                 built.add(masterRecordRepository.save(MasterRecord.builder()
@@ -234,65 +241,30 @@ public class PeoplePayrollService {
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
                         .totalEmployerContributions(employerContributionsOf(payroll))
+                        .employeeStatus(EmployeeStatus.EXITED)
                         .reconciliationStatus(ReconciliationStatus.AUTO_MATCHED_EXITED)
                         .build()));
-            } else if (payroll.getImportType() == ImportType.ZOHO_PAYROLL_FNF) {
-                if (registryOpt.isPresent()) {
-                    EmployeeRegistry registry = registryOpt.get();
-                    built.add(masterRecordRepository.save(MasterRecord.builder()
-                            .periodVersion(version)
-                            .employeeRegistry(registry)
-                            .payrollSnapshot(payroll)
-                            .grossPay(payroll.getGrossPay())
-                            .totalEmployerContributions(employerContributionsOf(payroll))
-                            .reconciliationStatus(ReconciliationStatus.UNMATCHED)
-                            .build()));
-                } else {
-                    EmployeeRegistry placeholder = employeeRegistryRepository
-                            .findByEmployeeId(payroll.getEmployeeNo())
-                            .orElseGet(() -> employeeRegistryRepository.save(EmployeeRegistry.builder()
-                                    .employeeId(payroll.getEmployeeNo())
-                                    .fullName(payroll.getFullName())
-                                    .exitStatus(ExitStatus.ACTIVE)
-                                    .build()));
-                    built.add(masterRecordRepository.save(MasterRecord.builder()
-                            .periodVersion(version)
-                            .employeeRegistry(placeholder)
-                            .payrollSnapshot(payroll)
-                            .grossPay(payroll.getGrossPay())
-                            .totalEmployerContributions(employerContributionsOf(payroll))
-                            .reconciliationStatus(ReconciliationStatus.UNMATCHED)
-                            .build()));
-                }
-            } else if (registryOpt.isEmpty()) {
-                // Create a placeholder registry entry so we can store the unmatched payroll row
-                EmployeeRegistry placeholder = employeeRegistryRepository
-                        .findByEmployeeId(payroll.getEmployeeNo())
-                        .orElseGet(() -> employeeRegistryRepository.save(EmployeeRegistry.builder()
-                                .employeeId(payroll.getEmployeeNo())
-                                .fullName(payroll.getFullName())
-                                .exitStatus(ExitStatus.ACTIVE)
-                                .build()));
-                built.add(masterRecordRepository.save(MasterRecord.builder()
-                        .periodVersion(version)
-                        .employeeRegistry(placeholder)
-                        .payrollSnapshot(payroll)
-                        .grossPay(payroll.getGrossPay())
-                        .totalEmployerContributions(employerContributionsOf(payroll))
-                        .reconciliationStatus(ReconciliationStatus.UNMATCHED)
-                        .build()));
-            } else {
-                // Active in registry but absent from people snapshot — treat as exited lag without DAY_LEVEL exit
-                EmployeeRegistry registry = registryOpt.get();
-                built.add(masterRecordRepository.save(MasterRecord.builder()
-                        .periodVersion(version)
-                        .employeeRegistry(registry)
-                        .payrollSnapshot(payroll)
-                        .grossPay(payroll.getGrossPay())
-                        .totalEmployerContributions(employerContributionsOf(payroll))
-                        .reconciliationStatus(ReconciliationStatus.AUTO_MATCHED_EXITED)
-                        .build()));
+                continue;
             }
+
+            EmployeeRegistry registry = registryOpt.orElseGet(() -> employeeRegistryRepository
+                    .findByEmployeeId(payroll.getEmployeeNo())
+                    .orElseGet(() -> employeeRegistryRepository.save(EmployeeRegistry.builder()
+                            .employeeId(payroll.getEmployeeNo())
+                            .fullName(payroll.getFullName())
+                            .exitStatus(ExitStatus.ACTIVE)
+                            .build())));
+            built.add(masterRecordRepository.save(MasterRecord.builder()
+                    .periodVersion(version)
+                    .employeeRegistry(registry)
+                    .payrollSnapshot(payroll)
+                    .grossPay(payroll.getGrossPay())
+                    .totalEmployerContributions(employerContributionsOf(payroll))
+                    .employeeStatus(registry.getExitStatus() == ExitStatus.EXITED
+                            ? EmployeeStatus.EXITED
+                            : EmployeeStatus.ACTIVE)
+                    .reconciliationStatus(ReconciliationStatus.UNMATCHED)
+                    .build()));
         }
 
         version.setStatus(PeriodStatus.MASTER_BUILT);
@@ -517,11 +489,14 @@ public class PeoplePayrollService {
         switch (importType) {
             case ZOHO_PEOPLE -> {
                 // Clear master first — master_record FKs people/payroll snapshots.
+                // Only replace ACTIVE people rows; EXITED rows from Zoho People Exited are retained.
                 clearMasterIfPresent(targetVersionId, targetVersion);
-                peopleSnapshotRepository.deleteByPeriodVersionId(targetVersionId);
+                peopleSnapshotRepository.deleteByPeriodVersionIdAndEmployeeStatus(
+                        targetVersionId, EmployeeStatus.ACTIVE);
                 snapshotUploadRepository.save(upload);
                 for (Map<String, String> row : rows) {
-                    PeopleSnapshot snap = persistPeopleRow(targetVersion, upload, row);
+                    PeopleSnapshot snap = persistPeopleRow(
+                            targetVersion, upload, row, EmployeeStatus.ACTIVE);
                     String buKey = firstNonBlank(snap.getBuCode(), snap.getBusinessUnit());
                     if (buKey != null && !isKnownCustomer(buKey) && !unrecognizedBus.contains(buKey)) {
                         unrecognizedBus.add(buKey);
@@ -537,8 +512,27 @@ public class PeoplePayrollService {
                 }
             }
             case ZOHO_PEOPLE_EXITED -> {
+                // Registry enrichment (exit date) + people_snapshot rows for master matching (ADR-060).
+                clearMasterIfPresent(targetVersionId, targetVersion);
+                peopleSnapshotRepository.deleteByPeriodVersionIdAndEmployeeStatus(
+                        targetVersionId, EmployeeStatus.EXITED);
                 snapshotUploadRepository.save(upload);
-                applyExitedEmployees(rows, upload);
+                for (Map<String, String> row : rows) {
+                    // Prefer EXITED row when the same employee also appears in ACTIVE people.
+                    String employeeId = ExcelSnapshotParser.required(row, SystemAttribute.EMPLOYEE_ID);
+                    peopleSnapshotRepository.findByPeriodVersionIdAndEmployeeId(targetVersionId, employeeId)
+                            .ifPresent(existing -> {
+                                peopleSnapshotRepository.delete(existing);
+                                peopleSnapshotRepository.flush();
+                            });
+                    PeopleSnapshot snap = persistPeopleRow(
+                            targetVersion, upload, row, EmployeeStatus.EXITED);
+                    applyExitDateToRegistry(snap.getEmployeeId(), row, upload);
+                    String buKey = firstNonBlank(snap.getBuCode(), snap.getBusinessUnit());
+                    if (buKey != null && !isKnownCustomer(buKey) && !unrecognizedBus.contains(buKey)) {
+                        unrecognizedBus.add(buKey);
+                    }
+                }
             }
             case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES ->
                     throw new BadRequestException(
@@ -619,7 +613,9 @@ public class PeoplePayrollService {
                 yield SnapshotDetailResponse.of(
                         version,
                         upload,
-                        List.of(),
+                        peopleSnapshotRepository.findBySnapshotUploadIdOrderByEmployeeIdAsc(upload.getId()).stream()
+                                .map(PeopleSnapshotDetailResponse::from)
+                                .toList(),
                         List.of(),
                         employeeRegistryRepository.findByLastUpdatedByUpload_IdOrderByEmployeeIdAsc(upload.getId()).stream()
                                 .map(ExitedRegistryDetailResponse::from)
@@ -693,6 +689,47 @@ public class PeoplePayrollService {
         return records;
     }
 
+    /**
+     * Active master-record facts for the latest FINALISED version of a calendar period
+     * (Budgeting BU Analysis — ADR-051). Empty when the period or finalised version is missing.
+     */
+    public List<MasterRecordFact> findActiveMasterRecordFacts(int periodMonth, int periodYear) {
+        Optional<Period> periodOpt = periodRepository.findByPeriodMonthAndPeriodYear(periodMonth, periodYear);
+        if (periodOpt.isEmpty()) {
+            return List.of();
+        }
+        List<PeriodVersion> finalised = periodVersionRepository
+                .findByPeriodIdAndLatestFinalisedTrue(periodOpt.get().getId());
+        if (finalised.isEmpty()) {
+            return List.of();
+        }
+        PeriodVersion version = finalised.getFirst();
+        List<MasterRecord> records = masterRecordRepository.findByPeriodVersionId(version.getId());
+        List<MasterRecordFact> facts = new ArrayList<>();
+        for (MasterRecord r : records) {
+            if (r.getReconciliationStatus() == ReconciliationStatus.AUTO_MATCHED_EXITED
+                    || r.getReconciliationStatus() == ReconciliationStatus.UNMATCHED
+                    || r.getEmployeeStatus() == EmployeeStatus.EXITED) {
+                continue;
+            }
+            Hibernate.initialize(r.getPeopleSnapshot());
+            String title = null;
+            if (r.getPeopleSnapshot() != null && r.getPeopleSnapshot().getTitle() != null
+                    && !r.getPeopleSnapshot().getTitle().isBlank()) {
+                title = r.getPeopleSnapshot().getTitle().trim();
+            }
+            facts.add(new MasterRecordFact(
+                    r.getBusinessUnit(),
+                    r.getPracticeUnit(),
+                    r.isBillable(),
+                    r.isBench(),
+                    title,
+                    r.getGrossPay() != null ? r.getGrossPay() : BigDecimal.ZERO,
+                    r.resolvedTotalPayrollCost()));
+        }
+        return facts;
+    }
+
     public MasterSummary summarizeMaster(UUID periodVersionId) {
         List<MasterRecord> records = findMasterRecords(periodVersionId);
 
@@ -711,11 +748,23 @@ public class PeoplePayrollService {
         Map<String, BuAggregate> byBu = new LinkedHashMap<>();
 
         for (MasterRecord r : records) {
-            // Exited / unmatched payroll-only rows excluded from current-period headcount (spec §7.2)
-            if (r.getReconciliationStatus() == ReconciliationStatus.AUTO_MATCHED_EXITED
-                    || r.getReconciliationStatus() == ReconciliationStatus.UNMATCHED) {
+            // Unmatched payroll-only rows excluded entirely.
+            // EXITED / AUTO_MATCHED_EXITED: retain salary in classification buckets, exclude from HC (spec §7.2 / ADR-060).
+            if (r.getReconciliationStatus() == ReconciliationStatus.UNMATCHED) {
                 continue;
             }
+            boolean payrollOnlyExited =
+                    r.getReconciliationStatus() == ReconciliationStatus.AUTO_MATCHED_EXITED;
+            if (payrollOnlyExited
+                    && !r.isLeadership() && !r.isManagement() && !r.isBillable()
+                    && !r.isBench() && !r.isSupport()) {
+                // No classification available (lag without exited people snapshot) — skip.
+                continue;
+            }
+
+            boolean countInHeadcount = r.getEmployeeStatus() != EmployeeStatus.EXITED
+                    && !payrollOnlyExited;
+
             BigDecimal pay = r.getGrossPay() != null ? r.getGrossPay() : BigDecimal.ZERO;
             BigDecimal contrib = r.getTotalEmployerContributions() != null
                     ? r.getTotalEmployerContributions() : BigDecimal.ZERO;
@@ -723,31 +772,43 @@ public class PeoplePayrollService {
 
             // Salary bucketing priority: Leadership salary always in Leadership bucket (spec §8)
             if (r.isLeadership()) {
-                leadershipHc++;
+                if (countInHeadcount) {
+                    leadershipHc++;
+                }
                 leadershipPay = leadershipPay.add(pay);
                 leadershipContrib = leadershipContrib.add(contrib);
             } else if (r.isManagement()) {
-                managementHc++;
+                if (countInHeadcount) {
+                    managementHc++;
+                }
                 managementPay = managementPay.add(pay);
                 managementContrib = managementContrib.add(contrib);
             } else if (r.isBillable()) {
-                billableHc++;
+                if (countInHeadcount) {
+                    billableHc++;
+                }
                 billablePay = billablePay.add(pay);
                 billableContrib = billableContrib.add(contrib);
             } else if (r.isBench()) {
-                benchHc++;
+                if (countInHeadcount) {
+                    benchHc++;
+                }
                 benchPay = benchPay.add(pay);
                 benchContrib = benchContrib.add(contrib);
             } else if (r.isSupport()) {
-                supportHc++;
+                if (countInHeadcount) {
+                    supportHc++;
+                }
                 supportPay = supportPay.add(pay);
                 supportContrib = supportContrib.add(contrib);
+            } else {
+                continue;
             }
 
             String bu = r.getBusinessUnit() != null ? r.getBusinessUnit() : "(unknown)";
             BuAggregate agg = byBu.computeIfAbsent(bu,
                     k -> new BuAggregate(0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
-            int billableInc = r.isBillable() ? 1 : 0;
+            int billableInc = (countInHeadcount && r.isBillable()) ? 1 : 0;
             byBu.put(bu, new BuAggregate(
                     agg.billableHc() + billableInc,
                     agg.totalGrossPay().add(pay),
@@ -1159,7 +1220,10 @@ public class PeoplePayrollService {
     }
 
     private PeopleSnapshot persistPeopleRow(
-            PeriodVersion version, SnapshotUpload upload, Map<String, String> row) {
+            PeriodVersion version,
+            SnapshotUpload upload,
+            Map<String, String> row,
+            EmployeeStatus employeeStatus) {
         String billable = ExcelSnapshotParser.required(row, SystemAttribute.BILLABLE_STATUS);
         if (!billable.equalsIgnoreCase("Y") && !billable.equalsIgnoreCase("N")) {
             throw new BadRequestException("BillableStatus must be Y or N, got: " + billable);
@@ -1178,6 +1242,7 @@ public class PeoplePayrollService {
                 .jobSubLevel(ExcelSnapshotParser.optional(row, SystemAttribute.JOB_SUB_LEVEL))
                 .title(ExcelSnapshotParser.optional(row, SystemAttribute.TITLE))
                 .dateOfJoining(ExcelSnapshotParser.optionalDate(row, SystemAttribute.DATE_OF_JOINING))
+                .employeeStatus(employeeStatus)
                 .build();
         PeopleSnapshot saved = peopleSnapshotRepository.save(snap);
         upsertRegistryFromPeople(saved);
@@ -1217,21 +1282,22 @@ public class PeoplePayrollService {
         return payroll.resolvedTotalEmployerContributions();
     }
 
-    private void applyExitedEmployees(List<Map<String, String>> rows, SnapshotUpload upload) {
-        for (Map<String, String> row : rows) {
-            String employeeId = ExcelSnapshotParser.required(row, SystemAttribute.EMPLOYEE_ID);
-            LocalDate lastWorkingDay =
-                    ExcelSnapshotParser.requiredDate(row, SystemAttribute.LAST_WORKING_DAY);
-            employeeRegistryRepository.findByEmployeeId(employeeId).ifPresent(registry -> {
-                registry.setExitDate(lastWorkingDay);
-                registry.setExitDatePrecision(ExitDatePrecision.DAY_LEVEL);
-                if (registry.getExitStatus() != ExitStatus.EXITED) {
-                    registry.setExitStatus(ExitStatus.EXITED);
-                }
-                registry.setLastUpdatedByUpload(upload);
-                employeeRegistryRepository.save(registry);
-            });
-        }
+    /**
+     * Upgrades Employee Registry exit date from the Zoho People Exited export (ADR-020 / ADR-060).
+     * Creates no registry row when the employee is unknown — {@link #persistPeopleRow} already upserts.
+     */
+    private void applyExitDateToRegistry(String employeeId, Map<String, String> row, SnapshotUpload upload) {
+        LocalDate lastWorkingDay =
+                ExcelSnapshotParser.requiredDate(row, SystemAttribute.LAST_WORKING_DAY);
+        employeeRegistryRepository.findByEmployeeId(employeeId).ifPresent(registry -> {
+            registry.setExitDate(lastWorkingDay);
+            registry.setExitDatePrecision(ExitDatePrecision.DAY_LEVEL);
+            if (registry.getExitStatus() != ExitStatus.EXITED) {
+                registry.setExitStatus(ExitStatus.EXITED);
+            }
+            registry.setLastUpdatedByUpload(upload);
+            employeeRegistryRepository.save(registry);
+        });
     }
 
     private static PeriodVersion latestNonSupersededVersion(List<PeriodVersion> versions) {
@@ -1251,10 +1317,12 @@ public class PeoplePayrollService {
             return true;
         }
         return switch (importType) {
-            case ZOHO_PEOPLE -> peopleSnapshotRepository.countByPeriodVersionId(periodVersionId) > 0;
+            case ZOHO_PEOPLE -> peopleSnapshotRepository
+                    .countByPeriodVersionIdAndEmployeeStatus(periodVersionId, EmployeeStatus.ACTIVE) > 0;
             case ZOHO_PAYROLL, ZOHO_PAYROLL_FNF ->
                     payrollSnapshotRepository.existsByPeriodVersionIdAndImportType(periodVersionId, importType);
-            case ZOHO_PEOPLE_EXITED -> false;
+            case ZOHO_PEOPLE_EXITED -> peopleSnapshotRepository
+                    .countByPeriodVersionIdAndEmployeeStatus(periodVersionId, EmployeeStatus.EXITED) > 0;
             case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES -> false;
         };
     }
@@ -1272,13 +1340,17 @@ public class PeoplePayrollService {
 
     private void maybeAdvanceToSnapshotsUploaded(PeriodVersion version) {
         UUID versionId = version.getId();
-        boolean hasPeople = peopleSnapshotRepository.countByPeriodVersionId(versionId) > 0;
+        // Active Zoho People is required; EXITED people rows alone do not advance status (ADR-060).
+        boolean hasActivePeople = snapshotUploadRepository.existsByPeriodVersionIdAndImportType(
+                        versionId, ImportType.ZOHO_PEOPLE)
+                || peopleSnapshotRepository.countByPeriodVersionIdAndEmployeeStatus(
+                        versionId, EmployeeStatus.ACTIVE) > 0;
         boolean hasPayrollUpload = snapshotUploadRepository.existsByPeriodVersionIdAndImportType(
                         versionId, ImportType.ZOHO_PAYROLL)
                 || snapshotUploadRepository.existsByPeriodVersionIdAndImportType(
                         versionId, ImportType.ZOHO_PAYROLL_FNF);
 
-        if (hasPeople && hasPayrollUpload && version.getStatus() == PeriodStatus.OPEN) {
+        if (hasActivePeople && hasPayrollUpload && version.getStatus() == PeriodStatus.OPEN) {
             version.setStatus(PeriodStatus.SNAPSHOTS_UPLOADED);
             periodVersionRepository.save(version);
         }
@@ -1373,6 +1445,17 @@ public class PeoplePayrollService {
             int billableHc,
             BigDecimal totalGrossPay,
             BigDecimal totalEmployerContributions,
+            BigDecimal totalPayrollCost
+    ) {}
+
+    /** Lightweight master-record row for cross-module BU Analysis / Reports (ADR-051 / ADR-053). */
+    public record MasterRecordFact(
+            String businessUnit,
+            String practiceUnit,
+            boolean billable,
+            boolean bench,
+            String title,
+            BigDecimal grossPay,
             BigDecimal totalPayrollCost
     ) {}
 

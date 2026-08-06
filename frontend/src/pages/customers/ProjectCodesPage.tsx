@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import ProjectCodesSection from './ProjectCodesSection';
 
-/** Top-level Project Codes screen (ADR-021). */
+/** Top-level Project Codes screen. */
 export default function ProjectCodesPage() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(
     null,

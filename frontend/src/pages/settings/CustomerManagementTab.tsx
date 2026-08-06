@@ -5,7 +5,7 @@ import { HEADING_FONT } from '@/theme/antdTheme';
 import ConcentrationRiskSection from './customer/ConcentrationRiskSection';
 
 /**
- * Settings → Customer Management — config only (ADR-021).
+ * Settings → Customer Management — config only.
  * Operational screens live under top-level Customer Management nav.
  */
 export default function CustomerManagementTab() {

@@ -94,6 +94,7 @@ export interface MasterRecord {
   isLeadership: boolean;
   isManagement: boolean;
   reconciliationStatus: ReconciliationStatus;
+  employeeStatus: ExitStatus;
   billingCustomerCode: string | null;
   dataQualityFlags: string | null;
   hasWarnings: boolean;
@@ -199,6 +200,7 @@ export interface PeopleSnapshotRow {
   jobSubLevel: string | null;
   title: string | null;
   dateOfJoining: string | null;
+  employeeStatus: ExitStatus;
 }
 
 export interface PayrollSnapshotRow {

@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -27,10 +28,11 @@ import com.cognologix.fpa.general.AdminOnly;
 @RestController
 @RequestMapping("/api/budgeting/plans")
 @RequiredArgsConstructor
-@Tag(name = "Budgeting & Forecasting", description = "AOP plans, rolling forecast, delta, Plan vs Actual (ADR-037)")
+@Tag(name = "Budgeting & Forecasting", description = "AOP plans, rolling forecast, delta, Plan vs Actual")
 public class BudgetingController {
 
     private final BudgetingService budgetingService;
+    private final BudgetingReportService budgetingReportService;
     private final CustomerService customerService;
 
     @AdminOnly
@@ -436,6 +438,48 @@ public class BudgetingController {
         }
         return budgetingService.getBuMetrics(
                 planId, granularity, month, year, quarter, forecastTypeId);
+    }
+
+    @GetMapping("/{planId}/bu-analysis")
+    @Operation(summary = "BU Analysis — external/internal BU cost, revenue, and position breakdown")
+    public BuAnalysisResult buAnalysis(
+            @PathVariable UUID planId,
+            @RequestParam(defaultValue = "MONTHLY") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter) {
+        if (granularity == PeriodGranularity.MONTHLY) {
+            if (month == null || year == null) {
+                throw new IllegalArgumentException("month and year are required for MONTHLY granularity");
+            }
+            validateMonthYear(month, year);
+        }
+        return budgetingService.getBuAnalysis(planId, granularity, month, year, quarter);
+    }
+
+    @GetMapping("/{planId}/reports/{reportType}")
+    @Operation(summary = "Download analysis Excel report with How-to-Read sheet and formula comments")
+    public ResponseEntity<byte[]> downloadReport(
+            @PathVariable UUID planId,
+            @PathVariable BudgetingReportService.ReportType reportType,
+            @RequestParam(defaultValue = "ANNUAL") PeriodGranularity granularity,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer quarter,
+            @RequestParam(required = false) UUID forecastTypeId) {
+        if (granularity == PeriodGranularity.MONTHLY) {
+            if (month == null || year == null) {
+                throw new IllegalArgumentException("month and year are required for MONTHLY granularity");
+            }
+            validateMonthYear(month, year);
+        }
+        BudgetingReportService.ReportFile file = budgetingReportService.generate(
+                planId, reportType, granularity, month, year, quarter, forecastTypeId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.filename() + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(file.bytes());
     }
 
     @AdminOnly

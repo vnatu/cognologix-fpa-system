@@ -107,10 +107,17 @@ export const REQUIRED_ATTRIBUTES_BY_IMPORT_TYPE: Record<ImportType, string[]> = 
   ZOHO_PEOPLE: ['EmployeeID'],
   ZOHO_PAYROLL: ['EmployeeNo', 'GrossPay'],
   ZOHO_PAYROLL_FNF: ['EmployeeNo', 'GrossPay'],
-  ZOHO_PEOPLE_EXITED: ['EmployeeID', 'LastWorkingDay'],
+  ZOHO_PEOPLE_EXITED: [
+    'EmployeeID',
+    'FullName',
+    'PracticeUnit',
+    'BusinessUnit',
+    'BillableStatus',
+    'LastWorkingDay',
+  ],
 };
 
-/** System attributes relevant per import type (ADR-019 / ADR-020). */
+/** System attributes relevant per import type. */
 export const ATTRIBUTES_BY_IMPORT_TYPE: Record<ImportType, string[]> = {
   ZOHO_PEOPLE: [
     'EmployeeID',

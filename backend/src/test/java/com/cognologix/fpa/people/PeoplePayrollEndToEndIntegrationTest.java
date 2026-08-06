@@ -179,17 +179,22 @@ class PeoplePayrollEndToEndIntegrationTest {
                 exitedMappingBody());
         mockMvc.perform(multipart("/api/people/imports/{id}/upload", versionId)
                         .file(xlsx("exited.xlsx",
-                                List.of("Employee ID", "Last Working Day"),
-                                List.of(List.of("EMP200", "2026-08-15"))))
+                                List.of("Employee ID", "Name", "PU", "BU", "Billable", "Last Working Day"),
+                                List.of(List.of(
+                                        "EMP200", "Exiting Employee", "Engineering", "Icertis", "Y",
+                                        "2026-08-15"))))
                         .param("import_type", "ZOHO_PEOPLE_EXITED")
                         .param("mapping_id", exitedMappingId.toString()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rowsImported").value(1));
 
-        // 4. Snapshot detail returns registry row linked to this upload
+        // 4. Snapshot detail returns people rows + registry row linked to this upload
         mockMvc.perform(get("/api/people/imports/{id}/snapshots/ZOHO_PEOPLE_EXITED", versionId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.importType").value("ZOHO_PEOPLE_EXITED"))
+                .andExpect(jsonPath("$.peopleRows.length()").value(1))
+                .andExpect(jsonPath("$.peopleRows[0].employeeId").value("EMP200"))
+                .andExpect(jsonPath("$.peopleRows[0].employeeStatus").value("EXITED"))
                 .andExpect(jsonPath("$.exitedRegistryRows.length()").value(1))
                 .andExpect(jsonPath("$.exitedRegistryRows[0].employeeId").value("EMP200"))
                 .andExpect(jsonPath("$.exitedRegistryRows[0].fullName").value("Exiting Employee"))
@@ -248,10 +253,18 @@ class PeoplePayrollEndToEndIntegrationTest {
         return """
                 [
                   {"excelColumnName":"Employee ID","systemAttribute":"%s"},
+                  {"excelColumnName":"Name","systemAttribute":"%s"},
+                  {"excelColumnName":"PU","systemAttribute":"%s"},
+                  {"excelColumnName":"BU","systemAttribute":"%s"},
+                  {"excelColumnName":"Billable","systemAttribute":"%s"},
                   {"excelColumnName":"Last Working Day","systemAttribute":"%s"}
                 ]
                 """.formatted(
                 SystemAttribute.EMPLOYEE_ID,
+                SystemAttribute.FULL_NAME,
+                SystemAttribute.PRACTICE_UNIT,
+                SystemAttribute.BUSINESS_UNIT,
+                SystemAttribute.BILLABLE_STATUS,
                 SystemAttribute.LAST_WORKING_DAY);
     }
 

@@ -239,7 +239,12 @@ export default function CustomersSection({ onSelectCustomer }: Props) {
           }}>
             Export Customers
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={downloadCustomerImportTemplate}>
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => {
+              void downloadCustomerImportTemplate();
+            }}
+          >
             Download Sample File
           </Button>
           <AdminGate>

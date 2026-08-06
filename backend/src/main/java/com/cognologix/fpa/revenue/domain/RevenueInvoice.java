@@ -44,10 +44,10 @@ public class RevenueInvoice {
     @Column(name = "status", length = 30)
     private String status;
 
-    @Column(name = "amount", nullable = false, precision = 14, scale = 2)
+    @Column(name = "amount", nullable = false, precision = 14, scale = 3)
     private BigDecimal amount;
 
-    @Column(name = "balance", precision = 14, scale = 2)
+    @Column(name = "balance", precision = 14, scale = 3)
     private BigDecimal balance;
 
     @Column(name = "due_date")
@@ -61,8 +61,15 @@ public class RevenueInvoice {
     @Column(name = "project_code", length = 100)
     private String projectCode;
 
-    @Column(name = "amount_inr", precision = 14, scale = 2)
+    @Column(name = "amount_inr", precision = 14, scale = 3)
     private BigDecimal amountInr;
+
+    /**
+     * Raw USD dollars as invoiced (ADR-061). Null for INR invoices or when unmapped.
+     * Not converted to Rs Lakhs and not used in analytics.
+     */
+    @Column(name = "amount_usd", precision = 14, scale = 2)
+    private BigDecimal amountUsd;
 
     /** ADR-017 — FX rate used for USD→INR conversion. */
     @Column(name = "fx_rate_id")

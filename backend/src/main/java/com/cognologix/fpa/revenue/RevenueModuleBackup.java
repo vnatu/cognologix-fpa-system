@@ -49,13 +49,14 @@ class RevenueModuleBackup {
                         inv.getBalance() != null ? inv.getBalance().toPlainString() : "",
                         inv.getDueDate() != null ? inv.getDueDate().toString() : "",
                         inv.getAmountInr() != null ? inv.getAmountInr().toPlainString() : "",
-                        str(inv.getProjectCode())));
+                        str(inv.getProjectCode()),
+                        inv.getAmountUsd() != null ? inv.getAmountUsd().toPlainString() : ""));
             }
         }
         return new BackupSheet(FILE_INVOICES,
                 new String[]{"period_month", "period_year", "invoice_number", "customer_code",
                         "invoice_date", "status", "amount", "currency", "balance", "due_date",
-                        "amount_inr", "project_code"},
+                        "amount_inr", "project_code", "amount_usd"},
                 rows);
     }
 
@@ -70,12 +71,13 @@ class RevenueModuleBackup {
                         str(note.getStatus()),
                         note.getAmount().toPlainString(),
                         note.getCurrency().name(),
-                        note.getAmountInr() != null ? note.getAmountInr().toPlainString() : ""));
+                        note.getAmountInr() != null ? note.getAmountInr().toPlainString() : "",
+                        note.getAmountUsd() != null ? note.getAmountUsd().toPlainString() : ""));
             }
         }
         return new BackupSheet(FILE_CREDIT_NOTES,
                 new String[]{"period_month", "period_year", "credit_note_number", "customer_code",
-                        "credit_note_date", "status", "amount", "currency", "amount_inr"},
+                        "credit_note_date", "status", "amount", "currency", "amount_inr", "amount_usd"},
                 rows);
     }
 
@@ -139,6 +141,7 @@ class RevenueModuleBackup {
                         .dueDate(parseDate(cell(row, 9), "due_date"))
                         .amountInr(parseDecimal(cell(row, 10), "amount_inr"))
                         .projectCode(cell(row, 11))
+                        .amountUsd(parseDecimal(cell(row, 12), "amount_usd"))
                         .build());
                 count++;
             } catch (RuntimeException ignored) {
@@ -166,6 +169,7 @@ class RevenueModuleBackup {
                         .amount(parseDecimalRequired(cell(row, 6), "amount"))
                         .currency(parseCurrency(cell(row, 7)))
                         .amountInr(parseDecimal(cell(row, 8), "amount_inr"))
+                        .amountUsd(parseDecimal(cell(row, 9), "amount_usd"))
                         .build());
                 count++;
             } catch (RuntimeException ignored) {

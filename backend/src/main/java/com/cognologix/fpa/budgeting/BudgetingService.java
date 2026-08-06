@@ -9,6 +9,8 @@ import com.cognologix.fpa.general.BackupSheet;
 import com.cognologix.fpa.customer.CustomerService.BuCustomerRef;
 import com.cognologix.fpa.customer.CustomerService.CustomerRef;
 import com.cognologix.fpa.expenses.ExpenseService;
+import com.cognologix.fpa.people.PeoplePayrollService;
+import com.cognologix.fpa.people.PeoplePayrollService.MasterRecordFact;
 import com.cognologix.fpa.people.PeriodFinalisedEvent;
 import com.cognologix.fpa.revenue.RevenueService;
 import com.cognologix.fpa.revenue.dto.RevenueDtos.MonthlyRevenueSummary;
@@ -65,6 +67,7 @@ public class BudgetingService {
     private final CustomerService customerService;
     private final RevenueService revenueService;
     private final ExpenseService expenseService;
+    private final PeoplePayrollService peoplePayrollService;
     private final BudgetingExcelIO budgetingExcelIO;
     private final BudgetingModuleBackup budgetingModuleBackup;
 
@@ -852,9 +855,11 @@ public class BudgetingService {
         PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
 
         List<MonthlyFinancials> deltaMonths = new ArrayList<>();
+        List<MonthlyFinancials> baselineMonths = new ArrayList<>();
         for (MonthlyFinancials rollingMonth : rolling.months()) {
             LocalDate monthDate = LocalDate.of(rollingMonth.year(), rollingMonth.month(), 1);
             MonthlyFinancials baselineMonth = buildMonthlyFinancialsFromPlan(plan, baseline, monthDate);
+            baselineMonths.add(baselineMonth);
 
             HcFigures deltaHc = new HcFigures(
                     rollingMonth.hc().billableHc() - baselineMonth.hc().billableHc(),
@@ -880,6 +885,10 @@ public class BudgetingService {
             List<OverheadLineFigures> deltaOverhead = computeDeltaOverheadLines(
                     rollingMonth.overhead(), baselineMonth.overhead());
 
+            // Ratio delta = Actual% − Plan% (never ratio of HC deltas)
+            BigDecimal billableRatioDelta = subtract(
+                    rollingMonth.billableRatioPct(), baselineMonth.billableRatioPct());
+
             MonthlyFinancials delta = new MonthlyFinancials(
                     rollingMonth.month(),
                     rollingMonth.year(),
@@ -896,13 +905,21 @@ public class BudgetingService {
                     subtract(rollingMonth.totalCogs(), baselineMonth.totalCogs()),
                     subtract(rollingMonth.grossProfit(), baselineMonth.grossProfit()),
                     subtract(rollingMonth.totalOpex(), baselineMonth.totalOpex()),
-                    subtract(rollingMonth.ebitda(), baselineMonth.ebitda())
+                    subtract(rollingMonth.ebitda(), baselineMonth.ebitda()),
+                    billableRatioDelta
             );
             deltaMonths.add(delta);
         }
 
         List<MonthlyFinancials> inScope = filterMonths(deltaMonths, selection, false);
-        MonthlyFinancials periodTotal = sumMonthlyFinancials(inScope, selection);
+        List<MonthlyFinancials> rollingInScope = filterMonths(rolling.months(), selection, false);
+        List<MonthlyFinancials> baselineInScope = filterMonths(baselineMonths, selection, false);
+        MonthlyFinancials summed = sumMonthlyFinancials(inScope, selection);
+        // Period ratio delta from period HC aggregates — not from summed HC deltas
+        BigDecimal periodRatioDelta = subtract(
+                billableRatioPct(sumHcFigures(rollingInScope)),
+                billableRatioPct(sumHcFigures(baselineInScope)));
+        MonthlyFinancials periodTotal = withBillableRatioPct(summed, periodRatioDelta);
 
         return new DeltaResult(
                 financialYearPlanId,
@@ -1066,7 +1083,8 @@ public class BudgetingService {
 
         List<CostPerEmployeeResult> monthly = new ArrayList<>();
         for (YearMonth ym : selection.months()) {
-            monthly.add(computeCostPerEmployeeForMonth(planId, ym.getMonthValue(), ym.getYear(), forecastTypeId));
+            monthly.add(computeCostPerEmployeeForMonth(
+                    planId, ym.getMonthValue(), ym.getYear(), forecastTypeId, false));
         }
         if (monthly.isEmpty()) {
             throw new IllegalArgumentException("No months in selected period");
@@ -1108,12 +1126,75 @@ public class BudgetingService {
                 billable.total());
     }
 
+    /**
+     * Cost-per-employee layers always from the ACTIVE baseline plan (ignores period_actuals).
+     * Used by Standard Reports Plan vs Actual columns (ADR-053).
+     */
+    public CostPerEmployeeResult getCostPerEmployeePlan(
+            UUID planId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter,
+            UUID forecastTypeId) {
+        FinancialYearPlan plan = financialYearPlanRepository.findById(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
+
+        List<CostPerEmployeeResult> monthly = new ArrayList<>();
+        for (YearMonth ym : selection.months()) {
+            monthly.add(computeCostPerEmployeeForMonth(
+                    planId, ym.getMonthValue(), ym.getYear(), forecastTypeId, true));
+        }
+        if (monthly.isEmpty()) {
+            throw new IllegalArgumentException("No months in selected period");
+        }
+        if (monthly.size() == 1) {
+            CostPerEmployeeResult single = monthly.getFirst();
+            return new CostPerEmployeeResult(
+                    single.financialYearPlanId(),
+                    selection.highlightMonth(),
+                    selection.highlightYear(),
+                    selection.highlightQuarter(),
+                    selection.granularity().name(),
+                    selection.periodLabel(),
+                    false,
+                    single.billable(),
+                    single.bench(),
+                    single.support(),
+                    single.leadership(),
+                    single.totalCostPerBillableHead());
+        }
+        CategoryCost billable = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::billable).toList());
+        CategoryCost bench = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::bench).toList());
+        CategoryCost support = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::support).toList());
+        CategoryCost leadership = averageCategoryCosts(monthly.stream().map(CostPerEmployeeResult::leadership).toList());
+        return new CostPerEmployeeResult(
+                planId,
+                selection.highlightMonth(),
+                selection.highlightYear(),
+                selection.highlightQuarter(),
+                selection.granularity().name(),
+                selection.periodLabel(),
+                false,
+                billable,
+                bench,
+                support,
+                leadership,
+                billable.total());
+    }
+
     private CostPerEmployeeResult computeCostPerEmployeeForMonth(
             UUID planId, int month, int year, UUID forecastTypeId) {
+        return computeCostPerEmployeeForMonth(planId, month, year, forecastTypeId, false);
+    }
+
+    private CostPerEmployeeResult computeCostPerEmployeeForMonth(
+            UUID planId, int month, int year, UUID forecastTypeId, boolean forcePlan) {
         Optional<PeriodActuals> actualsOpt = periodActualsRepository
                 .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(planId, month, year);
 
-        boolean fromActuals = actualsOpt.isPresent();
+        boolean fromActuals = !forcePlan && actualsOpt.isPresent();
         LocalDate monthDate = LocalDate.of(year, month, 1);
 
         HcFigures hc;
@@ -1263,6 +1344,209 @@ public class BudgetingService {
                 selection.granularity().name(),
                 selection.periodLabel(),
                 rows);
+    }
+
+    /**
+     * BU Analysis from master_record per period (ADR-051). Aggregates headcount and payroll by
+     * business unit; revenue from RevenueService for external BUs.
+     */
+    public BuAnalysisResult getBuAnalysis(
+            UUID planId,
+            PeriodGranularity granularity,
+            Integer month,
+            Integer year,
+            Integer quarter) {
+        FinancialYearPlan plan = financialYearPlanRepository.findById(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Plan not found"));
+        PeriodSelection selection = resolvePeriodSelection(plan, granularity, month, year, quarter);
+
+        List<YearMonth> monthsInScope = selection.months();
+        if (selection.granularity() == PeriodGranularity.ANNUAL) {
+            monthsInScope = monthsInScope.stream()
+                    .filter(ym -> !peoplePayrollService
+                            .findActiveMasterRecordFacts(ym.getMonthValue(), ym.getYear())
+                            .isEmpty())
+                    .toList();
+        }
+
+        Map<String, BuAggAccum> byBuKey = new LinkedHashMap<>();
+        Map<String, BigDecimal> revenueByCustomerCode = new HashMap<>();
+        int monthsWithData = 0;
+
+        for (YearMonth ym : monthsInScope) {
+            List<MasterRecordFact> facts = peoplePayrollService
+                    .findActiveMasterRecordFacts(ym.getMonthValue(), ym.getYear());
+            if (!facts.isEmpty()) {
+                monthsWithData++;
+            }
+            for (MasterRecordFact fact : facts) {
+                String buName = fact.businessUnit() != null && !fact.businessUnit().isBlank()
+                        ? fact.businessUnit().trim() : "(Unassigned)";
+                Optional<BuCustomerRef> ref = customerService.resolveBuCustomer(buName);
+                String key = ref.map(r -> r.id().toString()).orElse("name:" + buName);
+                BuAggAccum agg = byBuKey.computeIfAbsent(key, k -> new BuAggAccum(buName, ref.orElse(null)));
+                agg.add(fact);
+            }
+
+            ResolvedActualRevenue resolved = resolveActualRevenue(
+                    planId, ym.getMonthValue(), ym.getYear(),
+                    periodActualsRepository
+                            .findByFinancialYearPlanIdAndActualsMonthAndActualsYear(
+                                    planId, ym.getMonthValue(), ym.getYear())
+                            .orElse(null));
+            for (ClientRevenueFigures fig : resolved.byClient()) {
+                if (fig.customerCode() != null && !"MANUAL".equals(fig.customerCode())) {
+                    revenueByCustomerCode.merge(
+                            fig.customerCode(), nullSafe(fig.totalRevenue()), BigDecimal::add);
+                }
+            }
+        }
+
+        int divisor = Math.max(1, monthsWithData > 0 ? monthsWithData : 1);
+
+        BigDecimal totalCompanyPayrollCost = byBuKey.values().stream()
+                .map(a -> a.totalPayrollCost)
+                .reduce(ZERO, BigDecimal::add);
+        BigDecimal totalCompanyRevenue = revenueByCustomerCode.values().stream()
+                .reduce(ZERO, BigDecimal::add);
+        int totalCompanyHc = byBuKey.values().stream()
+                .mapToInt(a -> avgHc(a.totalHc, divisor))
+                .sum();
+
+        List<ExternalBuAnalysisRow> external = new ArrayList<>();
+        List<InternalBuAnalysisRow> internal = new ArrayList<>();
+
+        for (BuAggAccum agg : byBuKey.values()) {
+            int totalHc = avgHc(agg.totalHc, divisor);
+            int billableHc = avgHc(agg.billableHc, divisor);
+            int nonBillableHc = Math.max(0, totalHc - billableHc);
+            BigDecimal avgCost = agg.totalHc > 0
+                    ? divide(agg.totalPayrollCost, new BigDecimal(agg.totalHc))
+                    : ZERO;
+            BigDecimal costPct = pctAmount(agg.totalPayrollCost, totalCompanyPayrollCost);
+            List<PositionBreakdownRow> positions = buildPositionBreakdown(agg, divisor);
+
+            boolean isInternal = agg.ref != null && agg.ref.internal();
+            String code = agg.ref != null ? agg.ref.customerCode() : agg.buName;
+            String name = agg.ref != null ? agg.ref.customerName() : agg.buName;
+
+            if (isInternal) {
+                internal.add(new InternalBuAnalysisRow(
+                        code, name, totalHc, billableHc, nonBillableHc,
+                        agg.totalGrossPay, agg.totalPayrollCost, avgCost, costPct, positions));
+            } else {
+                BigDecimal actualRevenue = ZERO;
+                if (agg.ref != null) {
+                    actualRevenue = revenueByCustomerCode.getOrDefault(agg.ref.customerCode(), ZERO);
+                } else {
+                    actualRevenue = revenueByCustomerCode.getOrDefault(agg.buName, ZERO);
+                }
+                BigDecimal revenuePct = pctAmount(actualRevenue, totalCompanyRevenue);
+                BigDecimal grossMargin = actualRevenue.subtract(agg.totalPayrollCost);
+                BigDecimal grossMarginPct = actualRevenue.compareTo(ZERO) > 0
+                        ? grossMargin.multiply(new BigDecimal("100"))
+                        .divide(actualRevenue, 2, RoundingMode.HALF_UP)
+                        : ZERO;
+                BigDecimal billableGross = agg.billableGrossPay;
+                BigDecimal nonBillableGross = agg.totalGrossPay.subtract(agg.billableGrossPay);
+                BigDecimal billablePayroll = agg.billablePayrollCost;
+                BigDecimal nonBillablePayroll = agg.totalPayrollCost.subtract(agg.billablePayrollCost);
+
+                external.add(new ExternalBuAnalysisRow(
+                        code, name, totalHc, billableHc, nonBillableHc,
+                        agg.totalGrossPay, billableGross, nonBillableGross,
+                        agg.totalPayrollCost, billablePayroll, nonBillablePayroll,
+                        avgCost, costPct, revenuePct, actualRevenue, grossMargin, grossMarginPct,
+                        positions));
+            }
+        }
+
+        external.sort(Comparator.comparingInt(ExternalBuAnalysisRow::totalHc).reversed());
+        internal.sort(Comparator.comparingInt(InternalBuAnalysisRow::totalHc).reversed());
+
+        return new BuAnalysisResult(
+                planId,
+                selection.highlightMonth(),
+                selection.highlightYear(),
+                selection.highlightQuarter(),
+                selection.granularity().name(),
+                selection.periodLabel(),
+                totalCompanyPayrollCost,
+                totalCompanyRevenue,
+                totalCompanyHc,
+                external,
+                internal);
+    }
+
+    private static int avgHc(int sumHc, int monthCount) {
+        if (monthCount <= 1) {
+            return sumHc;
+        }
+        return BigDecimal.valueOf(sumHc)
+                .divide(BigDecimal.valueOf(monthCount), 0, RoundingMode.HALF_UP)
+                .intValue();
+    }
+
+    private static BigDecimal pctAmount(BigDecimal part, BigDecimal whole) {
+        if (whole == null || whole.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        return part.multiply(new BigDecimal("100")).divide(whole, 2, RoundingMode.HALF_UP);
+    }
+
+    private List<PositionBreakdownRow> buildPositionBreakdown(BuAggAccum agg, int divisor) {
+        List<PositionBreakdownRow> rows = new ArrayList<>();
+        int buHcForPct = Math.max(1, agg.totalHc);
+        for (Map.Entry<String, PositionAccum> e : agg.byTitle.entrySet()) {
+            PositionAccum p = e.getValue();
+            int hc = avgHc(p.headcount, divisor);
+            BigDecimal avgCost = p.headcount > 0
+                    ? divide(p.totalPayrollCost, new BigDecimal(p.headcount))
+                    : ZERO;
+            BigDecimal pct = pctAmount(new BigDecimal(p.headcount), new BigDecimal(buHcForPct));
+            rows.add(new PositionBreakdownRow(e.getKey(), hc, avgCost, pct));
+        }
+        rows.sort(Comparator.comparingInt(PositionBreakdownRow::headcount).reversed());
+        return rows;
+    }
+
+    private static final class BuAggAccum {
+        final String buName;
+        final BuCustomerRef ref;
+        int totalHc;
+        int billableHc;
+        BigDecimal totalGrossPay = BigDecimal.ZERO;
+        BigDecimal billableGrossPay = BigDecimal.ZERO;
+        BigDecimal totalPayrollCost = BigDecimal.ZERO;
+        BigDecimal billablePayrollCost = BigDecimal.ZERO;
+        final Map<String, PositionAccum> byTitle = new LinkedHashMap<>();
+
+        BuAggAccum(String buName, BuCustomerRef ref) {
+            this.buName = buName;
+            this.ref = ref;
+        }
+
+        void add(MasterRecordFact fact) {
+            totalHc++;
+            BigDecimal gross = fact.grossPay() != null ? fact.grossPay() : BigDecimal.ZERO;
+            BigDecimal cost = fact.totalPayrollCost() != null ? fact.totalPayrollCost() : BigDecimal.ZERO;
+            totalGrossPay = totalGrossPay.add(gross);
+            totalPayrollCost = totalPayrollCost.add(cost);
+            if (fact.billable()) {
+                billableHc++;
+                billableGrossPay = billableGrossPay.add(gross);
+                billablePayrollCost = billablePayrollCost.add(cost);
+            }
+            String title = fact.title() != null && !fact.title().isBlank() ? fact.title() : "(Unassigned)";
+            PositionAccum pos = byTitle.computeIfAbsent(title, k -> new PositionAccum());
+            pos.headcount++;
+            pos.totalPayrollCost = pos.totalPayrollCost.add(cost);
+        }
+    }
+
+    private static final class PositionAccum {
+        int headcount;
+        BigDecimal totalPayrollCost = BigDecimal.ZERO;
     }
 
     private BuMetricsResult computeBuMetricsForMonth(
@@ -1471,6 +1755,8 @@ public class BudgetingService {
                 nullSafeInt(actuals.getActualTotalHc())
         );
 
+        // SalaryFigures keep gross pay for category display; payroll cost (gross + contrib)
+        // is applied inside computeFinancials (ADR-045 / ADR-052).
         BigDecimal billableSalary = nullSafe(actuals.getActualBillableSalaries());
         BigDecimal benchSalary = nullSafe(actuals.getActualBenchSalaries());
         BigDecimal supportSalary = nullSafe(actuals.getActualSupportSalaries());
@@ -1494,7 +1780,13 @@ public class BudgetingService {
                 .map(OverheadLineFigures::amount)
                 .reduce(ZERO, BigDecimal::add);
 
-        return computeFinancials(month, year, true, hc, salary, revenueByClient, totalRevenue, overhead, totalOverhead);
+        return computeFinancials(
+                month, year, true, hc, salary, revenueByClient, totalRevenue, overhead, totalOverhead,
+                nullSafe(actuals.getActualBillableEmployerContributions()),
+                nullSafe(actuals.getActualBenchEmployerContributions()),
+                nullSafe(actuals.getActualSupportEmployerContributions()),
+                nullSafe(actuals.getActualLeadershipEmployerContributions()),
+                nullSafe(actuals.getActualManagementEmployerContributions()));
     }
 
     /**
@@ -1549,15 +1841,49 @@ public class BudgetingService {
                 .map(OverheadLineFigures::amount)
                 .reduce(ZERO, BigDecimal::add);
 
-        return computeFinancials(month, year, false, hc, salary, revenueByClient, totalRevenue, overhead, totalOverhead);
+        return computeFinancials(
+                month, year, false, hc, salary, revenueByClient, totalRevenue, overhead, totalOverhead,
+                null, null, null, null, null);
     }
 
+    /**
+     * Confirmed P&amp;L formulas (ADR-052):
+     * <ul>
+     *   <li>COGS = Billable Payroll Cost + Bench Payroll Cost + Delivery Overheads
+     *       (training_upskilling, subcontractors)</li>
+     *   <li>Gross Profit = Total Revenue − COGS</li>
+     *   <li>OpEx = Support + Leadership + Management Payroll Cost + Non-Delivery Overheads
+     *       + Variable Pay</li>
+     *   <li>EBITDA = Gross Profit − OpEx</li>
+     * </ul>
+     * Payroll Cost = Gross Pay + Employer Contributions (actuals) or Gross × 1.13 (plan estimate).
+     */
     private MonthlyFinancials computeFinancials(int month, int year, boolean fromActuals,
                                                 HcFigures hc, SalaryFigures salary,
                                                 List<ClientRevenueFigures> revenueByClient, BigDecimal totalRevenue,
-                                                List<OverheadLineFigures> overhead, BigDecimal totalOverhead) {
-        BigDecimal totalSalaryCost = salary.total();
-        BigDecimal statutoryBenefits = totalSalaryCost.multiply(STATUTORY_RATE).setScale(2, RoundingMode.HALF_UP);
+                                                List<OverheadLineFigures> overhead, BigDecimal totalOverhead,
+                                                BigDecimal billableContrib,
+                                                BigDecimal benchContrib,
+                                                BigDecimal supportContrib,
+                                                BigDecimal leadershipContrib,
+                                                BigDecimal managementContrib) {
+        BigDecimal billablePayroll = payrollCost(salary.billable(), billableContrib, fromActuals);
+        BigDecimal benchPayroll = payrollCost(salary.bench(), benchContrib, fromActuals);
+        BigDecimal supportPayroll = payrollCost(salary.support(), supportContrib, fromActuals);
+        BigDecimal leadershipPayroll = payrollCost(salary.seniorMgmt(), leadershipContrib, fromActuals);
+        BigDecimal managementPayroll = payrollCost(salary.cofounders(), managementContrib, fromActuals);
+
+        BigDecimal totalSalaryCost = billablePayroll.add(benchPayroll).add(supportPayroll)
+                .add(leadershipPayroll).add(managementPayroll);
+
+        BigDecimal statutoryBenefits;
+        if (fromActuals) {
+            statutoryBenefits = nullSafe(billableContrib).add(nullSafe(benchContrib))
+                    .add(nullSafe(supportContrib)).add(nullSafe(leadershipContrib))
+                    .add(nullSafe(managementContrib));
+        } else {
+            statutoryBenefits = salary.total().multiply(STATUTORY_RATE).setScale(2, RoundingMode.HALF_UP);
+        }
 
         BigDecimal variablePay = ZERO;
         if (VARIABLE_PAY_MONTHS.contains(month)) {
@@ -1570,7 +1896,7 @@ public class BudgetingService {
                 .map(OverheadLineFigures::amount)
                 .reduce(ZERO, BigDecimal::add);
 
-        BigDecimal totalCogs = salary.billable().add(salary.bench()).add(deliveryOverhead);
+        BigDecimal totalCogs = billablePayroll.add(benchPayroll).add(deliveryOverhead);
         BigDecimal grossProfit = totalRevenue.subtract(totalCogs);
 
         BigDecimal nonDeliveryOverhead = overhead.stream()
@@ -1578,16 +1904,57 @@ public class BudgetingService {
                 .map(OverheadLineFigures::amount)
                 .reduce(ZERO, BigDecimal::add);
 
-        BigDecimal totalOpex = salary.support().add(salary.seniorMgmt()).add(salary.cofounders())
-                .add(statutoryBenefits).add(variablePay).add(nonDeliveryOverhead);
+        BigDecimal totalOpex = supportPayroll.add(leadershipPayroll).add(managementPayroll)
+                .add(variablePay).add(nonDeliveryOverhead);
 
         BigDecimal ebitda = grossProfit.subtract(totalOpex);
 
         return new MonthlyFinancials(
                 month, year, fromActuals, hc, salary, revenueByClient, totalRevenue,
                 overhead, totalOverhead, totalSalaryCost, statutoryBenefits, variablePay,
-                totalCogs, grossProfit, totalOpex, ebitda
+                totalCogs, grossProfit, totalOpex, ebitda, billableRatioPct(hc)
         );
+    }
+
+    /** Billable Ratio % = (billableHc ÷ totalHc) × 100 — always a percentage, never 0–1. */
+    private static BigDecimal billableRatioPct(HcFigures hc) {
+        if (hc == null || hc.totalHc() <= 0) {
+            return ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(hc.billableHc())
+                .multiply(new BigDecimal("100"))
+                .divide(BigDecimal.valueOf(hc.totalHc()), 2, RoundingMode.HALF_UP);
+    }
+
+    private static HcFigures sumHcFigures(List<MonthlyFinancials> months) {
+        HcFigures hc = new HcFigures(0, 0, 0, 0, 0, 0);
+        for (MonthlyFinancials m : months) {
+            hc = new HcFigures(
+                    hc.billableHc() + m.hc().billableHc(),
+                    hc.benchHc() + m.hc().benchHc(),
+                    hc.supportHc() + m.hc().supportHc(),
+                    hc.leadershipHc() + m.hc().leadershipHc(),
+                    hc.managementHc() + m.hc().managementHc(),
+                    hc.totalHc() + m.hc().totalHc());
+        }
+        return hc;
+    }
+
+    private static MonthlyFinancials withBillableRatioPct(MonthlyFinancials m, BigDecimal billableRatioPct) {
+        return new MonthlyFinancials(
+                m.month(), m.year(), m.fromActuals(), m.hc(), m.salary(), m.revenueByClient(),
+                m.totalRevenue(), m.overhead(), m.totalOverhead(), m.totalSalaryCost(),
+                m.statutoryBenefits(), m.variablePay(), m.totalCogs(), m.grossProfit(),
+                m.totalOpex(), m.ebitda(), billableRatioPct);
+    }
+
+    /** Actuals: gross + employer contributions. Plan: gross × 1.13 estimate (ADR-045). */
+    private BigDecimal payrollCost(BigDecimal grossOrBudget, BigDecimal actualContrib, boolean fromActuals) {
+        if (fromActuals) {
+            return nullSafe(grossOrBudget).add(nullSafe(actualContrib));
+        }
+        return nullSafe(grossOrBudget).multiply(BigDecimal.ONE.add(STATUTORY_RATE))
+                .setScale(2, RoundingMode.HALF_UP);
     }
 
     private MonthlyFinancials nullMonth(LocalDate monthDate) {
@@ -1596,7 +1963,8 @@ public class BudgetingService {
         HcFigures zeroHc = new HcFigures(0, 0, 0, 0, 0, 0);
         SalaryFigures zeroSalary = new SalaryFigures(ZERO, ZERO, ZERO, ZERO, ZERO, ZERO);
         return new MonthlyFinancials(month, year, false, zeroHc, zeroSalary, List.of(), ZERO,
-                List.of(), ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO);
+                List.of(), ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO,
+                ZERO.setScale(2, RoundingMode.HALF_UP));
     }
 
     private HcFigures getPlannedHcForMonth(UUID versionId, LocalDate monthDate) {
@@ -2140,7 +2508,8 @@ public class BudgetingService {
                 totalCogs,
                 grossProfit,
                 totalOpex,
-                ebitda);
+                ebitda,
+                billableRatioPct(hc));
     }
 
     private HcFigures addHc(HcFigures a, HcFigures b) {

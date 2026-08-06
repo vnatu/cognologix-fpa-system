@@ -34,7 +34,7 @@ public class OverheadBudget {
     @Column(name = "overhead_line", nullable = false, length = 100)
     private String overheadLine;
 
-    @Column(name = "amount", nullable = false, precision = 12, scale = 2)
+    @Column(name = "amount", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal amount = BigDecimal.ZERO;
 }

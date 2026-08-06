@@ -10,8 +10,10 @@ import {
   FundProjectionScreenOutlined,
   DollarOutlined,
   AccountBookOutlined,
+  FileExcelOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
+import { useUnsavedChanges } from '@/context/UnsavedChangesContext';
 import { fetchMe } from '@/api/users';
 import AppLogo from '@/components/AppLogo';
 import { HEADING_FONT } from '@/theme/antdTheme';
@@ -31,6 +33,7 @@ const NAV_ITEMS = [
     icon: <FundProjectionScreenOutlined />,
     label: 'Budgeting & Forecasting',
   },
+  { key: '/reports', icon: <FileExcelOutlined />, label: 'Reports' },
   { key: '/revenue', icon: <DollarOutlined />, label: 'Revenue' },
   { key: '/expenses', icon: <AccountBookOutlined />, label: 'Expenses' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
@@ -49,6 +52,10 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
   '/budgeting': {
     title: 'Budgeting & Forecasting',
     subtitle: 'AOP plan, rolling forecast & Plan vs Actual',
+  },
+  '/reports': {
+    title: 'Reports',
+    subtitle: 'Standard Excel downloads for Finance review',
   },
   '/revenue': {
     title: 'Revenue',
@@ -69,6 +76,7 @@ function resolveTopbarMeta(pathname: string) {
     return TOPBAR_META['/customer-management'];
   }
   if (pathname.startsWith('/budgeting')) return TOPBAR_META['/budgeting'];
+  if (pathname.startsWith('/reports')) return TOPBAR_META['/reports'];
   if (pathname.startsWith('/revenue')) return TOPBAR_META['/revenue'];
   if (pathname.startsWith('/expenses')) return TOPBAR_META['/expenses'];
   return { title: '', subtitle: '' };
@@ -78,6 +86,7 @@ function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/people-payroll')) return '/people-payroll';
   if (pathname.startsWith('/customer-management')) return '/customer-management';
   if (pathname.startsWith('/budgeting')) return '/budgeting';
+  if (pathname.startsWith('/reports')) return '/reports';
   if (pathname.startsWith('/revenue')) return '/revenue';
   if (pathname.startsWith('/expenses')) return '/expenses';
   if (pathname.startsWith('/account')) return '';
@@ -91,12 +100,28 @@ function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+function resolveNavTarget(key: string): string {
+  if (key === '/people-payroll') return '/people-payroll/imports/zoho-people';
+  if (key === '/customer-management') return '/customer-management/customers';
+  if (key === '/budgeting') return '/budgeting/dashboard';
+  if (key === '/reports') return '/reports/standard';
+  if (key === '/revenue') return '/revenue/imports/zoho-books-invoices';
+  if (key === '/expenses') return '/expenses/entry';
+  return key;
+}
+
 export default function AppLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { logout, mustChangePassword, role, email } = useAuth();
+  const { confirmIfDirty } = useUnsavedChanges();
   const [collapsed, setCollapsed] = useState(false);
   const [displayName, setDisplayName] = useState(email ?? 'User');
+
+  const go = (to: string) => {
+    if (pathname === to) return;
+    confirmIfDirty(() => navigate(to));
+  };
 
   useEffect(() => {
     fetchMe()
@@ -124,12 +149,15 @@ export default function AppLayout() {
           position: 'sticky',
           top: 0,
           zIndex: 100,
+          // Ant Design Header defaults line-height to header height (64px),
+          // which clips multi-line title/subtitle blocks.
+          lineHeight: 'normal',
         }}
       >
         <AppLogo variant="dark" height={28} />
 
-        <Space>
-          <div style={{ textAlign: 'right' }}>
+        <Space align="center">
+          <div style={{ textAlign: 'right', lineHeight: 'normal' }}>
             <div
               style={{
                 fontFamily: HEADING_FONT,
@@ -137,12 +165,19 @@ export default function AppLayout() {
                 fontSize: 17,
                 color: '#ffffff',
                 letterSpacing: '-0.01em',
-                lineHeight: 1.2,
+                lineHeight: 1.25,
               }}
             >
               {meta.title}
             </div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 1 }}>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'rgba(255,255,255,0.55)',
+                marginTop: 2,
+                lineHeight: 1.3,
+              }}
+            >
               {meta.subtitle}
             </div>
           </div>
@@ -151,7 +186,7 @@ export default function AppLayout() {
         <Button
           type="text"
           icon={<LogoutOutlined />}
-          onClick={logout}
+          onClick={() => confirmIfDirty(() => logout('logged_out'))}
           style={{ color: 'rgba(255,255,255,0.75)' }}
         >
           Sign out
@@ -211,19 +246,7 @@ export default function AppLayout() {
             )}
             onClick={({ key }) => {
               if (mustChangePassword) return;
-              if (key === '/people-payroll') {
-                navigate('/people-payroll/imports/zoho-people');
-              } else if (key === '/customer-management') {
-                navigate('/customer-management/customers');
-              } else if (key === '/budgeting') {
-                navigate('/budgeting/dashboard');
-              } else if (key === '/revenue') {
-                navigate('/revenue/imports/zoho-books-invoices');
-              } else if (key === '/expenses') {
-                navigate('/expenses/entry');
-              } else {
-                navigate(key);
-              }
+              go(resolveNavTarget(key));
             }}
             style={{ border: 'none', marginTop: 8 }}
           />
@@ -231,9 +254,9 @@ export default function AppLayout() {
           <div
             role="button"
             tabIndex={0}
-            onClick={() => navigate('/account')}
+            onClick={() => go('/account')}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') navigate('/account');
+              if (e.key === 'Enter' || e.key === ' ') go('/account');
             }}
             style={{
               position: 'absolute',

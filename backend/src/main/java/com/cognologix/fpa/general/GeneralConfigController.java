@@ -104,6 +104,24 @@ public class GeneralConfigController {
         return new DateFormatResponse(generalConfigService.updateDateFormat(req.format()));
     }
 
+    // ── Security / session (ADR-056) ──────────────────────────────────────────
+
+    @GetMapping("/config/security")
+    @Operation(summary = "Get JWT expiry and inactivity timeout settings")
+    public SecurityConfigResponse getSecurityConfig() {
+        var cfg = generalConfigService.getSecurityConfig();
+        return new SecurityConfigResponse(cfg.jwtExpiryHours(), cfg.inactivityTimeoutMinutes());
+    }
+
+    @AdminOnly
+    @PutMapping("/config/security")
+    @Operation(summary = "Update JWT expiry and inactivity timeout (Admin only)")
+    public SecurityConfigResponse updateSecurityConfig(@Valid @RequestBody UpdateSecurityConfigRequest req) {
+        var updated = generalConfigService.updateSecurityConfig(
+                req.jwtExpiryHours(), req.inactivityTimeoutMinutes());
+        return new SecurityConfigResponse(updated.jwtExpiryHours(), updated.inactivityTimeoutMinutes());
+    }
+
     private static ResponseEntity<byte[]> excelAttachment(byte[] content, String filename) {
         return ResponseEntity.ok()
                 .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")

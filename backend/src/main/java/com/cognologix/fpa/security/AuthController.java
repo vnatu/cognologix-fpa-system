@@ -12,6 +12,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,6 +28,7 @@ public class AuthController {
     private final AuthenticationManager authManager;
     private final JwtTokenProvider tokenProvider;
     private final UserService userService;
+    private final RefreshTokenRateLimiter refreshTokenRateLimiter;
 
     @PostMapping("/login")
     public ResponseEntity<?> login(
@@ -60,6 +62,39 @@ public class AuthController {
         userService.markLoginSuccess(user);
 
         var token = tokenProvider.generateToken(
+                user.getEmail(),
+                user.getRole().name(),
+                user.isMustChangePassword());
+        return ResponseEntity.ok(new LoginResponse(token));
+    }
+
+    /**
+     * Issues a fresh JWT for an authenticated session (valid non-expired Bearer token required).
+     * Rate limited to {@link RefreshTokenRateLimiter#LIMIT} calls per hour per user (ADR-056).
+     */
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refresh(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication.getName() == null
+                || "anonymousUser".equals(authentication.getName())) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "Valid session required to refresh token"));
+        }
+
+        String email = authentication.getName();
+        if (!refreshTokenRateLimiter.tryAcquire(email)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error",
+                            "Too many token refresh requests. Please try again later."));
+        }
+
+        var user = userService.findByEmail(email).orElse(null);
+        if (user == null || !user.isActive()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "User not found or inactive"));
+        }
+
+        String token = tokenProvider.generateToken(
                 user.getEmail(),
                 user.getRole().name(),
                 user.isMustChangePassword());

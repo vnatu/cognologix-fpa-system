@@ -219,6 +219,16 @@ export default function SnapshotDetailPage() {
   const peopleColumns: ColumnsType<PeopleSnapshotRow> = [
     { title: 'Employee ID', dataIndex: 'employeeId', key: 'employeeId' },
     { title: 'Full Name', dataIndex: 'fullName', key: 'fullName' },
+    {
+      title: 'Employee Status',
+      dataIndex: 'employeeStatus',
+      key: 'employeeStatus',
+      render: (status: string) => (
+        <Tag color={status === 'EXITED' ? 'orange' : 'green'}>
+          {status === 'EXITED' ? 'Exited' : 'Active'}
+        </Tag>
+      ),
+    },
     { title: 'Practice Unit', dataIndex: 'practiceUnit', key: 'practiceUnit' },
     { title: 'Business Unit', dataIndex: 'businessUnit', key: 'businessUnit' },
     {
@@ -447,7 +457,7 @@ export default function SnapshotDetailPage() {
               onChange={(e) => setSearch(e.target.value)}
               style={{ maxWidth: 400 }}
             />
-            {isExited ? (
+            {isExited && filteredPeople.length === 0 ? (
               filteredExited.length === 0 ? (
                 <Empty description="No snapshot rows" />
               ) : (

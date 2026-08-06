@@ -1,6 +1,7 @@
 package com.cognologix.fpa.people;
 
 import com.cognologix.fpa.people.domain.*;
+import com.cognologix.fpa.people.repository.EmployeeRegistryRepository;
 import com.cognologix.fpa.people.repository.PeriodVersionRepository;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ class MasterBuildIntegrationTest extends PeopleModuleIntegrationTest {
 
     @Autowired PeoplePayrollService peoplePayrollService;
     @Autowired PeriodVersionRepository periodVersionRepository;
+    @Autowired EmployeeRegistryRepository employeeRegistryRepository;
 
     @Test
     void uploadBothSnapshots_buildMaster_finalise_happyPath() throws Exception {
@@ -114,21 +116,24 @@ class MasterBuildIntegrationTest extends PeopleModuleIntegrationTest {
                 "Exited",
                 List.of(
                         new PeoplePayrollService.MappingLineInput("Employee ID", SystemAttribute.EMPLOYEE_ID),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("PU", SystemAttribute.PRACTICE_UNIT),
+                        new PeoplePayrollService.MappingLineInput("BU", SystemAttribute.BUSINESS_UNIT),
+                        new PeoplePayrollService.MappingLineInput("Billable", SystemAttribute.BILLABLE_STATUS),
                         new PeoplePayrollService.MappingLineInput(
                                 "Last Working Day", SystemAttribute.LAST_WORKING_DAY)));
 
         peoplePayrollService.uploadSnapshotFile(
                 versionId, ImportType.ZOHO_PEOPLE, peopleMapping.getId(),
                 xlsx(List.of("Employee ID", "Name", "PU", "BU", "Billable"),
-                        List.of(
-                                List.of("EMP100", "Active Employee", "Engineering", "Icertis", "Y"),
-                                List.of("EMP200", "Exited Employee", "Engineering", "Icertis", "Y"))),
+                        List.of(List.of("EMP100", "Active Employee", "Engineering", "Icertis", "Y"))),
                 "tester");
 
         peoplePayrollService.uploadSnapshotFile(
                 versionId, ImportType.ZOHO_PEOPLE_EXITED, exitedMapping.getId(),
-                xlsx(List.of("Employee ID", "Last Working Day"),
-                        List.of(List.of("EMP200", "2026-09-15"))),
+                xlsx(List.of("Employee ID", "Name", "PU", "BU", "Billable", "Last Working Day"),
+                        List.of(List.of(
+                                "EMP200", "Exited Employee", "Engineering", "Icertis", "Y", "2026-09-15"))),
                 "tester");
 
         peoplePayrollService.uploadSnapshotFile(
@@ -158,12 +163,167 @@ class MasterBuildIntegrationTest extends PeopleModuleIntegrationTest {
 
         assertThat(byEmployee.get("EMP100").getReconciliationStatus())
                 .isEqualTo(ReconciliationStatus.MATCHED);
+        assertThat(byEmployee.get("EMP100").getEmployeeStatus()).isEqualTo(EmployeeStatus.ACTIVE);
         assertThat(byEmployee.get("EMP200").getReconciliationStatus())
                 .isEqualTo(ReconciliationStatus.MATCHED);
+        assertThat(byEmployee.get("EMP200").getEmployeeStatus()).isEqualTo(EmployeeStatus.EXITED);
+        assertThat(byEmployee.get("EMP200").isBillable()).isTrue();
+        assertThat(byEmployee.get("EMP200").getGrossPay()).isEqualByComparingTo("0.50");
         assertThat(byEmployee.get("EMP300").getReconciliationStatus())
                 .isEqualTo(ReconciliationStatus.UNMATCHED);
         assertThat(byEmployee.get("EMP300").getPayrollSnapshot().getImportType())
                 .isEqualTo(ImportType.ZOHO_PAYROLL_FNF);
+
+        var summary = peoplePayrollService.summarizeMaster(versionId);
+        // EMP100 billable HC only — EMP200 EXITED salary retained, excluded from HC (Rs Lakhs)
+        assertThat(summary.billableHc()).isEqualTo(1);
+        assertThat(summary.billableGrossPay()).isEqualByComparingTo("1.70");
+    }
+
+    @Test
+    void regularPayroll_forRegistryExitedEmployeeAbsentFromPeople_isUnmatched() throws Exception {
+        when(customerService.isKnownCustomer(anyString())).thenReturn(true);
+
+        var period = peoplePayrollService.createPeriod(12, 2026);
+        UUID versionId = periodVersionRepository
+                .findByPeriodIdOrderByVersionNumberDesc(period.getId())
+                .getFirst()
+                .getId();
+
+        var peopleMapping = peoplePayrollService.saveMappingTemplate(
+                ImportType.ZOHO_PEOPLE,
+                "People",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Employee ID", SystemAttribute.EMPLOYEE_ID),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("PU", SystemAttribute.PRACTICE_UNIT),
+                        new PeoplePayrollService.MappingLineInput("BU", SystemAttribute.BUSINESS_UNIT),
+                        new PeoplePayrollService.MappingLineInput("Billable", SystemAttribute.BILLABLE_STATUS)));
+
+        var payrollMapping = peoplePayrollService.saveMappingTemplate(
+                ImportType.ZOHO_PAYROLL,
+                "Payroll",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Employee No", SystemAttribute.EMPLOYEE_NO),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("Gross", SystemAttribute.GROSS_PAY),
+                        new PeoplePayrollService.MappingLineInput("Net", SystemAttribute.NET_PAY)));
+
+        // Registry EXITED but absent from both People snapshots — regular payroll must be UNMATCHED (ADR-062)
+        peoplePayrollService.registerEmployee("EMP900", "Exited In Regular Payroll");
+        var exited = employeeRegistryRepository.findByEmployeeId("EMP900").orElseThrow();
+        exited.setExitStatus(ExitStatus.EXITED);
+        employeeRegistryRepository.save(exited);
+
+        peoplePayrollService.uploadSnapshotFile(
+                versionId, ImportType.ZOHO_PEOPLE, peopleMapping.getId(),
+                xlsx(List.of("Employee ID", "Name", "PU", "BU", "Billable"),
+                        List.of(List.of("EMP100", "Active Employee", "Engineering", "Icertis", "Y"))),
+                "tester");
+
+        peoplePayrollService.uploadSnapshotFile(
+                versionId, ImportType.ZOHO_PAYROLL, payrollMapping.getId(),
+                xlsx(List.of("Employee No", "Name", "Gross", "Net"),
+                        List.of(
+                                List.of("EMP100", "Active Employee", "120000", "90000"),
+                                List.of("EMP900", "Exited In Regular Payroll", "80000", "60000"))),
+                "tester");
+
+        var masters = peoplePayrollService.buildMasterRecords(versionId);
+        var byEmployee = masters.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        m -> m.getEmployeeRegistry().getEmployeeId(),
+                        m -> m,
+                        (a, b) -> a));
+
+        assertThat(byEmployee.get("EMP100").getReconciliationStatus())
+                .isEqualTo(ReconciliationStatus.MATCHED);
+        assertThat(byEmployee.get("EMP900").getReconciliationStatus())
+                .isEqualTo(ReconciliationStatus.UNMATCHED);
+        assertThat(byEmployee.get("EMP900").getPayrollSnapshot().getImportType())
+                .isEqualTo(ImportType.ZOHO_PAYROLL);
+    }
+
+    @Test
+    void masterBuild_activeAndExitedPeople_matchAllPayrollAndSetEmployeeStatus() throws Exception {
+        when(customerService.isKnownCustomer(anyString())).thenReturn(true);
+
+        var period = peoplePayrollService.createPeriod(11, 2026);
+        UUID versionId = periodVersionRepository
+                .findByPeriodIdOrderByVersionNumberDesc(period.getId())
+                .getFirst()
+                .getId();
+
+        var peopleMapping = peoplePayrollService.saveMappingTemplate(
+                ImportType.ZOHO_PEOPLE,
+                "People",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Employee ID", SystemAttribute.EMPLOYEE_ID),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("PU", SystemAttribute.PRACTICE_UNIT),
+                        new PeoplePayrollService.MappingLineInput("BU", SystemAttribute.BUSINESS_UNIT),
+                        new PeoplePayrollService.MappingLineInput("Billable", SystemAttribute.BILLABLE_STATUS)));
+
+        var payrollMapping = peoplePayrollService.saveMappingTemplate(
+                ImportType.ZOHO_PAYROLL,
+                "Payroll",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Employee No", SystemAttribute.EMPLOYEE_NO),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("Gross", SystemAttribute.GROSS_PAY),
+                        new PeoplePayrollService.MappingLineInput("Net", SystemAttribute.NET_PAY)));
+
+        var exitedMapping = peoplePayrollService.saveMappingTemplate(
+                ImportType.ZOHO_PEOPLE_EXITED,
+                "Exited",
+                List.of(
+                        new PeoplePayrollService.MappingLineInput("Employee ID", SystemAttribute.EMPLOYEE_ID),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("PU", SystemAttribute.PRACTICE_UNIT),
+                        new PeoplePayrollService.MappingLineInput("BU", SystemAttribute.BUSINESS_UNIT),
+                        new PeoplePayrollService.MappingLineInput("Billable", SystemAttribute.BILLABLE_STATUS),
+                        new PeoplePayrollService.MappingLineInput(
+                                "Last Working Day", SystemAttribute.LAST_WORKING_DAY)));
+
+        peoplePayrollService.uploadSnapshotFile(
+                versionId, ImportType.ZOHO_PEOPLE, peopleMapping.getId(),
+                xlsx(List.of("Employee ID", "Name", "PU", "BU", "Billable"),
+                        List.of(List.of("A1", "Active One", "Engineering", "Icertis", "Y"))),
+                "tester");
+
+        peoplePayrollService.uploadSnapshotFile(
+                versionId, ImportType.ZOHO_PEOPLE_EXITED, exitedMapping.getId(),
+                xlsx(List.of("Employee ID", "Name", "PU", "BU", "Billable", "Last Working Day"),
+                        List.of(List.of(
+                                "X1", "Exited One", "Engineering", "Icertis", "Y", "2026-11-10"))),
+                "tester");
+
+        peoplePayrollService.uploadSnapshotFile(
+                versionId, ImportType.ZOHO_PAYROLL, payrollMapping.getId(),
+                xlsx(List.of("Employee No", "Name", "Gross", "Net"),
+                        List.of(List.of("A1", "Active One", "100000", "80000"))),
+                "tester");
+
+        peoplePayrollService.uploadSnapshotFile(
+                versionId, ImportType.ZOHO_PAYROLL_FNF, payrollMapping.getId(),
+                xlsx(List.of("Employee No", "Name", "Gross", "Net"),
+                        List.of(List.of("X1", "Exited One", "45000", "35000"))),
+                "tester");
+
+        var masters = peoplePayrollService.buildMasterRecords(versionId);
+        assertThat(masters).hasSize(2);
+        assertThat(masters).allMatch(m -> m.getReconciliationStatus() == ReconciliationStatus.MATCHED);
+
+        var byId = masters.stream().collect(java.util.stream.Collectors.toMap(
+                m -> m.getEmployeeRegistry().getEmployeeId(), m -> m));
+        assertThat(byId.get("A1").getEmployeeStatus()).isEqualTo(EmployeeStatus.ACTIVE);
+        assertThat(byId.get("X1").getEmployeeStatus()).isEqualTo(EmployeeStatus.EXITED);
+        assertThat(byId.get("X1").getGrossPay()).isEqualByComparingTo("0.45");
+
+        peoplePayrollService.finalisePeriod(versionId, "tester");
+        var summary = peoplePayrollService.summarizeMaster(versionId);
+        assertThat(summary.billableHc()).isEqualTo(1);
+        assertThat(summary.billableGrossPay()).isEqualByComparingTo("1.45");
     }
 
     @Test

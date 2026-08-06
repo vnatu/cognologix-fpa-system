@@ -35,11 +35,11 @@ public class ClientRevenuePlan {
     @Column(name = "plan_year", nullable = false)
     private Integer planYear;
 
-    @Column(name = "planned_tm_revenue", nullable = false, precision = 12, scale = 2)
+    @Column(name = "planned_tm_revenue", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal plannedTmRevenue = BigDecimal.ZERO;
 
-    @Column(name = "planned_fixed_bid_revenue", nullable = false, precision = 12, scale = 2)
+    @Column(name = "planned_fixed_bid_revenue", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal plannedFixedBidRevenue = BigDecimal.ZERO;
 }

@@ -65,7 +65,7 @@ export function buildOpenVersionOptions(periods: PeriodResponse[]): PeriodVersio
   return buildVersionOptionsForStatuses(periods, ['OPEN']);
 }
 
-/** Period versions that accept snapshot uploads (ADR-018: until finalised). */
+/** Period versions that accept snapshot uploads (until the period is finalised). */
 export function buildImportableVersionOptions(
   periods: PeriodResponse[],
 ): PeriodVersionOption[] {

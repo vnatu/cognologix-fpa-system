@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  BuAnalysisResult,
   BuMetricsResult,
   ClientRevenuePlanEntry,
   CostPerEmployeeResult,
@@ -21,8 +22,15 @@ const base = (planId: string) => `/api/budgeting/plans/${planId}`;
 const versionPath = (planId: string, typeId: string, versionId: string) =>
   `${base(planId)}/forecast-types/${typeId}/versions/${versionId}`;
 
-async function downloadBlob(url: string, filename: string): Promise<void> {
-  const response = await axios.get<Blob>(url, { responseType: 'blob' });
+async function downloadBlob(
+  url: string,
+  filename: string,
+  params?: Record<string, string | number>,
+): Promise<void> {
+  const response = await axios.get<Blob>(url, {
+    responseType: 'blob',
+    params,
+  });
   const objectUrl = window.URL.createObjectURL(response.data);
   const link = document.createElement('a');
   link.href = objectUrl;
@@ -232,6 +240,39 @@ export const fetchBuMetrics = (
     })
     .then((r) => r.data);
 
+export const fetchBuAnalysis = (
+  planId: string,
+  period: PeriodQuery,
+): Promise<BuAnalysisResult> =>
+  axios
+    .get<BuAnalysisResult>(`${base(planId)}/bu-analysis`, {
+      params: periodParams(period),
+    })
+    .then((r) => r.data);
+
+export type BudgetingReportType =
+  | 'ROLLING_FORECAST'
+  | 'PLAN_VS_ACTUAL'
+  | 'DELTA'
+  | 'PL_SUMMARY'
+  | 'COST_PER_EMPLOYEE'
+  | 'BU_ANALYSIS';
+
+export const downloadBudgetingReport = (
+  planId: string,
+  reportType: BudgetingReportType,
+  period: PeriodQuery,
+  forecastTypeId?: string,
+): Promise<void> =>
+  downloadBlob(
+    `${base(planId)}/reports/${reportType}`,
+    `${reportType.toLowerCase()}_report.xlsx`,
+    {
+      ...periodParams(period),
+      ...(forecastTypeId ? { forecastTypeId } : {}),
+    },
+  );
+
 function periodParams(period?: PeriodQuery): Record<string, string | number> {
   if (!period) return {};
   const params: Record<string, string | number> = {
@@ -411,13 +452,18 @@ export interface PlanInputZipImportResult {
   parts: PlanInputZipImportPart[];
 }
 
-import type JSZipType from 'jszip';
-import type { JSZipObject } from 'jszip';
+type ZipFileEntry = {
+  dir: boolean;
+  name: string;
+  async: (type: 'blob') => Promise<Blob>;
+};
 
-function findZipEntry(
-  zip: JSZipType,
-  fileName: string,
-): JSZipObject | null {
+type ZipArchive = {
+  files: Record<string, ZipFileEntry>;
+  file: (name: string) => ZipFileEntry | null;
+};
+
+function findZipEntry(zip: ZipArchive, fileName: string): ZipFileEntry | null {
   const direct = zip.file(fileName);
   if (direct) return direct;
   const match = Object.values(zip.files).find(
@@ -433,8 +479,9 @@ export async function importAllPlanInputs(
   versionId: string,
   zipFile: File,
 ): Promise<PlanInputZipImportResult> {
+  // Dynamic import — jszip is only needed for plan ZIP restore, not on initial load
   const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(zipFile);
+  const zip = (await JSZip.loadAsync(zipFile)) as unknown as ZipArchive;
   const parts: PlanInputZipImportPart[] = [];
 
   for (const entry of PLAN_INPUT_ZIP_ENTRIES) {

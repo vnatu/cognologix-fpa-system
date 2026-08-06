@@ -17,6 +17,7 @@ export const SYSTEM_ATTRIBUTE_LABELS: Record<string, string> = {
   InvoiceDate: 'Invoice Date',
   Status: 'Status',
   Amount: 'Amount',
+  AmountUsd: 'Amount (USD)',
   Balance: 'Balance',
   DueDate: 'Due Date',
   Currency: 'Currency',
@@ -33,6 +34,7 @@ export const ATTRIBUTES_BY_IMPORT_TYPE: Record<RevenueImportType, string[]> = {
     'InvoiceDate',
     'Status',
     'Amount',
+    'AmountUsd',
     'Balance',
     'DueDate',
     'Currency',
@@ -45,6 +47,7 @@ export const ATTRIBUTES_BY_IMPORT_TYPE: Record<RevenueImportType, string[]> = {
     'CreditNoteDate',
     'Status',
     'Amount',
+    'AmountUsd',
     'Currency',
   ],
 };

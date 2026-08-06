@@ -224,6 +224,25 @@ public class RevenueExcelParser {
         }
     }
 
+    /**
+     * Optional raw USD amount — stored as full dollars with scale 2, no lakhs conversion (ADR-061).
+     */
+    public static BigDecimal optionalUsdAmount(Map<String, String> row, String attribute) {
+        String v = optional(row, attribute);
+        if (v == null) {
+            return null;
+        }
+        try {
+            BigDecimal amount = ExcelNumberParser.parseAmount(v);
+            if (amount == null) {
+                return null;
+            }
+            return amount.setScale(2, java.math.RoundingMode.HALF_UP);
+        } catch (IllegalArgumentException e) {
+            throw new RevenueBadRequestException("Invalid number for " + attribute + ": " + v);
+        }
+    }
+
     public static LocalDate optionalDate(Map<String, String> row, String attribute) {
         String v = optional(row, attribute);
         if (v == null) {

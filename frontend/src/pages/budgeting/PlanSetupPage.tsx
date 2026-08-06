@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Collapse,
@@ -84,11 +85,65 @@ import {
   type PlanInputZipImportResult,
 } from './api';
 import { useIsAdmin } from '@/components/AdminGate';
+import { useUnsavedChanges } from '@/context/UnsavedChangesContext';
 import type { FormInstance } from 'antd/es/form';
 import type { UploadFile } from 'antd/es/upload';
 
 const { Title, Text, Paragraph } = Typography;
 const { Dragger } = Upload;
+
+const PLAN_SETUP_PAGE = 'plan_setup';
+
+function planSetupPeriod(
+  planId: string,
+  forecastTypeId: string,
+  versionId: string,
+): string {
+  return `${planId}_${forecastTypeId}_${versionId}`;
+}
+
+/** Registers a Plan Setup section draft for inactivity / forced logout. */
+function usePlanSectionDraft<T>(
+  section: string,
+  planId: string,
+  forecastTypeId: string,
+  versionId: string,
+  data: T,
+  dirty: boolean,
+  setData: (value: T) => void,
+  setDirty: (value: boolean) => void,
+) {
+  const { register, peekDraft } = useUnsavedChanges();
+  const period = planSetupPeriod(planId, forecastTypeId, versionId);
+  const dirtyRef = useRef(dirty);
+  const dataRef = useRef(data);
+  dirtyRef.current = dirty;
+  dataRef.current = data;
+
+  useEffect(() => {
+    return register(`plan_setup_${section}_${period}`, {
+      pageName: PLAN_SETUP_PAGE,
+      period,
+      isDirty: () => dirtyRef.current,
+      getDraft: () => ({ [section]: dataRef.current }),
+    });
+  }, [register, section, period]);
+
+  useEffect(() => {
+    const onRestore = (event: Event) => {
+      const detail = (event as CustomEvent<{ period: string }>).detail;
+      if (!detail || detail.period !== period) return;
+      const draft = peekDraft<Record<string, T>>(PLAN_SETUP_PAGE, period);
+      const sectionData = draft?.[section];
+      if (sectionData != null) {
+        setData(sectionData);
+        setDirty(true);
+      }
+    };
+    window.addEventListener('fpa-restore-plan-draft', onRestore);
+    return () => window.removeEventListener('fpa-restore-plan-draft', onRestore);
+  }, [period, section, peekDraft, setData, setDirty]);
+}
 
 export default function PlanSetupPage() {
   const { token } = theme.useToken();
@@ -408,9 +463,54 @@ function ForecastTypePanel({
   /** ADMIN + DRAFT may edit / save; VIEWER (and non-draft) see InputNumbers disabled. */
   const canEdit = isAdmin && isDraft;
   const [importAllOpen, setImportAllOpen] = useState(false);
+  const { peekDraft, discardDraft } = useUnsavedChanges();
+  const periodKey = planSetupPeriod(plan.id, forecastType.id, currentVersion.id);
+  const [draftBanner, setDraftBanner] = useState(false);
+
+  useEffect(() => {
+    const draft = peekDraft(PLAN_SETUP_PAGE, periodKey);
+    setDraftBanner(!!draft);
+  }, [peekDraft, periodKey]);
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      {draftBanner && (
+        <Alert
+          type="info"
+          showIcon
+          message="You have unsaved changes from your previous session. Would you like to restore them?"
+          description="Restore reloads the draft into session storage for this plan version. Re-open each grid section after restoring, or discard to keep the last saved server values."
+          action={
+            <Space>
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent('fpa-restore-plan-draft', {
+                      detail: { period: periodKey },
+                    }),
+                  );
+                  setDraftBanner(false);
+                  discardDraft(PLAN_SETUP_PAGE, periodKey);
+                  notification.success({ message: 'Draft restored into plan grids' });
+                }}
+              >
+                Restore
+              </Button>
+              <Button
+                size="small"
+                onClick={() => {
+                  discardDraft(PLAN_SETUP_PAGE, periodKey);
+                  setDraftBanner(false);
+                }}
+              >
+                Discard
+              </Button>
+            </Space>
+          }
+        />
+      )}
       <Card>
         <Space wrap>
           <Text strong>Version {currentVersion.versionNumber}</Text>
@@ -770,6 +870,17 @@ function HcPlanPanel({
   const [data, setData] = useState<HcPlanMonth[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  usePlanSectionDraft(
+    'hcPlan',
+    plan.id,
+    forecastType.id,
+    version.id,
+    data,
+    dirty,
+    setData,
+    setDirty,
+  );
 
   const cols = useMemo(() => buildFyMonthCols(plan), [plan]);
 
@@ -810,6 +921,7 @@ function HcPlanPanel({
 
   const setValue = useCallback(
     (col: FyMonthCol, field: keyof HcPlanMonth, value: number) => {
+      setDirty(true);
       setData((prev) => {
         const existing = prev.find(
           (m) => m.planMonth === col.planMonth && m.planYear === col.planYear,
@@ -865,6 +977,7 @@ function HcPlanPanel({
       });
       await saveHcPlan(plan.id, forecastType.id, version.id, months);
       notification.success({ message: 'HC plan saved' });
+      setDirty(false);
       await loadData();
     } catch (error) {
       notification.error({
@@ -1013,6 +1126,17 @@ function ClientRevenuePlanPanel({
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  usePlanSectionDraft(
+    'revenuePlan',
+    plan.id,
+    forecastType.id,
+    version.id,
+    data,
+    dirty,
+    setData,
+    setDirty,
+  );
 
   const cols = useMemo(() => buildFyMonthCols(plan), [plan]);
 
@@ -1063,6 +1187,7 @@ function ClientRevenuePlanPanel({
       field: 'plannedTmRevenue' | 'plannedFixedBidRevenue',
       value: number,
     ) => {
+      setDirty(true);
       setData((prev) => {
         const existing = prev.find(
           (e) =>
@@ -1117,6 +1242,7 @@ function ClientRevenuePlanPanel({
       });
       await saveRevenuePlan(plan.id, forecastType.id, version.id, entries);
       notification.success({ message: 'Revenue plan saved' });
+      setDirty(false);
       await loadData();
     } catch (error) {
       notification.error({
@@ -1230,6 +1356,8 @@ function ClientRevenuePlanPanel({
                             <InputNumber
                               size="small"
                               min={0}
+                              precision={3}
+                              step={0.001}
                               disabled={!canEdit}
                               value={getValue(cust.id, col, row.field)}
                               onChange={(v) =>
@@ -1287,6 +1415,17 @@ function SalaryBudgetPanel({
   const [data, setData] = useState<SalaryBudgetMonth[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  usePlanSectionDraft(
+    'salaryBudget',
+    plan.id,
+    forecastType.id,
+    version.id,
+    data,
+    dirty,
+    setData,
+    setDirty,
+  );
 
   const cols = useMemo(() => buildFyMonthCols(plan), [plan]);
 
@@ -1331,6 +1470,7 @@ function SalaryBudgetPanel({
 
   const setValue = useCallback(
     (col: FyMonthCol, field: keyof SalaryBudgetMonth, value: number) => {
+      setDirty(true);
       setData((prev) => {
         const existing = prev.find(
           (m) => m.planMonth === col.planMonth && m.planYear === col.planYear,
@@ -1382,6 +1522,7 @@ function SalaryBudgetPanel({
       });
       await saveSalaryBudget(plan.id, forecastType.id, version.id, months);
       notification.success({ message: 'Salary budget saved' });
+      setDirty(false);
       await loadData();
     } catch (error) {
       notification.error({
@@ -1450,6 +1591,8 @@ function SalaryBudgetPanel({
           <InputNumber
             size="small"
             min={0}
+            precision={3}
+            step={0.001}
             disabled={!canEdit}
             value={getValue(col, row.field)}
             onChange={(v) => setValue(col, row.field!, v ?? 0)}
@@ -1536,6 +1679,17 @@ function OverheadBudgetPanel({
   const [lineItems, setLineItems] = useState<OverheadLineItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  usePlanSectionDraft(
+    'overheadBudget',
+    plan.id,
+    forecastType.id,
+    version.id,
+    data,
+    dirty,
+    setData,
+    setDirty,
+  );
 
   const cols = useMemo(() => buildFyMonthCols(plan), [plan]);
 
@@ -1589,6 +1743,7 @@ function OverheadBudgetPanel({
 
   const setValue = useCallback(
     (lineCode: string, col: FyMonthCol, value: number) => {
+      setDirty(true);
       setData((prev) => {
         const existing = prev.find(
           (e) =>
@@ -1639,6 +1794,7 @@ function OverheadBudgetPanel({
       });
       await saveOverheadBudget(plan.id, forecastType.id, version.id, entries);
       notification.success({ message: 'Overhead budget saved' });
+      setDirty(false);
       await loadData();
     } catch (error) {
       notification.error({
@@ -1726,6 +1882,8 @@ function OverheadBudgetPanel({
                             <InputNumber
                               size="small"
                               min={0}
+                              precision={3}
+                              step={0.001}
                               disabled={!canEdit}
                               value={getValue(line.lineCode, col)}
                               onChange={(v) =>

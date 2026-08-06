@@ -327,6 +327,10 @@ class ReuploadIntegrationTest extends PeopleModuleIntegrationTest {
                 "Exited",
                 List.of(
                         new PeoplePayrollService.MappingLineInput("Employee ID", SystemAttribute.EMPLOYEE_ID),
+                        new PeoplePayrollService.MappingLineInput("Name", SystemAttribute.FULL_NAME),
+                        new PeoplePayrollService.MappingLineInput("PU", SystemAttribute.PRACTICE_UNIT),
+                        new PeoplePayrollService.MappingLineInput("BU", SystemAttribute.BUSINESS_UNIT),
+                        new PeoplePayrollService.MappingLineInput("Billable", SystemAttribute.BILLABLE_STATUS),
                         new PeoplePayrollService.MappingLineInput(
                                 "Last Working Day", SystemAttribute.LAST_WORKING_DAY)));
 
@@ -338,12 +342,15 @@ class ReuploadIntegrationTest extends PeopleModuleIntegrationTest {
 
         var upload = peoplePayrollService.uploadSnapshotFile(
                 versionId, ImportType.ZOHO_PEOPLE_EXITED, exitedMapping.getId(),
-                xlsx(List.of("Employee ID", "Last Working Day"),
-                        List.of(List.of("EMP400", "15/06/2026"))),
+                xlsx(List.of("Employee ID", "Name", "PU", "BU", "Billable", "Last Working Day"),
+                        List.of(List.of(
+                                "EMP400", "Exiting Colleague", "Engineering", "Icertis", "Y", "15/06/2026"))),
                 "tester");
 
         assertThat(upload.rowsImported()).isEqualTo(1);
         var detail = peoplePayrollService.getSnapshotDetail(versionId, ImportType.ZOHO_PEOPLE_EXITED);
+        assertThat(detail.peopleRows()).hasSize(1);
+        assertThat(detail.peopleRows().getFirst().employeeStatus()).isEqualTo("EXITED");
         assertThat(detail.exitedRegistryRows()).hasSize(1);
         assertThat(detail.exitedRegistryRows().getFirst().exitDate())
                 .isEqualTo(LocalDate.of(2026, 6, 15));

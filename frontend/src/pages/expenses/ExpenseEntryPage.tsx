@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
+  Alert,
   Badge,
   Button,
   Input,
@@ -25,6 +26,8 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useIsAdmin } from '@/components/AdminGate';
 import SimpleExcelImportModal from '@/components/SimpleExcelImportModal';
+import { useUnsavedChanges } from '@/context/UnsavedChangesContext';
+import { useExpenseCategories } from '@/contexts/ExpenseCategoryContext';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import {
   downloadExpenseSample,
@@ -38,6 +41,8 @@ import {
 import type { ExpenseEntry } from './types';
 
 const { Text } = Typography;
+
+const PAGE_NAME = 'expense_entry';
 
 const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
   value: i + 1,
@@ -56,6 +61,8 @@ function currentMonthYear(): { month: number; year: number } {
 export default function ExpenseEntryPage() {
   const isAdmin = useIsAdmin();
   const { token } = theme.useToken();
+  const { categories } = useExpenseCategories();
+  const { register, peekDraft, discardDraft } = useUnsavedChanges();
   const [searchParams] = useSearchParams();
   const defaults = currentMonthYear();
 
@@ -77,13 +84,76 @@ export default function ExpenseEntryPage() {
   const [saving, setSaving] = useState(false);
   const [locked, setLocked] = useState(false);
   const [lockedBy, setLockedBy] = useState<string | null>(null);
-  const [entries, setEntries] = useState<ExpenseEntry[]>([]);
+  /** Month actuals keyed by category — does not define the category list. */
+  const [actualsByCategory, setActualsByCategory] = useState<
+    Record<string, ExpenseEntry>
+  >({});
   const [draftAmounts, setDraftAmounts] = useState<Record<string, number>>({});
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
+  const [draftBanner, setDraftBanner] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [unlockReason, setUnlockReason] = useState('');
+
+  const periodKey = `${month}_${year}`;
+  const dirtyRef = useRef(dirty);
+  const amountsRef = useRef(draftAmounts);
+  const notesRef = useRef(draftNotes);
+  dirtyRef.current = dirty;
+  amountsRef.current = draftAmounts;
+  notesRef.current = draftNotes;
+
+  useEffect(() => {
+    return register(`expense_entry_${periodKey}`, {
+      pageName: PAGE_NAME,
+      period: periodKey,
+      isDirty: () => dirtyRef.current,
+      getDraft: () => ({
+        amounts: amountsRef.current,
+        notes: notesRef.current,
+      }),
+    });
+  }, [register, periodKey]);
+
+  const activeCategories = useMemo(
+    () =>
+      categories
+        .filter((c) => c.active)
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder),
+    [categories],
+  );
+
+  /** Merge shared category catalog with month actuals; new categories get amount 0. */
+  const entries = useMemo<ExpenseEntry[]>(
+    () =>
+      activeCategories.map((cat) => {
+        const existing = actualsByCategory[cat.id];
+        if (existing) {
+          return {
+            ...existing,
+            lineCode: cat.lineCode,
+            categoryGroup: cat.categoryGroup,
+            displayName: cat.displayName,
+            sortOrder: cat.sortOrder,
+          };
+        }
+        return {
+          categoryId: cat.id,
+          lineCode: cat.lineCode,
+          categoryGroup: cat.categoryGroup,
+          displayName: cat.displayName,
+          sortOrder: cat.sortOrder,
+          amount: 0,
+          notes: null,
+          actualId: null,
+          updatedAt: null,
+          updatedBy: null,
+        };
+      }),
+    [activeCategories, actualsByCategory],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,26 +161,59 @@ export default function ExpenseEntryPage() {
       const data = await fetchMonthlyExpenses(month, year);
       setLocked(data.locked);
       setLockedBy(data.lockedBy);
-      setEntries(data.entries);
+      const byCat: Record<string, ExpenseEntry> = {};
       const amounts: Record<string, number> = {};
       const notes: Record<string, string> = {};
       for (const e of data.entries) {
+        byCat[e.categoryId] = e;
         amounts[e.categoryId] = Number(e.amount ?? 0);
         notes[e.categoryId] = e.notes ?? '';
       }
+      setActualsByCategory(byCat);
       setDraftAmounts(amounts);
       setDraftNotes(notes);
       setDirty(false);
+      const saved = peekDraft<{ amounts?: Record<string, number>; notes?: Record<string, string> }>(
+        PAGE_NAME,
+        `${month}_${year}`,
+      );
+      setDraftBanner(!!saved && (!!saved.amounts || !!saved.notes));
     } catch {
       notification.error({ message: 'Failed to load expenses' });
     } finally {
       setLoading(false);
     }
-  }, [month, year]);
+  }, [month, year, peekDraft]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Seed draft fields for newly added categories without wiping unsaved edits.
+  useEffect(() => {
+    setDraftAmounts((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const cat of activeCategories) {
+        if (!(cat.id in next)) {
+          next[cat.id] = 0;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    setDraftNotes((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const cat of activeCategories) {
+        if (!(cat.id in next)) {
+          next[cat.id] = '';
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [activeCategories]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -128,19 +231,34 @@ export default function ExpenseEntryPage() {
     return [y - 2, y - 1, y, y + 1].map((value) => ({ value, label: String(value) }));
   }, [defaults.year]);
 
+  /** Group by category_group case-insensitively so casing/whitespace variants stay one section. */
   const tableRows: TableRow[] = useMemo(() => {
-    const rows: TableRow[] = [];
-    let lastGroup = '';
+    const groupOrder: string[] = [];
+    const byGroup = new Map<
+      string,
+      { display: string; entries: ExpenseEntry[] }
+    >();
     for (const entry of entries) {
-      if (entry.categoryGroup !== lastGroup) {
-        lastGroup = entry.categoryGroup;
-        rows.push({
-          kind: 'group',
-          key: `group-${entry.categoryGroup}`,
-          categoryGroup: entry.categoryGroup,
-        });
+      const key = entry.categoryGroup.trim().toLowerCase();
+      let bucket = byGroup.get(key);
+      if (!bucket) {
+        groupOrder.push(key);
+        bucket = { display: entry.categoryGroup.trim(), entries: [] };
+        byGroup.set(key, bucket);
       }
-      rows.push({ kind: 'entry', key: entry.categoryId, entry });
+      bucket.entries.push(entry);
+    }
+    const rows: TableRow[] = [];
+    for (const key of groupOrder) {
+      const group = byGroup.get(key)!;
+      rows.push({
+        kind: 'group',
+        key: `group-${key}`,
+        categoryGroup: group.display,
+      });
+      for (const entry of group.entries) {
+        rows.push({ kind: 'entry', key: entry.categoryId, entry });
+      }
     }
     return rows;
   }, [entries]);
@@ -161,6 +279,7 @@ export default function ExpenseEntryPage() {
       );
       notification.success({ message: 'Expenses saved' });
       setDirty(false);
+      discardDraft(PAGE_NAME, periodKey);
       await load();
     } catch {
       notification.error({ message: 'Failed to save expenses' });
@@ -242,7 +361,7 @@ export default function ExpenseEntryPage() {
       },
     },
     {
-      title: 'Amount (Rs Lakhs)',
+      title: 'Amount (Rs L)',
       key: 'amount',
       width: 180,
       align: 'right',
@@ -252,9 +371,15 @@ export default function ExpenseEntryPage() {
           <InputNumber
             style={{ width: '100%' }}
             min={0}
-            precision={2}
+            precision={3}
+            step={0.001}
             disabled={!editable}
-            value={draftAmounts[row.entry.categoryId] ?? 0}
+            placeholder="e.g. 3.572"
+            value={
+              (draftAmounts[row.entry.categoryId] ?? 0) === 0
+                ? null
+                : draftAmounts[row.entry.categoryId]
+            }
             onChange={(value) => {
               setDraftAmounts((prev) => ({
                 ...prev,
@@ -377,6 +502,45 @@ export default function ExpenseEntryPage() {
           Download Sample
         </Button>
       </Space>
+
+      {draftBanner && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="You have unsaved changes from your previous session. Would you like to restore them?"
+          action={
+            <Space>
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => {
+                  const saved = peekDraft<{
+                    amounts?: Record<string, number>;
+                    notes?: Record<string, string>;
+                  }>(PAGE_NAME, periodKey);
+                  if (saved?.amounts) setDraftAmounts(saved.amounts);
+                  if (saved?.notes) setDraftNotes(saved.notes);
+                  setDirty(true);
+                  setDraftBanner(false);
+                  discardDraft(PAGE_NAME, periodKey);
+                }}
+              >
+                Restore
+              </Button>
+              <Button
+                size="small"
+                onClick={() => {
+                  discardDraft(PAGE_NAME, periodKey);
+                  setDraftBanner(false);
+                }}
+              >
+                Discard
+              </Button>
+            </Space>
+          }
+        />
+      )}
 
       {loading ? (
         <Skeleton active paragraph={{ rows: 10 }} />

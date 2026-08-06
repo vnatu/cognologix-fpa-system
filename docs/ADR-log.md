@@ -1225,4 +1225,247 @@ ADR-037 treated overhead actuals as manual entry into Budgeting (`overhead_actua
 
 ---
 
+# ADR-051: BU Analysis — Dedicated Sub-Section Under Budgeting & Forecasting
+ 
+**Status:** Accepted — July 2026
+ 
+**Context**
+BU Metrics was a single panel on the Budgeting & Forecasting Dashboard. Finance needs deeper BU analysis including position-level salary breakdown, billable vs non-billable splits, and cost/revenue as % of total.
+ 
+**Decision**
+New BU Analysis sub-section under Budgeting & Forecasting nav alongside Dashboard, Plan Setup, Scenario Comparison. Two tabs: External BUs (client BUs) and Internal BUs (Management, Leadership, Pool, L&D, BEF). Per BU: billable vs non-billable HC, salary cost split, avg salary cost per title (from Zoho People `title` field — not job_level), position-wise HC as % of total BU HC, BU cost as % of overall salary cost (pie chart), BU revenue as % of overall revenue (pie chart, external only). Current BU Metrics dashboard panel (Revenue, Gross Margin, Avg salary per head) moved into this section. Data from master_record per period.
+ 
+**Consequences**
+- (+) Deeper BU analysis for cost management and client profitability decisions.
+- (+) Internal BUs tracked separately from external clients — no mixing.
+- (−) Panel 6 (BU Metrics) removed from dashboard — Finance accesses via dedicated sub-section.
+---
+
+## ADR-052: P&L Formulas — Payroll Cost Based COGS/OpEx/EBITDA + Formula Transparency
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-037/038 defined Rolling Forecast, Plan vs Actual, Delta, and Cost per Employee. ADR-045 introduced Total Payroll Cost (Gross + Employer Contributions) but left OpEx still applying a flat 13% `statutoryBenefits` on top of gross — double-counting when actual contributions exist, and omitting contributions from COGS. Finance confirmed the operational P&L formulas and asked for formula transparency on the UI and Excel analysis reports.
+
+**Decision**
+1. **COGS** = Billable Payroll Cost + Bench Payroll Cost + Delivery Overheads (`training_upskilling`, `subcontractors`).
+2. **Gross Profit** = Total Revenue − COGS; **Gross Margin %** = Gross Profit ÷ Total Revenue × 100.
+3. **OpEx** = Support + Leadership + Management Payroll Cost + Non-Delivery Overheads + Variable Pay. Do **not** add a separate 13% statutory line on top of payroll cost.
+4. **EBITDA** = Gross Profit − OpEx; **EBITDA Margin %** = EBITDA ÷ Total Revenue × 100.
+5. **Payroll Cost** = Gross Pay + Employer Contributions from `period_actuals` (V22). For plan months, Gross × 1.13 remains the forward-looking proxy (ADR-045). `statutoryBenefits` on `MonthlyFinancials` continues to expose the contribution/estimate amount for transparency but is not added into OpEx.
+6. Apply consistently in `getRollingForecast`, `getPlanVsActual`, `getDelta`, and Excel analysis reports. BU Analysis Gross Margin remains BU Revenue − BU Total Payroll Cost.
+7. Shared UI `FormulaTooltip` + Excel "How to Read This Report" first sheet + cell comments on calculated cells.
+
+**Consequences**
+- (+) COGS and OpEx reflect true employer cost when Zoho contributions are mapped.
+- (+) No double-counting of statutory on OpEx.
+- (−) Plan-month `totalSalaryCost` is 13% higher than raw salary_budget lines (proxy); Finance must read plan salary entry as gross-like input.
+
+---
+
+---
+
+## ADR-053: Reports Module — Standard Excel Reports via Apache POI
+
+**Status:** Accepted — July 2026
+
+**Context**
+ADR-037/038 defined the Budgeting & Forecasting analysis model (Rolling Forecast, Plan vs Actual, Delta, Cost per Employee, BU Analysis). ADR-051 moved deeper BU analysis into a dedicated sub-section. ADR-052 aligned P&L formulas and added formula-transparent analysis Excel downloads under Budgeting. Finance also needs a separate top-level **Reports** area for branded, chart-rich Standard Excel packs (P&L, BU Gross Margin, Headcount, Cost per Employee, Rolling Forecast vs Baseline, Expense Summary) without expanding Budgeting nav further.
+
+**Decision**
+1. New Spring Modulith module `com.cognologix.fpa.reports` with public API `ReportService` + `ReportController` (`/api/reports/*`). Reports are read-only — Admin and Viewer authenticated access (no `@AdminOnly`).
+2. `ReportService` gathers data **only** via other modules' public services (`BudgetingService`, `PeoplePayrollService`) — never foreign repositories (ADR-008).
+3. All workbooks use **Apache POI `XSSFWorkbook`** with shared Cognologix cell styles, freeze panes, landscape A4 fit-to-width, confidential footers, and embedded XSSF charts.
+4. Budgeting module set to **OPEN** so Reports can consume `budgeting.dto` analysis types (same pattern as Revenue ADR-043 / Expenses ADR-050). `MasterRecordFact` extended with `practiceUnit` and `bench` for Headcount-by-PU. `BudgetingService.getCostPerEmployeePlan` added for Plan vs Actual cost-layer columns.
+5. Frontend: top-level **Reports** nav → **Standard Reports** (`/reports/standard`) with period selector (same granularity pattern as Budgeting Dashboard) and six download cards (`responseType: 'blob'`).
+
+**Consequences**
+- (+) Standard packs are discoverable outside Budgeting; analysis downloads under Budgeting (ADR-052) remain for in-context export.
+- (+) Module boundary preserved — Reports is a pure consumer.
+- (–) Opening Budgeting widens its visible surface to other modules; acceptable given multiple consumers of analysis DTOs.
+
+---
+
+## ADR-054: Expenses — Category Group Normalization + Amounts in Rs Lakhs
+
+**Status:** Accepted — August 2026
+
+**Context**
+Expense categories are sectioned by `category_group`. Free-text entry allowed casing/whitespace variants (`"facilities"` vs `"Facilities "`), producing orphan sections on Expense Entry. Separately, Finance entered Expense Entry amounts in full rupees while the rest of the FP&A system stores money in **Rs Lakhs** (ADR-046). Excel expense import must stay in Lakhs (manual Finance templates), unlike Zoho full-rupee parsers.
+
+**Decision**
+1. On add-category, normalize `category_group`: trim, title-case each word, then reuse an existing group's exact spelling when it matches case-insensitively.
+2. Group categories case-insensitively in API (`GET /api/expenses/categories`) and on the Expense Entry UI.
+3. Settings Add Category modal offers an AutoComplete of existing groups (select or type new) — not a bare text field.
+4. Expense Entry Amount column is Rs Lakhs (`Amount (Rs L)`, placeholder `e.g. 3.57`). Store values as entered; import parses Lakhs via `parseAmount` only — **never** `toRsLakhs()`.
+5. Flyway `V24__fix_expense_amounts_to_lakhs.sql`: `UPDATE expense_actual SET amount = amount / 100000 WHERE amount > 1000`.
+
+**Consequences**
+- (+) Category sections stay consolidated; stored expense amounts align with Budgeting/Reports units.
+- (–) One-time migration assumes amounts &gt; 1000 were full rupees; genuine &gt;1000 Lakh line items would be wrongly scaled (accepted as unrealistic for a monthly overhead line).
+
+---
+
+## ADR-055: Monetary Amounts — 3 Decimal Places for Rs Lakhs
+
+**Status:** Accepted — August 2026
+
+**Context**
+Rs Lakhs values were stored and displayed at 2 decimal places (`NUMERIC(…,2)`, `formatCurrency` max 2 dp). Finance needs millesimal precision (e.g. 3.572 Lakhs = ₹357,200) for expense entry, plan inputs, revenue INR conversion, and Excel reports without rounding away meaningful rupees.
+
+**Decision**
+1. Flyway `V25__amount_precision_3dp.sql` widens Rs Lakhs monetary columns to scale 3 (`NUMERIC(14,3)` revenue; `NUMERIC(12,3)` expenses / budgeting / period salary actuals). Payroll snapshot, rate card lines, and FX rate stay at existing precision.
+2. Matching JPA `@Column(…, scale = 3)` on RevenueInvoice, RevenueCreditNote, ExpenseActual, SalaryBudget, ClientRevenuePlan, OverheadBudget, PeriodActuals (salary/payroll fields), OverheadActuals.
+3. `ExcelNumberParser.toRsLakhs` and revenue INR conversion use scale 3; Budgeting plan Excel import amounts scale to 3.
+4. Frontend `formatCurrency` always shows 3 fraction digits; Rs Lakhs `InputNumber`s use `precision={3}` `step={0.001}`.
+5. Excel money formats `#,#\#0.000` in ReportExcelSupport and BudgetingReportExcelSupport / BudgetingReportService.
+
+**Consequences**
+- (+) Aligns UI, storage, import conversion, and Excel exports at millesimal Lakhs.
+- (–) Existing 2 dp values display trailing zeros (e.g. `1.000`); no data migration of values required — only column scale.
+
+---
+
+## ADR-056: Session Security — Short JWT, Refresh, Inactivity, sessionStorage
+
+**Status:** Accepted — August 2026
+
+**Context**
+JWT lived 24h in `localStorage`, surviving browser restarts — unacceptable for an FP&A system. Finance also needs configurable session policy without redeploying.
+
+**Decision**
+1. Default JWT lifetime **2 hours** from `general_config.jwt_expiry_hours` (fallback YAML `app.jwt.expiration-ms=7200000`). `JwtTokenProvider` reads hours at token generation.
+2. `POST /api/auth/refresh` re-issues a JWT for a valid non-expired Bearer token; in-memory rate limit **10/hour/user**.
+3. Frontend stores token in **sessionStorage**; axios rejects expired JWTs and redirects to `/login?message=session_expired`.
+4. Configurable inactivity timeout (`inactivity_timeout_minutes`, default 30): warn at T−5, refresh-or-logout modal; at T force logout with draft persist.
+5. `BroadcastChannel('cognologix_logout')` syncs logout across tabs.
+6. Unsaved drafts for Expense Entry / Plan Setup grids saved to `sessionStorage` as `draft_{page}_{period}` before forced logout.
+7. Settings → **Security** tab: GET/PUT `/api/general/config/security` (Admin write). Flyway V26 seeds keys.
+
+**Consequences**
+- (+) Sessions die with the tab; active users can silent-refresh; admins tune policy.
+- (–) Refresh rate limiter is in-memory (resets on instance restart / not shared across replicas).
+
+---
+
+## ADR-057: Standard Reports — Legend, Sign Convention, and Colour Guide
+
+**Status:** Accepted — August 2026
+
+**Context**
+ADR-053 Standard Excel packs colour variance cells green/red, but workbooks lacked an on-sheet explanation of favourable direction. Cost metrics (especially COGS) confused readers because a negative variance (Actual &lt; Plan = under-budget) is favourable yet looks "bad" if interpreted as a signed P&amp;L contribution. Finance asked for a Legend on every variance/conditional sheet, a Sign Convention column on P&amp;L-style tables, and How-to-Read sections covering colour and metric definitions.
+
+**Decision**
+1. Every Standard Report workbook starts with **How to Read This Report** (sections 1–6 including Color Guide and Metric Definitions). Budgeting analysis How-to-Read gains matching sections 5–6.
+2. Sheets with Plan/Actual/Variance or conditional formatting get a compact **Color Guide** legend (`sectionHeaderStyle` + `legendBodyStyle` / total-row grey).
+3. P&amp;L and expense tables add a trailing **Sign Convention** column (italic, light grey, 15-char width): `↑ Higher = Better` / `↓ Lower = Better`.
+4. Variance polarity in `ReportExcelSupport` (documented): revenue/profit → green when Actual &gt; Plan; cost rows (COGS, OpEx, payroll, overhead) → green when Actual &lt; Plan. Negative COGS variance is favourable — not inverted because COGS reduces Gross Profit.
+
+**Consequences**
+- (+) Readers can interpret green/red without leaving the data sheet; COGS under-budget stays green by design.
+- (–) Slightly wider sheets and one extra How-to-Read sheet per workbook.
+
+---
+
+## ADR-058: Budgeting — Plan Summary (read-only plan inputs)
+
+**Status:** Accepted — August 2026
+
+**Context**
+Plan Setup is the editable entry surface for HC / Salary / Revenue / Overhead. Finance also needs a shareable, read-only presentation of a published (or draft) forecast version without risk of accidental edits. All four plan-input GET APIs and the existing `export-all` ZIP endpoint already exist (ADR-037 / Plan Setup Excel).
+
+**Decision**
+1. New Budgeting secondary-nav item **Plan Summary** at `/budgeting/plan-summary` (frontend only — no new backend endpoints).
+2. Selectors: Financial Year → Forecast Type → Version (defaults to ACTIVE; status badge; draft / superseded Alerts).
+3. Four read-only Ant Design Tabs (HC Plan, Salary Budget, Client Revenue Plan with expandable T&amp;M / Fixed-Bid, Overhead Budget with category section headers / subtotals).
+4. **Export to Excel** reuses `exportAllPlanInputs` (same ZIP as Plan Setup “Export All Inputs”).
+
+**Consequences**
+- (+) Viewers can review and export any version without write access UX.
+- (–) Scenario Comparison remains unimplemented; Plan Summary does not replace it.
+
+---
+
+## ADR-059: Revenue Dashboard — Period Granularity Selector (Monthly / Quarterly / Annual)
+
+**Status:** Accepted — August 2026
+
+**Context**
+ADR-049 added Monthly / Quarterly / Annual controls to the Budgeting Dashboard. The Revenue Dashboard was still month-only (`GET /api/revenue/dashboard/{month}/{year}`), so Finance could not review QTD/YTD invoice status, Revenue vs Plan, or DSO without switching months manually.
+
+**Decision**
+1. Same UX as ADR-049: Segmented granularity + period Select (months with ACTIVE uploads; Q1–Q4 FY labels; Annual has no period Select). Default: Monthly + most recent month with invoice/credit-note data.
+2. Optional query params on `GET /api/revenue/dashboard/{month}/{year}`: `granularity` (`MONTHLY` default | `QUARTERLY` | `ANNUAL`), `quarter` (1–4, Indian FY). Path month/year anchors the FY (and the month for MONTHLY).
+3. Aggregation: MONTHLY = one month; QUARTERLY = sum/avg across the 3 quarter months; ANNUAL = months in the FY that have ACTIVE uploads only. Response adds `periodLabel`, `monthsCovered`, `actualsCoverageNote`.
+4. `GET /api/revenue/dashboard/periods` lists periods with ACTIVE invoice/credit-note uploads for the month selector.
+5. Composition remains in `RevenueDashboardController` (application layer) so Revenue does not depend on Budgeting (ADR-043).
+
+**Consequences**
+- (+) Revenue review matches Budgeting period vocabulary.
+- (–) Planned revenue for multi-month scopes sums per-month plan lookups; missing plan months contribute zero.
+
+---
+
+## ADR-060: Master Build — Active + Exited People Snapshots for Payroll Matching
+
+**Status:** Accepted — August 2026
+
+**Context**
+ADR-020 added Zoho People Exited as a registry-enrichment upload (exit date precision). ADR-026 added `ZOHO_PAYROLL_FNF`. Master build still sourced people rows only from `ZOHO_PEOPLE` (active), so F&F payroll for exited employees often never matched and their salary was omitted from period payroll cost / `PeriodFinalisedEvent` classification buckets. Spec §7.2 requires retaining exited settlement salary while excluding those employees from current-period headcount.
+
+**Decision**
+1. Add `employee_status` (`ACTIVE` | `EXITED`) on `people_snapshot` and `master_record` (V29). Exited Zoho People Exited uploads set `EXITED`; active Zoho People sets `ACTIVE`.
+2. `ZOHO_PEOPLE_EXITED` both updates Employee Registry (exit date / precision / status — ADR-020) **and** creates `people_snapshot` rows with full People classification columns (same structure as active export per Module 1 §4.3) plus `employee_status=EXITED`.
+3. Master build sources **all** `people_snapshot` rows for the period version (active + exited), joins against all payroll (`ZOHO_PAYROLL` + `ZOHO_PAYROLL_FNF`). Remaining unmatched payroll still uses registry → `AUTO_MATCHED_EXITED` / `UNMATCHED` (ADR-026).
+4. `summarizeMaster` / `PeriodFinalisedEvent`: include EXITED employees' salary in their classification bucket; exclude them from headcount. Payroll-only `AUTO_MATCHED_EXITED` without classification remains excluded from both.
+5. `SNAPSHOTS_UPLOADED` still requires active Zoho People + at least one payroll upload; EXITED is optional.
+6. UI: Master Data filters/column for Employee Status; People snapshot detail shows Active/Exited tags.
+
+**Consequences**
+- (+) F&F cost lands in the correct billable/bench/… salary totals for Plan vs Actual.
+- (+) Exited employees carry classification from the Exited export rather than empty payroll-only masters.
+- (–) Exited mapping templates must include People classification columns + Last Working Day (not ID + LWD alone).
+
+---
+
+## ADR-061: Optional Raw USD Amount on Revenue Invoices / Credit Notes
+
+**Status:** Accepted — August 2026
+
+**Context**
+USD-billed clients appear in Zoho Books with both a local Amount (converted in Books or shown in invoice currency) and a separate USD column Finance wants visible for reference. Converting or analysing that USD figure in FP&A would duplicate Books FX and confuse Rs-Lakhs analytics (ADR-046/048).
+
+**Decision**
+1. Nullable `amount_usd NUMERIC(14,2)` on `revenue_invoice` and `revenue_credit_note` (V30).
+2. Optional system attribute `AmountUsd` on Zoho Books invoice and credit-note mappings.
+3. On upload, `parseAmount` strips `$` (and existing `₹`/commas); value is stored as raw dollars (scale 2) — **no** `toRsLakhs`, **no** FX, **no** analytics use.
+4. Invoice list exposes `amountUsd`; UI shows an "Amount (USD)" column only when any filtered row has a value (`en-US` `$` formatting).
+5. Revenue Dashboard Revenue vs Plan shows a secondary grey USD line under Actual when net raw USD (invoices − credit notes) is present for the client.
+
+**Consequences**
+- (+) Finance can reconcile against Zoho USD columns without changing INR/Rs L metrics.
+- (–) USD totals are informational only; they may diverge from `amount × FX` depending on Books export content.
+
+---
+
+## ADR-062: AUTO_MATCHED_EXITED Only for F&F Payroll
+
+**Status:** Accepted — August 2026
+
+**Context**
+Pass-2 master reconciliation treated any payroll-only row whose Employee Registry status was `EXITED` as `AUTO_MATCHED_EXITED`, including regular `ZOHO_PAYROLL` rows. That hid suspicious cases (exited employee still on regular payroll, or active employee missing from People) from Finance review.
+
+**Decision**
+For payroll rows with no matching `people_snapshot`:
+1. `ZOHO_PAYROLL_FNF` + registry `EXITED` → `AUTO_MATCHED_EXITED` (only auto-match path).
+2. `ZOHO_PAYROLL_FNF` + registry `ACTIVE` / not found → `UNMATCHED`.
+3. `ZOHO_PAYROLL` (regular) → always `UNMATCHED`, regardless of registry exit status.
+
+**Consequences**
+- (+) Regular payroll orphans always surface for manual review.
+- (+) F&F settlement for known exited employees still auto-matches without Finance action.
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*

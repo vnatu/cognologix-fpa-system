@@ -95,6 +95,7 @@ public class ExpenseExcelIO {
                     continue;
                 }
 
+                // Finance enters Rs Lakhs directly (same as Budgeting imports) — do NOT call toRsLakhs().
                 BigDecimal amount;
                 try {
                     amount = ExcelNumberParser.parseAmount(amountRaw);

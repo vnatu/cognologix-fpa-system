@@ -20,6 +20,10 @@ vi.mock('@/context/AuthContext', () => ({
     logout: vi.fn(),
     clearMustChangePassword: vi.fn(),
     refreshSession: vi.fn(),
+    refreshAccessToken: vi.fn(),
+    setBeforeLogout: vi.fn(),
+    onApiActivity: vi.fn(),
+    registerActivityListener: vi.fn(() => () => {}),
   }),
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
@@ -80,7 +84,7 @@ function renderWithDateFormat(ui: React.ReactElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  localStorage.setItem('fpa_token', 'test-token');
+  sessionStorage.setItem('fpa_token', 'test-token');
   mockFetchCustomers.mockResolvedValue(MOCK_CUSTOMERS);
   mockFetchRateCards.mockResolvedValue([ACTIVE_FLAT_CARD, TIERED_CARD]);
   mockFetchProjectCodes.mockResolvedValue([]);

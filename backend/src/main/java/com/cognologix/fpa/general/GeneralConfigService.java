@@ -211,6 +211,52 @@ public class GeneralConfigService {
         return generalConfigRepository.save(config).getConfigValue();
     }
 
+    // ── Security / session (ADR-056) ──────────────────────────────────────────
+
+    public int getJwtExpiryHours() {
+        return parsePositiveInt(
+                getConfigValue(GeneralConfig.JWT_EXPIRY_HOURS_KEY).orElse(null), 2, 1, 24);
+    }
+
+    public int getInactivityTimeoutMinutes() {
+        return parsePositiveInt(
+                getConfigValue(GeneralConfig.INACTIVITY_TIMEOUT_MINUTES_KEY).orElse(null), 30, 5, 120);
+    }
+
+    @Transactional
+    public SecurityConfigSnapshot updateSecurityConfig(int jwtExpiryHours, int inactivityTimeoutMinutes) {
+        if (jwtExpiryHours < 1 || jwtExpiryHours > 24) {
+            throw new GeneralBadRequestException("jwtExpiryHours must be between 1 and 24");
+        }
+        if (inactivityTimeoutMinutes < 5 || inactivityTimeoutMinutes > 120) {
+            throw new GeneralBadRequestException("inactivityTimeoutMinutes must be between 5 and 120");
+        }
+        setConfigValue(GeneralConfig.JWT_EXPIRY_HOURS_KEY, String.valueOf(jwtExpiryHours));
+        setConfigValue(GeneralConfig.INACTIVITY_TIMEOUT_MINUTES_KEY, String.valueOf(inactivityTimeoutMinutes));
+        return new SecurityConfigSnapshot(jwtExpiryHours, inactivityTimeoutMinutes);
+    }
+
+    public SecurityConfigSnapshot getSecurityConfig() {
+        return new SecurityConfigSnapshot(getJwtExpiryHours(), getInactivityTimeoutMinutes());
+    }
+
+    public record SecurityConfigSnapshot(int jwtExpiryHours, int inactivityTimeoutMinutes) {}
+
+    private static int parsePositiveInt(String raw, int defaultValue, int min, int max) {
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            int value = Integer.parseInt(raw.trim());
+            if (value < min || value > max) {
+                return defaultValue;
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
     public Optional<String> getConfigValue(String key) {
         return generalConfigRepository.findById(key).map(GeneralConfig::getConfigValue);
     }

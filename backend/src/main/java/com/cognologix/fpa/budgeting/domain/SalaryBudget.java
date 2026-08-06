@@ -31,23 +31,23 @@ public class SalaryBudget {
     @Column(name = "plan_year", nullable = false)
     private Integer planYear;
 
-    @Column(name = "billable_salaries", nullable = false, precision = 12, scale = 2)
+    @Column(name = "billable_salaries", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal billableSalaries = BigDecimal.ZERO;
 
-    @Column(name = "bench_salaries", nullable = false, precision = 12, scale = 2)
+    @Column(name = "bench_salaries", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal benchSalaries = BigDecimal.ZERO;
 
-    @Column(name = "support_salaries", nullable = false, precision = 12, scale = 2)
+    @Column(name = "support_salaries", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal supportSalaries = BigDecimal.ZERO;
 
-    @Column(name = "cofounders_salaries", nullable = false, precision = 12, scale = 2)
+    @Column(name = "cofounders_salaries", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal cofoundersSalaries = BigDecimal.ZERO;
 
-    @Column(name = "senior_mgmt_salaries", nullable = false, precision = 12, scale = 2)
+    @Column(name = "senior_mgmt_salaries", nullable = false, precision = 12, scale = 3)
     @Builder.Default
     private BigDecimal seniorMgmtSalaries = BigDecimal.ZERO;
 }

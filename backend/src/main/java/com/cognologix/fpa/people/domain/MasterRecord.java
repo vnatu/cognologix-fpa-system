@@ -101,6 +101,12 @@ public class MasterRecord {
     @Column(name = "data_quality_flags", length = 500)
     private String dataQualityFlags;
 
+    /** Copied from people_snapshot on master build; ACTIVE default for payroll-only rows (ADR-060). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "employee_status", nullable = false, length = 10)
+    @Builder.Default
+    private EmployeeStatus employeeStatus = EmployeeStatus.ACTIVE;
+
     @Column(name = "built_at", nullable = false, updatable = false)
     private Instant builtAt;
 

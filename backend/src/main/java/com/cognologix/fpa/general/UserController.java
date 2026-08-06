@@ -26,7 +26,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/users")
 @RequiredArgsConstructor
-@Tag(name = "User Management", description = "Invite, roles, deactivate, password (ADR-042)")
+@Tag(name = "User Management", description = "Invite, roles, deactivate, password")
 public class UserController {
 
     private final UserService userService;

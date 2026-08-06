@@ -1,4 +1,4 @@
-/** Shared Excel header normalization — mirrors backend ExcelParserUtils (ADR-047). */
+/** Shared Excel header normalization — mirrors backend ExcelParserUtils. */
 export function normalizeHeader(header: string | null | undefined): string {
   if (header == null) return '';
   return header

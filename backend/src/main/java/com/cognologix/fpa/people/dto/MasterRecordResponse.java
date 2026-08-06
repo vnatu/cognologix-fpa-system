@@ -1,5 +1,6 @@
 package com.cognologix.fpa.people.dto;
 
+import com.cognologix.fpa.people.domain.EmployeeStatus;
 import com.cognologix.fpa.people.domain.MasterRecord;
 import com.cognologix.fpa.people.domain.ReconciliationStatus;
 
@@ -24,6 +25,7 @@ public record MasterRecordResponse(
         boolean isLeadership,
         boolean isManagement,
         ReconciliationStatus reconciliationStatus,
+        String employeeStatus,
         String billingCustomerCode,
         String dataQualityFlags,
         boolean hasWarnings
@@ -49,6 +51,7 @@ public record MasterRecordResponse(
                 m.isLeadership(),
                 m.isManagement(),
                 m.getReconciliationStatus(),
+                m.getEmployeeStatus() != null ? m.getEmployeeStatus().name() : EmployeeStatus.ACTIVE.name(),
                 m.getBillingCustomerCode(),
                 flags,
                 hasWarnings);

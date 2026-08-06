@@ -17,7 +17,8 @@ public record PeopleSnapshotDetailResponse(
         String jobLevel,
         String jobSubLevel,
         String title,
-        LocalDate dateOfJoining
+        LocalDate dateOfJoining,
+        String employeeStatus
 ) {
     public static PeopleSnapshotDetailResponse from(PeopleSnapshot s) {
         return new PeopleSnapshotDetailResponse(
@@ -32,6 +33,7 @@ public record PeopleSnapshotDetailResponse(
                 s.getJobLevel(),
                 s.getJobSubLevel(),
                 s.getTitle(),
-                s.getDateOfJoining());
+                s.getDateOfJoining(),
+                s.getEmployeeStatus() != null ? s.getEmployeeStatus().name() : "ACTIVE");
     }
 }

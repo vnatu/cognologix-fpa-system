@@ -55,6 +55,12 @@ public final class RevenueDtos {
             BigDecimal netRevenueInr
     ) {}
 
+    /**
+     * Invoice / credit-note list row.
+     *
+     * @param amountUsd raw USD amount as invoiced — no conversion applied. Null for INR invoices
+     *                  or when AmountUsd was not mapped on upload (ADR-061).
+     */
     public record InvoiceListItem(
             UUID id,
             RevenueImportType importType,
@@ -69,7 +75,8 @@ public final class RevenueDtos {
             LocalDate dueDate,
             RevenueCurrency currency,
             String projectCode,
-            BigDecimal amountInr
+            BigDecimal amountInr,
+            BigDecimal amountUsd
     ) {}
 
     public record InvoiceListPage(
@@ -87,7 +94,9 @@ public final class RevenueDtos {
             BigDecimal actualNetRevenue,
             BigDecimal actualNetRevenueInr,
             BigDecimal variance,
-            BigDecimal varianceInr
+            BigDecimal varianceInr,
+            /** Net raw USD (invoices − credit notes) when any AmountUsd present; otherwise null. */
+            BigDecimal actualAmountUsd
     ) {}
 
     public record InvoiceStatusBucket(
@@ -106,9 +115,19 @@ public final class RevenueDtos {
             long unpaidInvoiceCount
     ) {}
 
+    /** Month that contributed data to an aggregated dashboard response. */
+    public record MonthCovered(int month, int year, String label) {}
+
+    public record PeriodWithData(int month, int year, String label) {}
+
     public record DashboardResponse(
             int periodMonth,
             int periodYear,
+            String granularity,
+            Integer quarter,
+            String periodLabel,
+            List<MonthCovered> monthsCovered,
+            String actualsCoverageNote,
             List<RevenueVsPlanRow> revenueVsPlan,
             List<InvoiceStatusBucket> invoiceStatusSummary,
             List<DsoRow> dso

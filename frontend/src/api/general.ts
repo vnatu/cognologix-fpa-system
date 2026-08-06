@@ -28,6 +28,21 @@ export const updateDateFormat = (
     })
     .then((r) => r.data.format);
 
+export interface SecurityConfig {
+  jwtExpiryHours: number;
+  inactivityTimeoutMinutes: number;
+}
+
+export const fetchSecurityConfig = (): Promise<SecurityConfig> =>
+  axios.get<SecurityConfig>('/api/general/config/security').then((r) => r.data);
+
+export const updateSecurityConfig = (
+  payload: SecurityConfig,
+): Promise<SecurityConfig> =>
+  axios
+    .put<SecurityConfig>('/api/general/config/security', payload)
+    .then((r) => r.data);
+
 export interface FxRate {
   id: string;
   currencyPair: string;
