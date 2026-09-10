@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -47,9 +46,9 @@ public class RevenueDashboardController {
                 periodYear,
                 granularity,
                 quarter,
-                (customerId, month, year) -> budgetingService
-                        .getClientRevenuePlan(customerId, month, year)
-                        .map(BudgetingService.ClientRevenuePlanView::plannedTotal)
-                        .orElse(BigDecimal.ZERO));
+                (month, year) -> budgetingService.listClientRevenuePlans(month, year).stream()
+                        .map(p -> new RevenueService.PlannedRevenueLookup.PlannedClientRow(
+                                p.customerId(), p.plannedTotal()))
+                        .toList());
     }
 }

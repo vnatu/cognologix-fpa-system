@@ -196,6 +196,7 @@ public class PeoplePayrollService {
                     .billableStatus(people.getBillableStatus())
                     .jobLevel(people.getJobLevel())
                     .grossPay(payroll != null ? payroll.getGrossPay() : null)
+                    .netPay(payroll != null ? payroll.getNetPay() : null)
                     .totalEmployerContributions(employerContributionsOf(payroll))
                     .deliveryPu(flags.deliveryPu())
                     .billable(flags.billable())
@@ -240,6 +241,7 @@ public class PeoplePayrollService {
                         .employeeRegistry(registry)
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
+                        .netPay(payroll.getNetPay())
                         .totalEmployerContributions(employerContributionsOf(payroll))
                         .employeeStatus(EmployeeStatus.EXITED)
                         .reconciliationStatus(ReconciliationStatus.AUTO_MATCHED_EXITED)
@@ -259,6 +261,7 @@ public class PeoplePayrollService {
                     .employeeRegistry(registry)
                     .payrollSnapshot(payroll)
                     .grossPay(payroll.getGrossPay())
+                    .netPay(payroll.getNetPay())
                     .totalEmployerContributions(employerContributionsOf(payroll))
                     .employeeStatus(registry.getExitStatus() == ExitStatus.EXITED
                             ? EmployeeStatus.EXITED
@@ -868,6 +871,7 @@ public class PeoplePayrollService {
                         .employeeRegistry(registry)
                         .payrollSnapshot(payroll)
                         .grossPay(payroll.getGrossPay())
+                        .netPay(payroll.getNetPay())
                         .totalEmployerContributions(employerContributionsOf(payroll))
                         .reconciliationStatus(ReconciliationStatus.MANUALLY_MAPPED)
                         .build());
@@ -875,6 +879,7 @@ public class PeoplePayrollService {
         master.setEmployeeRegistry(registry);
         master.setPayrollSnapshot(payroll);
         master.setGrossPay(payroll.getGrossPay());
+        master.setNetPay(payroll.getNetPay());
         master.setTotalEmployerContributions(employerContributionsOf(payroll));
         master.setReconciliationStatus(ReconciliationStatus.MANUALLY_MAPPED);
         MasterRecord saved = masterRecordRepository.save(master);

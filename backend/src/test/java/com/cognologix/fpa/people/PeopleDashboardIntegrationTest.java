@@ -192,6 +192,7 @@ class PeopleDashboardIntegrationTest {
                 .businessUnit(businessUnit)
                 .billableStatus(billable ? "Y" : "N")
                 .grossPay(grossPay == null ? null : new BigDecimal(grossPay))
+                .netPay(grossPay == null ? null : new BigDecimal(grossPay))
                 .billable(billable)
                 .bench(bench)
                 .support(support)

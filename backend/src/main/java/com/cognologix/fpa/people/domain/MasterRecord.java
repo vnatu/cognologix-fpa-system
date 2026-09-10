@@ -55,11 +55,15 @@ public class MasterRecord {
     @Column(name = "gross_pay", precision = 12, scale = 2)
     private BigDecimal grossPay;
 
-    /** Copied from payroll_snapshot.total_employer_contributions on master build (ADR-045). */
+    /** Copied from payroll_snapshot.net_pay on master build (ADR-064). */
+    @Column(name = "net_pay", precision = 12, scale = 2)
+    private BigDecimal netPay;
+
+    /** Copied from payroll_snapshot.total_employer_contributions on master build (ADR-045 / ADR-064). */
     @Column(name = "total_employer_contributions", precision = 12, scale = 2)
     private BigDecimal totalEmployerContributions;
 
-    /** DB-generated: COALESCE(gross_pay,0) + COALESCE(total_employer_contributions,0). */
+    /** DB-generated: COALESCE(net_pay,0) + COALESCE(total_employer_contributions,0). */
     @Generated(event = {EventType.INSERT, EventType.UPDATE})
     @Column(name = "total_payroll_cost", precision = 12, scale = 2,
             insertable = false, updatable = false)
@@ -118,13 +122,13 @@ public class MasterRecord {
         builtAt = Instant.now();
     }
 
-    /** Prefer DB-generated total; otherwise gross + employer contributions. */
+    /** Prefer DB-generated total; otherwise net + employer contributions (VPF excluded). */
     public BigDecimal resolvedTotalPayrollCost() {
         if (totalPayrollCost != null) {
             return totalPayrollCost;
         }
-        BigDecimal gross = grossPay != null ? grossPay : BigDecimal.ZERO;
+        BigDecimal net = netPay != null ? netPay : BigDecimal.ZERO;
         BigDecimal contrib = totalEmployerContributions != null ? totalEmployerContributions : BigDecimal.ZERO;
-        return gross.add(contrib);
+        return net.add(contrib);
     }
 }

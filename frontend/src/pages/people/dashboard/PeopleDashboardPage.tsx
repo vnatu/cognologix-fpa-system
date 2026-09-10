@@ -513,8 +513,10 @@ export default function PeopleDashboardPage() {
               const m = card.metrics;
               const breakdown = (
                 <span>
-                  Gross Pay {formatCurrency(m?.grossPay)} + Employer Contributions{' '}
-                  {formatCurrency(m?.totalEmployerContributions)} = Total
+                  Net Pay + Employer Contributions (EPF, EPS, EDLI, EPF Admin, NPS,
+                  Gratuity; VPF excluded) = Total. Gross Pay{' '}
+                  {formatCurrency(m?.grossPay)}; Contributions{' '}
+                  {formatCurrency(m?.totalEmployerContributions)}
                 </span>
               );
               return (

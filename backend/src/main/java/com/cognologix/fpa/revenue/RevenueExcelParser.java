@@ -225,15 +225,20 @@ public class RevenueExcelParser {
     }
 
     /**
-     * Optional raw USD amount — stored as full dollars with scale 2, no lakhs conversion (ADR-061).
+     * Optional raw USD amount — stored as full dollars with scale 2, no lakhs conversion.
+     * Returns null when AmountUsd is not mapped on the row or the cell is blank.
+     * Never falls back to Amount / AmountInr.
      */
     public static BigDecimal optionalUsdAmount(Map<String, String> row, String attribute) {
-        String v = optional(row, attribute);
-        if (v == null) {
+        if (row == null || !row.containsKey(attribute)) {
+            return null;
+        }
+        String v = row.get(attribute);
+        if (v == null || v.isBlank()) {
             return null;
         }
         try {
-            BigDecimal amount = ExcelNumberParser.parseAmount(v);
+            BigDecimal amount = ExcelNumberParser.parseAmount(v.trim());
             if (amount == null) {
                 return null;
             }

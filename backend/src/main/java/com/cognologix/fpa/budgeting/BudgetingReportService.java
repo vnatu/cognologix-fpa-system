@@ -291,7 +291,7 @@ public class BudgetingReportService {
     private void writeCostPerEmployeeSheet(
             Sheet sheet, BudgetingReportExcelSupport.Styles styles, CostPerEmployeeResult data) {
         String[] headers = {
-                "Category", "Headcount", "Gross Pay / Head", "Employer Contrib / Head",
+                "Category", "Headcount", "Net Pay / Budget / Head", "Employer Contrib / Head",
                 "Layer 1", "Layer 2", "Layer 3", "Total Cost / Head"
         };
         Row header = sheet.createRow(0);
@@ -319,7 +319,7 @@ public class BudgetingReportService {
         setMoney(row, 2, cat.grossPayPerHead(), styles);
         setMoney(row, 3, cat.employerContributionsPerHead(), styles);
         setMoneyWithComment(row, 4, cat.layer1(),
-                "Layer 1 = Direct salary + employer contributions (or 13% estimate on plan months) per head.",
+                "Layer 1 = Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity per head",
                 sheet, styles);
         setMoneyWithComment(row, 5, cat.layer2(),
                 "Layer 2 = Direct overhead per head (medical, welfare, consumables, software, training).",

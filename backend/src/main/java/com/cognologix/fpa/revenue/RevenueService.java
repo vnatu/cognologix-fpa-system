@@ -200,6 +200,7 @@ public class RevenueService {
         BigDecimal amount = RevenueExcelParser.requiredDecimal(row, RevenueSystemAttribute.AMOUNT);
         RevenueCurrency currency = parseCurrency(RevenueExcelParser.optional(row, RevenueSystemAttribute.CURRENCY));
         FxConversion fx = convertToInr(amount, currency, invoiceDate);
+        BigDecimal amountUsd = resolveAmountUsd(row, currency);
 
         return RevenueInvoice.builder()
                 .revenueUpload(upload)
@@ -215,7 +216,7 @@ public class RevenueService {
                 .currency(currency)
                 .projectCode(RevenueExcelParser.optional(row, RevenueSystemAttribute.PROJECT_CODE))
                 .amountInr(fx.amountInr())
-                .amountUsd(RevenueExcelParser.optionalUsdAmount(row, RevenueSystemAttribute.AMOUNT_USD))
+                .amountUsd(amountUsd)
                 .fxRateId(fx.fxRateId())
                 .build();
     }
@@ -233,7 +234,7 @@ public class RevenueService {
         BigDecimal amount = RevenueExcelParser.requiredDecimal(row, RevenueSystemAttribute.AMOUNT).abs();
         RevenueCurrency currency = parseCurrency(RevenueExcelParser.optional(row, RevenueSystemAttribute.CURRENCY));
         FxConversion fx = convertToInr(amount, currency, creditNoteDate);
-        BigDecimal amountUsd = RevenueExcelParser.optionalUsdAmount(row, RevenueSystemAttribute.AMOUNT_USD);
+        BigDecimal amountUsd = resolveAmountUsd(row, currency);
         if (amountUsd != null) {
             amountUsd = amountUsd.abs();
         }
@@ -252,6 +253,17 @@ public class RevenueService {
                 .amountUsd(amountUsd)
                 .fxRateId(fx.fxRateId())
                 .build();
+    }
+
+    /**
+     * amount_usd only when AmountUsd is mapped and non-blank. Never derived from amount/amount_inr.
+     * INR invoices always store null (V32 / ADR-063) — prevents INR Total mapped as AmountUsd.
+     */
+    private static BigDecimal resolveAmountUsd(Map<String, String> row, RevenueCurrency currency) {
+        if (currency == RevenueCurrency.INR) {
+            return null;
+        }
+        return RevenueExcelParser.optionalUsdAmount(row, RevenueSystemAttribute.AMOUNT_USD);
     }
 
     /**
@@ -585,18 +597,34 @@ public class RevenueService {
         for (int[] my : aggregateMonths) {
             int month = my[0];
             int year = my[1];
+
+            // Plan side — all clients with revenue plan for this month (ADR-039 full outer join)
+            if (plannedRevenueLookup != null) {
+                for (PlannedRevenueLookup.PlannedClientRow planned
+                        : plannedRevenueLookup.plannedClients(month, year)) {
+                    if (planned == null || planned.customerId() == null) {
+                        continue;
+                    }
+                    Optional<CustomerService.CustomerRef> ref =
+                            customerService.findCustomerRef(planned.customerId());
+                    String key = ref.map(CustomerService.CustomerRef::customerCode)
+                            .orElse(planned.customerId().toString());
+                    VsPlanAccum acc = vsPlanMap.computeIfAbsent(key, k -> {
+                        VsPlanAccum a = new VsPlanAccum();
+                        a.customerName = ref.map(CustomerService.CustomerRef::customerName).orElse(key);
+                        return a;
+                    });
+                    acc.planned = acc.planned.add(
+                            Objects.requireNonNullElse(planned.plannedTotal(), BigDecimal.ZERO));
+                }
+            }
+
+            // Actual side — clients with invoices/credit notes (planned = 0 if plan-only was absent)
             List<MonthlyRevenueSummary> actuals =
                     Objects.requireNonNullElse(getAllClientsMonthlyRevenue(month, year), List.of());
             for (MonthlyRevenueSummary actual : actuals) {
                 Optional<CustomerService.BuCustomerRef> customer =
                         customerService.resolveBuCustomer(actual.customerId());
-                UUID customerUuid = customer.map(CustomerService.BuCustomerRef::id).orElse(null);
-                BigDecimal planned = BigDecimal.ZERO;
-                if (customerUuid != null && plannedRevenueLookup != null) {
-                    planned = Objects.requireNonNullElse(
-                            plannedRevenueLookup.plannedTotal(customerUuid, month, year),
-                            BigDecimal.ZERO);
-                }
                 VsPlanAccum acc = vsPlanMap.computeIfAbsent(actual.customerId(), k -> {
                     VsPlanAccum a = new VsPlanAccum();
                     a.customerName = customer
@@ -604,7 +632,6 @@ public class RevenueService {
                             .orElse(actual.customerId());
                     return a;
                 });
-                acc.planned = acc.planned.add(planned);
                 acc.actual = acc.actual.add(actual.netRevenue());
                 acc.actualInr = acc.actualInr.add(actual.netRevenueInr());
             }
@@ -676,7 +703,8 @@ public class RevenueService {
                         e.getValue().actual.subtract(e.getValue().planned),
                         e.getValue().actualInr.subtract(e.getValue().planned),
                         e.getValue().hasUsd ? e.getValue().actualUsd : null))
-                .sorted(Comparator.comparing(RevenueVsPlanRow::customerId))
+                .sorted(Comparator.comparing(RevenueVsPlanRow::plannedRevenue).reversed()
+                        .thenComparing(RevenueVsPlanRow::customerId))
                 .toList();
 
         List<InvoiceStatusBucket> statusSummary = statusMap.entrySet().stream()
@@ -992,10 +1020,15 @@ public class RevenueService {
                 .toList();
     }
 
-    /** Callers supply planned totals (e.g. from Budgeting) without creating a module cycle. */
+    /**
+     * Callers supply planned client revenue (e.g. from Budgeting) without creating a module cycle.
+     * Used for a full outer join with invoice actuals on the Revenue Dashboard.
+     */
     @FunctionalInterface
     public interface PlannedRevenueLookup {
-        BigDecimal plannedTotal(UUID customerId, int month, int year);
+        List<PlannedClientRow> plannedClients(int month, int year);
+
+        record PlannedClientRow(UUID customerId, BigDecimal plannedTotal) {}
     }
 
     // ── Backup / restore (ADR-044 Tier 2) ────────────────────────────────────

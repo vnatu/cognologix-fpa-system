@@ -151,7 +151,7 @@ export default function InvoicesPage() {
   };
 
   const showUsdColumn = useMemo(
-    () => rows.some((r) => r.amountUsd != null),
+    () => rows.some((r) => r.amountUsd != null && r.amountUsd !== 0),
     [rows],
   );
 
@@ -203,7 +203,7 @@ export default function InvoicesPage() {
           key: 'amountUsd',
           align: 'right',
           render: (v: number | null) =>
-            v == null
+            v == null || v === 0
               ? '—'
               : `$${v.toLocaleString('en-US', {
                   minimumFractionDigits: 2,

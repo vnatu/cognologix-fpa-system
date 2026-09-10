@@ -1449,6 +1449,25 @@ USD-billed clients appear in Zoho Books with both a local Amount (converted in B
 
 ---
 
+## ADR-063: amount_usd Null for INR Invoices — No Derivation from Amount
+
+**Status:** Accepted — August 2026
+
+**Context**
+After ADR-061 (revenue USD amount), some INR invoices stored a non-null `amount_usd` (e.g. ₹2L displayed as $200,000 = amount × 100,000) when AmountUsd was unmapped or incorrectly pointed at an INR Total column. That figure is not a USD amount.
+
+**Decision**
+1. Populate `amount_usd` only when `AmountUsd` is present on the mapped row and the cell is non-blank — never derive from `amount` / `amount_inr`.
+2. On upload, force `amount_usd = null` when currency is INR (invoices and credit notes).
+3. V32 clears existing `amount_usd` where `currency = 'INR'` on both tables.
+4. UI: Invoice List shows "—" for null/zero `amountUsd`; Revenue vs Plan hides the USD secondary line unless `actualAmountUsd` is non-null and non-zero.
+
+**Consequences**
+- (+) INR rows no longer show bogus dollar figures.
+- (−) A genuine USD reference column on an INR-currency invoice is ignored until currency is USD.
+
+---
+
 ## ADR-062: AUTO_MATCHED_EXITED Only for F&F Payroll
 
 **Status:** Accepted — August 2026
@@ -1465,6 +1484,37 @@ For payroll rows with no matching `people_snapshot`:
 **Consequences**
 - (+) Regular payroll orphans always surface for manual review.
 - (+) F&F settlement for known exited employees still auto-matches without Finance action.
+
+---
+
+## ADR-064: Total Payroll Cost = Net Pay + Employer Contributions (VPF Excluded); Plan Uses Salary Budget Directly
+
+**Status:** Accepted — August 2026
+
+**Context**
+ADR-045 / ADR-052 defined Total Payroll Cost as Gross Pay + employer contributions (including VPF) and applied a 13% statutory estimate on plan salary budgets (`salary_budget × 1.13`). Finance confirmed that (1) salary budget inputs already include everything they want to budget for — the 13% plan-side estimate double-counts; and (2) the operational cost of payroll is Net Pay plus real employer contributions from Zoho, with VPF excluded (employee voluntary contribution, not an employer cost in this model).
+
+**Spec flag:** Contradicts `Cognologix_BudgetingForecasting_RequirementsSpec_v1.0.md` § Statutory Benefits Plan (13% × Total Salary Cost) and Cost per Employee Layer 1 (Gross + 13% statutory). Also supersedes ADR-045 decision points 2 and 5 and ADR-052 decision point 5 for Payroll Cost. Spec wording is superseded for operational cost metrics; treat this ADR as authoritative until the requirements doc is revised.
+
+**Decision**
+1. **Plan side:** `BudgetingService.payrollCost` for plan months uses salary budget × 1.0 (no multiplier). `statutoryBenefits` on plan months is 0. Cost per Employee Layer 1 plan months: salary budget ÷ HC only (`employerContributionsSource = PLAN`). Applies to Rolling Forecast, Plan vs Actual, Delta, CPE, and P&L.
+2. **Actual side — generated columns (V31):**
+   - `payroll_snapshot.total_employer_contributions` = EPF + EPS + EDLI + EPF Admin + NPS + Gratuity (**VPF excluded**).
+   - `payroll_snapshot.total_payroll_cost` = Net Pay + those contributions.
+   - `master_record.net_pay` added; copied from `payroll_snapshot` on master build / manual map.
+   - `master_record.total_payroll_cost` = Net Pay + `total_employer_contributions`.
+3. **Period finalise → Budgeting:** Store payroll base as `totalPayrollCost − employerContributions` (Net Pay under the new formula) on `period_actuals` salary fields so `salary + contrib` remains the Total Payroll Cost used in P&L.
+4. **Formula copy:** UI FormulaTooltip, Excel How to Read / cell comments, and CPE Layer 1 descriptions updated to the Net Pay formula and plan-budget note.
+
+**Consequences**
+- (+) Plan P&L matches Finance’s salary budget entry with no hidden uplift.
+- (+) Actual Total Payroll Cost aligns with Net Pay + true employer cost; VPF no longer inflates employer contributions.
+- (−) Historical periods keep old generated values until Finance **re-uploads Zoho Payroll and rebuilds Master** (and re-finalises) for each period so generated columns and `period_actuals` recompute.
+- (−) Requirements spec still documents the 13% / Gross Pay model until updated.
+
+**Alternatives considered**
+- Keep 13% plan proxy — rejected: Finance salary budgets already fully loaded.
+- Keep Gross Pay as the payroll-cost base — rejected: overstates cost relative to Net + employer contributions Finance wants to track.
 
 ---
 

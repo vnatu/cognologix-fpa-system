@@ -73,15 +73,23 @@ public class PayrollSnapshot {
     @Column(name = "gratuity", precision = 12, scale = 2)
     private BigDecimal gratuity;
 
-    /** DB-generated: sum of employer contribution columns (nulls treated as zero). */
+    /** DB-generated: sum of employer contribution columns excluding VPF (nulls treated as zero). */
     @Generated(event = {EventType.INSERT, EventType.UPDATE})
     @Column(name = "total_employer_contributions", precision = 12, scale = 2,
             insertable = false, updatable = false)
     private BigDecimal totalEmployerContributions;
 
     /**
+     * DB-generated: Net Pay + employer contributions excluding VPF (ADR-064).
+     */
+    @Generated(event = {EventType.INSERT, EventType.UPDATE})
+    @Column(name = "total_payroll_cost", precision = 12, scale = 2,
+            insertable = false, updatable = false)
+    private BigDecimal totalPayrollCost;
+
+    /**
      * Prefer the DB-generated column when loaded; otherwise sum components
-     * (needed in the same transaction before a refresh).
+     * (needed in the same transaction before a refresh). VPF excluded (ADR-064).
      */
     public BigDecimal resolvedTotalEmployerContributions() {
         if (totalEmployerContributions != null) {
@@ -91,9 +99,16 @@ public class PayrollSnapshot {
                 .add(nz(epsContribution))
                 .add(nz(edliContribution))
                 .add(nz(epfAdminCharges))
-                .add(nz(vpf))
                 .add(nz(npsDeduction))
                 .add(nz(gratuity));
+    }
+
+    /** Prefer DB-generated total; otherwise net + employer contributions excluding VPF. */
+    public BigDecimal resolvedTotalPayrollCost() {
+        if (totalPayrollCost != null) {
+            return totalPayrollCost;
+        }
+        return nz(netPay).add(resolvedTotalEmployerContributions());
     }
 
     private static BigDecimal nz(BigDecimal v) {

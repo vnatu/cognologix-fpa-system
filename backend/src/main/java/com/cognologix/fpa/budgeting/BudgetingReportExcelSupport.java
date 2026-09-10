@@ -71,7 +71,7 @@ final class BudgetingReportExcelSupport {
         r = writeBodyRow(sheet, styles, r, "Revenue Actuals",
                 "Zoho Books invoices via Revenue module");
         r = writeBodyRow(sheet, styles, r, "Salary Actuals",
-                "People & Payroll finalised periods — gross pay + employer contributions");
+                "People & Payroll finalised periods — Net Pay + employer contributions (VPF excluded)");
         r = writeBodyRow(sheet, styles, r, "Overhead Actuals",
                 "Expenses module — manually entered by Finance");
         r = writeBodyRow(sheet, styles, r, "Plan figures",
@@ -125,7 +125,7 @@ final class BudgetingReportExcelSupport {
         r = writeBodyRow(sheet, styles, r, "EBITDA", "Operating profitability",
                 "Gross Profit − OpEx", "Higher");
         r = writeBodyRow(sheet, styles, r, "Total Payroll Cost", "True cost of employees",
-                "Gross Pay + EPF + EPS + EDLI + EPF Admin + VPF + NPS + Gratuity", "Lower");
+                "Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity (VPF excluded)", "Lower");
         r = writeBodyRow(sheet, styles, r, "OpEx", "Operating expenses outside direct delivery",
                 "Support/Leadership/Management Payroll + Non-Delivery Overheads + Variable Pay", "Lower");
         r = writeBodyRow(sheet, styles, r, "Billable Ratio %", "Share of workforce that is billable",

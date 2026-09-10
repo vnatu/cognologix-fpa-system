@@ -44,8 +44,11 @@ import type {
 import { useDateFormat } from '@/context/DateFormatContext';
 import {
   buildMasterVersionOptions,
+  buildMasterVersionSelectGroups,
   formatCurrencyInr,
+  formatMasterVersionSelectionLabel,
   getClassification,
+  isMasterDefaultVisible,
   periodStatusBadgeColor,
   pickDefaultMasterVersion,
   reconciliationTagColor,
@@ -108,6 +111,11 @@ export default function MasterDataPage() {
 
   const versionOptions = useMemo(
     () => buildMasterVersionOptions(periods, showSuperseded),
+    [periods, showSuperseded],
+  );
+
+  const versionSelectGroups = useMemo(
+    () => buildMasterVersionSelectGroups(periods, showSuperseded),
     [periods, showSuperseded],
   );
 
@@ -349,17 +357,39 @@ export default function MasterDataPage() {
         <Select
           style={{ width: '100%', minWidth: 280, maxWidth: 420 }}
           placeholder="Select period version"
-          value={selectedVersion?.periodVersionId}
-          options={versionOptions.map((o) => ({
-            label: (
-              <Space>
-                <span>{o.label}</span>
-                <Tag color={periodStatusBadgeColor(o.status)}>
-                  {PERIOD_STATUS_LABELS[o.status]}
-                </Tag>
-              </Space>
-            ),
-            value: o.periodVersionId,
+          value={
+            versionOptions.some(
+              (o) => o.periodVersionId === selectedVersion?.periodVersionId,
+            )
+              ? selectedVersion?.periodVersionId
+              : undefined
+          }
+          labelRender={() =>
+            selectedVersion
+              ? formatMasterVersionSelectionLabel(selectedVersion)
+              : null
+          }
+          options={versionSelectGroups.map((group) => ({
+            label: group.label,
+            title: group.label,
+            options: group.options.map((o) => {
+              const muted = o.status === 'SUPERSEDED';
+              return {
+                value: o.periodVersionId,
+                title: formatMasterVersionSelectionLabel(o),
+                label: (
+                  <Space>
+                    <Text type={muted ? 'secondary' : undefined}>{o.label}</Text>
+                    <Tag
+                      color={periodStatusBadgeColor(o.status)}
+                      style={muted ? { opacity: 0.7 } : undefined}
+                    >
+                      {PERIOD_STATUS_LABELS[o.status]}
+                    </Tag>
+                  </Space>
+                ),
+              };
+            }),
           }))}
           onChange={(id) =>
             setSelectedVersion(
@@ -372,12 +402,12 @@ export default function MasterDataPage() {
           onChange={(e) => {
             const checked = e.target.checked;
             setShowSuperseded(checked);
-            if (!checked && selectedVersion?.status === 'SUPERSEDED') {
+            if (!checked && selectedVersion && !isMasterDefaultVisible(selectedVersion)) {
               setSelectedVersion(pickDefaultMasterVersion(periods));
             }
           }}
         >
-          Show Superseded
+          Show superseded versions
         </Checkbox>
       </Space>
 

@@ -30,7 +30,7 @@ public record DashboardSummaryResponse(
 
     /**
      * Per-classification payroll cost metrics (ADR-045).
-     * Primary figure is {@code totalPayrollCost} (= grossPay + employer contributions).
+     * Primary figure is {@code totalPayrollCost} (= netPay + employer contributions, VPF excluded).
      */
     public record SalaryMetrics(
             ClassificationSalaryMetrics total,
