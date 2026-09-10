@@ -26,9 +26,10 @@ public final class BudgetingFormulaCatalog {
                     ""),
             new FormulaRow("EBITDA", "Gross Profit − OpEx", "", ""),
             new FormulaRow("EBITDA Margin %", "EBITDA ÷ Total Revenue × 100", "", ""),
-            new FormulaRow("Total Payroll Cost", "Gross Pay + Employer Contributions",
-                    "Employer Contributions = EPF + EPS + EDLI + EPF Admin + VPF + NPS + Gratuity",
-                    "Plan uses 13% estimate; Actuals use real contribution data from Zoho Payroll."),
+            new FormulaRow("Total Payroll Cost",
+                    "Net Pay + EPF Contribution + EPS Contribution + Employer EDLI Contribution + Employer EPF Admin Charges + NPS Deduction + Gratuity (VPF excluded)",
+                    "Plan: salary budget entered by Finance (includes all budgeted costs). Actual: Net Pay + real employer contributions from Zoho Payroll.",
+                    ""),
             new FormulaRow("Billable Ratio %", "Billable HC ÷ Total HC × 100",
                     "Billable HC from finalised People & Payroll master records",
                     ""),
@@ -52,7 +53,7 @@ public final class BudgetingFormulaCatalog {
             new GlossaryRow("Delta",
                     "Rolling Forecast minus Baseline — how the current trajectory differs from the plan."),
             new GlossaryRow("Total Payroll Cost",
-                    "Gross Pay plus employer contributions (EPF, EPS, EDLI, EPF Admin, VPF, NPS, Gratuity)."),
+                    "Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity (VPF excluded)."),
             new GlossaryRow("Minimum Billing Rate",
                     "Fully loaded cost per billable head (Layer 1 + 2 + 3) — break-even rate for client negotiations."),
     };
@@ -60,7 +61,7 @@ public final class BudgetingFormulaCatalog {
     public static final String COMMENT_TOTAL_REVENUE =
             "Total Revenue = T&M Revenue + Fixed-Bid Revenue. Plan from Plan Setup; Actual from Zoho Books via Revenue module.";
     public static final String COMMENT_COGS =
-            "COGS = Billable Payroll Cost + Bench Payroll Cost + Delivery Overheads (Training & Upskilling + Subcontractors). Payroll Cost = Gross Pay + Employer Contributions.";
+            "COGS = Billable Payroll Cost + Bench Payroll Cost + Delivery Overheads (Training & Upskilling + Subcontractors). Payroll Cost = Net Pay + Employer Contributions (VPF excluded).";
     public static final String COMMENT_GROSS_PROFIT =
             "Gross Profit = Total Revenue − COGS.";
     public static final String COMMENT_GROSS_MARGIN_PCT =
@@ -72,7 +73,7 @@ public final class BudgetingFormulaCatalog {
     public static final String COMMENT_EBITDA_MARGIN_PCT =
             "EBITDA Margin % = EBITDA ÷ Total Revenue × 100.";
     public static final String COMMENT_TOTAL_PAYROLL =
-            "Total Payroll Cost = Gross Pay + Employer Contributions (EPF, EPS, EDLI, EPF Admin, VPF, NPS, Gratuity).";
+            "Total Payroll Cost = Net Pay + EPF Contribution + EPS Contribution + Employer EDLI Contribution + Employer EPF Admin Charges + NPS Deduction + Gratuity (VPF excluded).";
     public static final String COMMENT_BILLABLE_RATIO =
             "Billable Ratio % = Billable HC ÷ Total HC × 100.";
     public static final String COMMENT_MIN_BILLING_RATE =

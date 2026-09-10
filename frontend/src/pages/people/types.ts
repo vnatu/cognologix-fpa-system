@@ -145,6 +145,7 @@ export interface PeriodVersionOption {
   periodYear: number;
   versionNumber: number;
   status: PeriodStatus;
+  isLatestFinalised: boolean;
 }
 
 export interface SnapshotUploadSummary {

@@ -229,6 +229,7 @@ class PeopleModuleBackup {
                     str(mr.getBillableStatus()),
                     str(mr.getJobLevel()),
                     mr.getGrossPay() != null ? mr.getGrossPay().toPlainString() : "",
+                    mr.getNetPay() != null ? mr.getNetPay().toPlainString() : "",
                     mr.getTotalEmployerContributions() != null
                             ? mr.getTotalEmployerContributions().toPlainString() : "",
                     String.valueOf(mr.isDeliveryPu()),
@@ -245,7 +246,7 @@ class PeopleModuleBackup {
         return new BackupSheet(FILE_MASTER_RECORDS,
                 new String[]{"period_month", "period_year", "period_version_number", "employee_id",
                         "practice_unit", "business_unit", "billable_status", "job_level", "gross_pay",
-                        "total_employer_contributions",
+                        "net_pay", "total_employer_contributions",
                         "is_delivery_pu", "is_billable", "is_bench", "is_support", "is_leadership",
                         "is_management", "reconciliation_status", "billing_customer_code", "data_quality_flags",
                         "employee_status"},
@@ -569,17 +570,18 @@ class PeopleModuleBackup {
                         .billableStatus(cell(row, 6))
                         .jobLevel(cell(row, 7))
                         .grossPay(parseDecimal(cell(row, 8), "gross_pay"))
-                        .totalEmployerContributions(parseDecimal(cell(row, 9), "total_employer_contributions"))
-                        .deliveryPu(parseBoolean(cell(row, 10)))
-                        .billable(parseBoolean(cell(row, 11)))
-                        .bench(parseBoolean(cell(row, 12)))
-                        .support(parseBoolean(cell(row, 13)))
-                        .leadership(parseBoolean(cell(row, 14)))
-                        .management(parseBoolean(cell(row, 15)))
-                        .reconciliationStatus(ReconciliationStatus.valueOf(requireCell(row, 16, "reconciliation_status")))
-                        .billingCustomerCode(cell(row, 17))
-                        .dataQualityFlags(cell(row, 18))
-                        .employeeStatus(parseEmployeeStatus(cell(row, 19)))
+                        .netPay(parseDecimal(cell(row, 9), "net_pay"))
+                        .totalEmployerContributions(parseDecimal(cell(row, 10), "total_employer_contributions"))
+                        .deliveryPu(parseBoolean(cell(row, 11)))
+                        .billable(parseBoolean(cell(row, 12)))
+                        .bench(parseBoolean(cell(row, 13)))
+                        .support(parseBoolean(cell(row, 14)))
+                        .leadership(parseBoolean(cell(row, 15)))
+                        .management(parseBoolean(cell(row, 16)))
+                        .reconciliationStatus(ReconciliationStatus.valueOf(requireCell(row, 17, "reconciliation_status")))
+                        .billingCustomerCode(cell(row, 18))
+                        .dataQualityFlags(cell(row, 19))
+                        .employeeStatus(parseEmployeeStatus(cell(row, 20)))
                         .builtBy(RESTORE_UPLOAD_BY)
                         .build());
                 count++;

@@ -639,7 +639,7 @@ function SalaryBudgetSummaryTable({
       label: string;
       kind: RowKind;
       field?: keyof SalaryBudgetMonth;
-      computed?: 'total' | 'contrib' | 'payroll';
+      computed?: 'total';
     }> = [
       {
         key: 'billable',
@@ -671,18 +671,11 @@ function SalaryBudgetSummaryTable({
         field: 'seniorMgmtSalaries',
         kind: 'data',
       },
-      { key: 'total', label: 'Total Salary', kind: 'total', computed: 'total' },
       {
-        key: 'contrib',
-        label: 'Estimated Employer Contributions',
+        key: 'total',
+        label: 'Total Planned Salary Cost',
         kind: 'total',
-        computed: 'contrib',
-      },
-      {
-        key: 'payroll',
-        label: 'Total Payroll Cost',
-        kind: 'total',
-        computed: 'payroll',
+        computed: 'total',
       },
     ];
 
@@ -690,17 +683,7 @@ function SalaryBudgetSummaryTable({
       const values: Record<string, string | number> = {};
       let fy = 0;
       cols.forEach((col) => {
-        let v = 0;
-        if (row.field) {
-          v = get(col, row.field);
-        } else if (row.computed === 'total') {
-          v = monthTotal(col);
-        } else if (row.computed === 'contrib') {
-          v = monthTotal(col) * 0.13;
-        } else if (row.computed === 'payroll') {
-          const total = monthTotal(col);
-          v = total + total * 0.13;
-        }
+        const v = row.field ? get(col, row.field) : monthTotal(col);
         values[col.key] = formatCurrency(v);
         fy += v;
       });
@@ -715,14 +698,20 @@ function SalaryBudgetSummaryTable({
   }, [cols, monthMap]);
 
   return (
-    <Table<MetricRow>
-      size="small"
-      pagination={false}
-      scroll={{ x: true }}
-      columns={monthColumns(cols, 'Category', true)}
-      dataSource={dataSource}
-      onRow={onRow}
-    />
+    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+      <Table<MetricRow>
+        size="small"
+        pagination={false}
+        scroll={{ x: true }}
+        columns={monthColumns(cols, 'Category', true)}
+        dataSource={dataSource}
+        onRow={onRow}
+      />
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        Salary budget inputs represent the total planned cost as entered by
+        Finance, including all anticipated salary components.
+      </Text>
+    </Space>
   );
 }
 

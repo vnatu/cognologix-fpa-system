@@ -840,12 +840,14 @@ public class ReportService {
                 "Layer", "Components", "Plan (Rs L/head/month)", "Actual (Rs L/head/month)", "Sign Convention");
 
         int r = 3;
-        r = writeCostRow(sheet, styles, r, "Layer 1 Gross Pay", "Gross pay per head",
+        r = writeCostRow(sheet, styles, r, "Layer 1 Net Pay / Budget",
+                "Net pay per head (actuals) or salary budget per head (plan)",
                 plan.grossPayPerHead(), actual.grossPayPerHead(), false);
         r = writeCostRow(sheet, styles, r, "Layer 1 Employer Contributions",
                 plan.employerContributionsSource() != null ? plan.employerContributionsSource() : "Contributions",
                 plan.employerContributionsPerHead(), actual.employerContributionsPerHead(), false);
-        r = writeCostRow(sheet, styles, r, "Layer 1 Total", "Gross + Employer Contributions",
+        r = writeCostRow(sheet, styles, r, "Layer 1 Total",
+                "Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity per head",
                 plan.layer1(), actual.layer1(), true);
         r = writeCostRow(sheet, styles, r, "Layer 2 Direct Overhead",
                 "Medical, welfare, consumables, software, training",

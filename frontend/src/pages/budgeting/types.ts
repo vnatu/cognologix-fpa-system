@@ -244,7 +244,7 @@ export interface CategoryCost {
   headcount: number;
   grossPayPerHead: number;
   employerContributionsPerHead: number;
-  employerContributionsSource: 'ACTUAL' | 'ESTIMATE_13PCT';
+  employerContributionsSource: 'ACTUAL' | 'PLAN';
   layer1: number;
   layer2: number;
   layer3: number;

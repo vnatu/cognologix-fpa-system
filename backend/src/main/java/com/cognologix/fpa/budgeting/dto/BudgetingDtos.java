@@ -232,7 +232,7 @@ public final class BudgetingDtos {
             int headcount,
             BigDecimal grossPayPerHead,
             BigDecimal employerContributionsPerHead,
-            /** {@code ACTUAL} when from period_actuals; {@code ESTIMATE_13PCT} for plan months. */
+            /** {@code ACTUAL} when from period_actuals; {@code PLAN} for plan months (budget includes all costs). */
             String employerContributionsSource,
             BigDecimal layer1,
             BigDecimal layer2,

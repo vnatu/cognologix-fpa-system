@@ -22,7 +22,7 @@ export const FORMULAS = {
     formula: 'Billable Payroll Cost + Bench Payroll Cost + Delivery Overheads',
     components: [
       'Delivery Overheads = Training & Upskilling + Subcontractor fees',
-      'Payroll Cost = Gross Pay + Employer Contributions',
+      'Payroll Cost = Net Pay + Employer Contributions (VPF excluded)',
     ],
     source:
       'Salary actuals from People & Payroll finalised periods. Overhead actuals from Expenses module.',
@@ -44,7 +44,7 @@ export const FORMULAS = {
       'Support + Leadership + Management Payroll Cost + Non-Delivery Overheads + Variable Pay',
     components: [
       'Non-Delivery Overheads = Facilities + Technology + People & Welfare + Travel + Finance & Legal',
-      'Payroll Cost = Gross Pay + Employer Contributions',
+      'Payroll Cost = Net Pay + Employer Contributions (VPF excluded)',
     ],
     source:
       'Salary actuals from People & Payroll finalised periods. Overhead actuals from Expenses module.',
@@ -56,7 +56,7 @@ export const FORMULAS = {
       'Gross Profit = Total Revenue − COGS',
       'COGS = Billable Payroll Cost + Bench Payroll Cost + Delivery Overheads',
       'OpEx = Support + Leadership + Management Payroll Cost + Non-Delivery Overheads + Variable Pay',
-      'Payroll Cost = Gross Pay + Employer Contributions (EPF, EPS, EDLI, EPF Admin, VPF, NPS, Gratuity)',
+      'Payroll Cost = Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity (VPF excluded)',
     ],
     source:
       'Salary actuals from People & Payroll finalised periods. Overhead actuals from Expenses module.',
@@ -67,10 +67,10 @@ export const FORMULAS = {
   },
   totalPayrollCost: {
     metric: 'Total Payroll Cost',
-    formula: 'Gross Pay + Employer Contributions',
+    formula:
+      'Net Pay + EPF Contribution + EPS Contribution + Employer EDLI Contribution + Employer EPF Admin Charges + NPS Deduction + Gratuity (VPF excluded)',
     components: [
-      'Employer Contributions = EPF + EPS + EDLI + EPF Admin + VPF + NPS + Gratuity',
-      'Plan: Salary Budget × 1.13 (13% estimate for employer contributions). Actual: Gross Pay + real employer contributions (EPF, EPS, EDLI, EPF Admin, VPF, NPS, Gratuity) from Zoho Payroll.',
+      'Plan: salary budget entered by Finance (includes all budgeted costs). Actual: Net Pay + real employer contributions from Zoho Payroll.',
     ],
     source: 'Salary actuals from People & Payroll finalised periods.',
   },
@@ -83,9 +83,9 @@ export const FORMULAS = {
   },
   layer1: {
     metric: 'Layer 1 Total',
-    formula: 'Direct Salary + Employer Contributions per head',
+    formula: 'Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity per head',
     components: [
-      'Actuals: employer contributions from Zoho Payroll. Plan: 13% estimate.',
+      'Actuals: Net Pay + employer contributions from Zoho Payroll (VPF excluded). Plan: salary budget per head (includes all budgeted costs).',
     ],
   },
   layer2: {

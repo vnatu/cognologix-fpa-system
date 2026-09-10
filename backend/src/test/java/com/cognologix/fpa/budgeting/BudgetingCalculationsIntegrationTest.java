@@ -198,12 +198,60 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(apr.hc().actual().billableHc()).isEqualTo(45);
         assertThat(apr.hc().variance().billableHc()).isEqualTo(-5);
 
-        assertThat(apr.totalSalaryCost().plan()).isEqualByComparingTo("870100.00");
+        assertThat(apr.totalSalaryCost().plan()).isEqualByComparingTo("770000");
         assertThat(apr.totalSalaryCost().actual()).isEqualByComparingTo("685000");
-        assertThat(apr.totalSalaryCost().variance()).isEqualByComparingTo("-185100.00");
+        assertThat(apr.totalSalaryCost().variance()).isEqualByComparingTo("-85000");
 
         assertThat(pva.q1()).isNotNull();
         assertThat(pva.fy()).isNotNull();
+    }
+
+    @Test
+    void planVsActual_plannedRevenueIncludesPlanOnlyClients() {
+        // Second client has plan but no invoice/manual actual — must still count in plan total.
+        var planOnly = customerService.createCustomer(
+                "PO" + System.nanoTime(),
+                "Plan Only Client " + System.nanoTime(),
+                null, null, LifecycleStatus.ACTIVE, 30);
+
+        var baseline = forecastVersionRepository
+                .findByForecastTypeIdAndStatus(normal.getId(), ForecastVersionStatus.ACTIVE)
+                .orElseThrow();
+        clientRevenuePlanRepository.save(ClientRevenuePlan.builder()
+                .forecastVersion(baseline)
+                .customerId(planOnly.getId())
+                .planMonth(4)
+                .planYear(2026)
+                .plannedTmRevenue(bd("300000"))
+                .plannedFixedBidRevenue(bd("100000"))
+                .build());
+
+        budgetingService.onPeriodFinalised(new PeriodFinalisedEvent(
+                UUID.randomUUID(), 4, 2026,
+                45, 5, 8, 6, 4,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                bd("450000"), bd("40000"), bd("35000"), bd("70000"), bd("90000"),
+                List.of()));
+
+        // Actual revenue only for the seeded client (1.2M plan); plan-only client has 400k plan, 0 actual.
+        budgetingService.upsertRevenueActuals(plan.getId(), 4, 2026, bd("500000"),
+                List.of(ClientRevenueActual.builder().customerId(clientId).actualRevenue(bd("500000")).build()),
+                "test");
+
+        var pva = budgetingService.getPlanVsActual(
+                plan.getId(), null, PeriodGranularity.MONTHLY, 4, 2026, null);
+        var apr = pva.months().stream().filter(m -> m.month() == 4 && m.year() == 2026).findFirst().orElseThrow();
+
+        // Seeded client 1.2M + plan-only 0.4M = 1.6M planned — not inner-joined to actuals
+        assertThat(apr.totalRevenue().plan()).isEqualByComparingTo("1600000");
+        assertThat(apr.totalRevenue().actual()).isEqualByComparingTo("500000");
+        assertThat(apr.revenueByClient()).anySatisfy(row -> {
+            assertThat(row.customerId()).isEqualTo(planOnly.getId());
+            assertThat(row.totalRevenue().plan()).isEqualByComparingTo("400000");
+            assertThat(row.totalRevenue().actual()).isEqualByComparingTo("0");
+        });
+        assertThat(pva.selectedPeriod().totalRevenue().plan()).isEqualByComparingTo("1600000");
     }
 
     @Test
@@ -375,6 +423,7 @@ class BudgetingCalculationsIntegrationTest {
                 .businessUnit(businessUnit)
                 .billableStatus(billable ? "Y" : "N")
                 .grossPay(new BigDecimal(grossPay))
+                .netPay(new BigDecimal(grossPay))
                 .billable(billable)
                 .bench(!billable)
                 .support(false)
@@ -400,7 +449,7 @@ class BudgetingCalculationsIntegrationTest {
 
         assertThat(pva.granularity()).isEqualTo("MONTHLY");
         assertThat(pva.periodLabel()).isEqualTo("April 2026");
-        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("870100.00");
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("770000");
         assertThat(pva.selectedPeriod().totalSalaryCost().actual()).isEqualByComparingTo("685000");
         assertThat(pva.actualsCoverageNote()).isNull();
     }
@@ -422,8 +471,8 @@ class BudgetingCalculationsIntegrationTest {
         assertThat(pva.periodLabel()).isEqualTo("FY2627");
         assertThat(pva.monthsWithActuals()).isEqualTo(1);
         assertThat(pva.actualsCoverageNote()).contains("1 of 12 months");
-        // YTD plan = April only (May has plan but no actuals) — plan payroll cost = 770000 × 1.13
-        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("870100.00");
+        // YTD plan = April only (May has plan but no actuals) — plan payroll cost = salary budget as entered
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("770000");
         assertThat(pva.selectedPeriod().totalSalaryCost().actual()).isEqualByComparingTo("685000");
     }
 
@@ -477,8 +526,8 @@ class BudgetingCalculationsIntegrationTest {
                 plan.getId(), null, PeriodGranularity.QUARTERLY, null, 2026, 1);
 
         assertThat(pva.periodLabel()).isEqualTo("Q1 FY2627");
-        // Apr plan 770k + May plan 825k + Jun plan 0 = 1,595,000 gross → ×1.13 payroll proxy
-        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("1802350.00");
+        // Apr plan 770k + May plan 825k + Jun plan 0 = 1,595,000 (salary budget as entered)
+        assertThat(pva.selectedPeriod().totalSalaryCost().plan()).isEqualByComparingTo("1595000");
     }
 
     @Test

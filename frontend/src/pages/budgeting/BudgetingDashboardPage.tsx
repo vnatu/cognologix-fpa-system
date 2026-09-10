@@ -82,11 +82,11 @@ const PANEL_HELP = {
   pvaHc:
     'Compares planned headcount against actual headcount per category for the selected period. Billable = employees deployed on client projects. Bench = delivery staff not yet deployed. Support = non-delivery staff (HR, Admin, Finance). Leadership = senior management. Management = co-founders.',
   pvaCosts:
-    'Compares planned salary and overhead costs against actuals. Salary actuals flow automatically from finalised People & Payroll periods. Overhead actuals are entered manually. Total Payroll Cost includes gross pay plus employer contributions (EPF, EPS, EDLI, Gratuity etc.).',
+    'Compares planned salary and overhead costs against actuals. Salary actuals flow automatically from finalised People & Payroll periods. Overhead actuals are entered manually. Plan: salary budget entered by Finance (includes all budgeted costs). Actual: Net Pay + real employer contributions from Zoho Payroll.',
   plSummary:
-    'Consolidated Profit & Loss. COGS = Billable + Bench Payroll Cost + Delivery Overheads. Gross Profit = Revenue − COGS. OpEx = Support + Leadership + Management Payroll Cost + Non-Delivery Overheads + Variable Pay. EBITDA = Gross Profit − OpEx. Payroll Cost = Gross Pay + Employer Contributions.',
+    'Consolidated Profit & Loss. COGS = Billable + Bench Payroll Cost + Delivery Overheads. Gross Profit = Revenue − COGS. OpEx = Support + Leadership + Management Payroll Cost + Non-Delivery Overheads + Variable Pay. EBITDA = Gross Profit − OpEx. Payroll Cost = Net Pay + Employer Contributions (VPF excluded).',
   costPerEmployee:
-    'Fully loaded cost per head by employee category using Full Absorption Costing. Layer 1 = direct salary + employer statutory contributions. Layer 2 = direct overhead per head (insurance, software, training). Layer 3 = shared overhead allocated to billable employees only (rent, electricity etc.). The Minimum Billing Rate for billable staff = Layer 1 + 2 + 3 — this is your break-even rate for client negotiations.',
+    'Fully loaded cost per head by employee category using Full Absorption Costing. Layer 1 = Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity per head. Layer 2 = direct overhead per head (insurance, software, training). Layer 3 = shared overhead allocated to billable employees only (rent, electricity etc.). The Minimum Billing Rate for billable staff = Layer 1 + 2 + 3 — this is your break-even rate for client negotiations.',
   deltaView:
     'Delta = Rolling Forecast minus Baseline. Shows how your current trajectory differs from your original plan. For Revenue and Margin: positive delta = tracking above plan (good). For Costs: negative delta = tracking below plan (good = under-budget). Traffic light colors: green = favorable, red = unfavorable.',
 } as const;
@@ -1610,7 +1610,10 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
                 dataSource={[
                   {
                     key: 'gross',
-                    layer: 'Avg Gross Pay per Head',
+                    layer:
+                      cat.data.employerContributionsSource === 'ACTUAL'
+                        ? 'Avg Net Pay per Head'
+                        : 'Avg Salary Budget per Head',
                     amount: formatCurrency(cat.data.grossPayPerHead),
                   },
                   {
@@ -1618,7 +1621,7 @@ function CostPerEmployeePanel({ costPerEmp }: CostPerEmployeePanelProps) {
                     layer:
                       cat.data.employerContributionsSource === 'ACTUAL'
                         ? 'Avg Employer Contributions per Head (actual)'
-                        : 'Avg Employer Contributions per Head (13% estimate)',
+                        : 'Avg Employer Contributions per Head (included in budget)',
                     amount: formatCurrency(
                       cat.data.employerContributionsPerHead,
                     ),

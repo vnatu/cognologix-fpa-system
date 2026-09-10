@@ -11,6 +11,7 @@ import {
   Space,
   Statistic,
   Table,
+  Tag,
   Typography,
   theme,
   notification,
@@ -184,7 +185,23 @@ export default function RevenueDashboardPage() {
   ];
 
   const vsPlanColumns: ColumnsType<RevenueVsPlanRow & { key: string }> = [
-    { title: 'Client', dataIndex: 'customerName', key: 'customerName' },
+    {
+      title: 'Client',
+      dataIndex: 'customerName',
+      key: 'customerName',
+      render: (name: string, r) => {
+        if (r.customerId === '__total__') return name;
+        const notInvoiced =
+          r.plannedRevenue > 0 &&
+          (r.actualNetRevenueInr == null || r.actualNetRevenueInr === 0);
+        return (
+          <Space size={8} wrap>
+            <span>{name}</span>
+            {notInvoiced && <Tag color="orange">Not Invoiced</Tag>}
+          </Space>
+        );
+      },
+    },
     {
       title: 'Planned Revenue (Rs L)',
       dataIndex: 'plannedRevenue',
@@ -200,7 +217,9 @@ export default function RevenueDashboardPage() {
       render: (v: number, r) => (
         <div>
           <div>{formatRsL(v)}</div>
-          {r.actualAmountUsd != null && r.key !== '__total__' && (
+          {r.actualAmountUsd != null &&
+            r.actualAmountUsd !== 0 &&
+            r.key !== '__total__' && (
             <Text
               style={{
                 color: token.colorTextSecondary,

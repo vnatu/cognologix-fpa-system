@@ -45,7 +45,6 @@ public class BudgetingService {
     private static final List<String> SEEDED_FORECAST_TYPES =
             List.of(ForecastType.NORMAL, ForecastType.AGGRESSIVE, ForecastType.CONSERVATIVE);
     private static final BigDecimal ZERO = BigDecimal.ZERO;
-    private static final BigDecimal STATUTORY_RATE = new BigDecimal("0.13");
     private static final BigDecimal VARIABLE_PAY_RATE = new BigDecimal("0.30");
     private static final Set<Integer> VARIABLE_PAY_MONTHS = Set.of(6, 9, 12, 3);
     private static final Set<String> DELIVERY_OVERHEAD_LINES = Set.of("training_upskilling", "subcontractors");
@@ -1707,11 +1706,18 @@ public class BudgetingService {
         actuals.setActualLeadershipHc(event.leadershipHeadcount());
         actuals.setActualManagementHc(event.managementHeadcount());
         actuals.setActualTotalHc(event.totalHeadcount());
-        actuals.setActualBillableSalaries(event.billableGrossPay());
-        actuals.setActualBenchSalaries(event.benchGrossPay());
-        actuals.setActualSupportSalaries(event.supportGrossPay());
-        actuals.setActualLeadershipSalaries(event.leadershipGrossPay());
-        actuals.setActualManagementSalaries(event.managementGrossPay());
+        // Salary fields store Net Pay base (= total payroll cost − employer contribs) so that
+        // payrollCost(salary, contrib) = Net + contributions (VPF excluded) after ADR-064.
+        actuals.setActualBillableSalaries(payrollBasePay(
+                event.billableTotalPayrollCost(), event.billableEmployerContributions()));
+        actuals.setActualBenchSalaries(payrollBasePay(
+                event.benchTotalPayrollCost(), event.benchEmployerContributions()));
+        actuals.setActualSupportSalaries(payrollBasePay(
+                event.supportTotalPayrollCost(), event.supportEmployerContributions()));
+        actuals.setActualLeadershipSalaries(payrollBasePay(
+                event.leadershipTotalPayrollCost(), event.leadershipEmployerContributions()));
+        actuals.setActualManagementSalaries(payrollBasePay(
+                event.managementTotalPayrollCost(), event.managementEmployerContributions()));
         actuals.setActualBillableEmployerContributions(event.billableEmployerContributions());
         actuals.setActualBenchEmployerContributions(event.benchEmployerContributions());
         actuals.setActualSupportEmployerContributions(event.supportEmployerContributions());
@@ -1755,8 +1761,8 @@ public class BudgetingService {
                 nullSafeInt(actuals.getActualTotalHc())
         );
 
-        // SalaryFigures keep gross pay for category display; payroll cost (gross + contrib)
-        // is applied inside computeFinancials (ADR-045 / ADR-052).
+        // SalaryFigures hold Net Pay base; payroll cost (net + contrib, VPF excluded) is
+        // applied inside computeFinancials (ADR-064).
         BigDecimal billableSalary = nullSafe(actuals.getActualBillableSalaries());
         BigDecimal benchSalary = nullSafe(actuals.getActualBenchSalaries());
         BigDecimal supportSalary = nullSafe(actuals.getActualSupportSalaries());
@@ -1813,6 +1819,8 @@ public class BudgetingService {
         List<ClientRevenuePlan> revenuePlans = clientRevenuePlanRepository
                 .findByForecastVersionIdAndPlanMonthAndPlanYear(version.getId(), month, year);
 
+        // Full plan sum — every client_revenue_plan row for this version/month.
+        // Do not intersect with revenue actuals; plan-only clients must still count (ADR-039).
         List<ClientRevenueFigures> revenueByClient = revenuePlans.stream()
                 .map(rp -> {
                     Optional<CustomerRef> custOpt = customerService.findCustomerRef(rp.getCustomerId());
@@ -1856,7 +1864,8 @@ public class BudgetingService {
      *       + Variable Pay</li>
      *   <li>EBITDA = Gross Profit − OpEx</li>
      * </ul>
-     * Payroll Cost = Gross Pay + Employer Contributions (actuals) or Gross × 1.13 (plan estimate).
+     * Payroll Cost = Net Pay + Employer Contributions excluding VPF (actuals),
+     * or salary budget as entered by Finance (plan — no 13% multiplier; ADR-064).
      */
     private MonthlyFinancials computeFinancials(int month, int year, boolean fromActuals,
                                                 HcFigures hc, SalaryFigures salary,
@@ -1882,7 +1891,8 @@ public class BudgetingService {
                     .add(nullSafe(supportContrib)).add(nullSafe(leadershipContrib))
                     .add(nullSafe(managementContrib));
         } else {
-            statutoryBenefits = salary.total().multiply(STATUTORY_RATE).setScale(2, RoundingMode.HALF_UP);
+            // Plan salary budget already includes all budgeted costs — no separate estimate.
+            statutoryBenefits = ZERO;
         }
 
         BigDecimal variablePay = ZERO;
@@ -1948,13 +1958,20 @@ public class BudgetingService {
                 m.totalOpex(), m.ebitda(), billableRatioPct);
     }
 
-    /** Actuals: gross + employer contributions. Plan: gross × 1.13 estimate (ADR-045). */
-    private BigDecimal payrollCost(BigDecimal grossOrBudget, BigDecimal actualContrib, boolean fromActuals) {
+    /**
+     * Actuals: net pay base + employer contributions (VPF excluded).
+     * Plan: salary budget as entered (no multiplier) — ADR-064.
+     */
+    private BigDecimal payrollCost(BigDecimal netOrBudget, BigDecimal actualContrib, boolean fromActuals) {
         if (fromActuals) {
-            return nullSafe(grossOrBudget).add(nullSafe(actualContrib));
+            return nullSafe(netOrBudget).add(nullSafe(actualContrib));
         }
-        return nullSafe(grossOrBudget).multiply(BigDecimal.ONE.add(STATUTORY_RATE))
-                .setScale(2, RoundingMode.HALF_UP);
+        return nullSafe(netOrBudget);
+    }
+
+    /** Net pay base implied by total payroll cost − employer contributions. */
+    private static BigDecimal payrollBasePay(BigDecimal totalPayrollCost, BigDecimal employerContributions) {
+        return nullSafeStatic(totalPayrollCost).subtract(nullSafeStatic(employerContributions));
     }
 
     private MonthlyFinancials nullMonth(LocalDate monthDate) {
@@ -2119,7 +2136,7 @@ public class BudgetingService {
                                                BigDecimal actualEmployerContributions, boolean fromActuals,
                                                Map<String, BigDecimal> overheadMap, int totalHc, int billableHc) {
         if (headcount == 0) {
-            return new CategoryCost(category, 0, ZERO, ZERO, fromActuals ? "ACTUAL" : "ESTIMATE_13PCT",
+            return new CategoryCost(category, 0, ZERO, ZERO, fromActuals ? "ACTUAL" : "PLAN",
                     ZERO, ZERO, ZERO, ZERO);
         }
 
@@ -2130,8 +2147,9 @@ public class BudgetingService {
             employerPerHead = divide(nullSafe(actualEmployerContributions), new BigDecimal(Math.max(1, headcount)));
             contribSource = "ACTUAL";
         } else {
-            employerPerHead = avgSalary.multiply(STATUTORY_RATE).setScale(2, RoundingMode.HALF_UP);
-            contribSource = "ESTIMATE_13PCT";
+            // Plan salary budget already includes all budgeted costs (ADR-064).
+            employerPerHead = ZERO;
+            contribSource = "PLAN";
         }
         BigDecimal layer1 = avgSalary.add(employerPerHead);
 
@@ -2218,14 +2236,16 @@ public class BudgetingService {
 
     private List<TriadClientRevenue> computeTriadRevenueByClient(
             List<ClientRevenueFigures> plan, List<ClientRevenueFigures> actual) {
-        Map<UUID, ClientRevenueFigures> actualMap = actual.stream()
-                .collect(Collectors.toMap(ClientRevenueFigures::customerId, c -> c, (a, b) -> a));
-        Map<UUID, TriadClientRevenue> result = new HashMap<>();
+        // Full outer join by client key — plan-only and actual-only clients both appear.
+        Map<String, ClientRevenueFigures> actualMap = actual.stream()
+                .collect(Collectors.toMap(this::clientRevenueKey, c -> c, (a, b) -> a));
+        Map<String, TriadClientRevenue> result = new LinkedHashMap<>();
 
         for (ClientRevenueFigures p : plan) {
-            ClientRevenueFigures a = actualMap.getOrDefault(p.customerId(),
+            String key = clientRevenueKey(p);
+            ClientRevenueFigures a = actualMap.getOrDefault(key,
                     new ClientRevenueFigures(p.customerId(), p.customerCode(), p.customerName(), ZERO, ZERO, ZERO));
-            result.put(p.customerId(), new TriadClientRevenue(
+            result.put(key, new TriadClientRevenue(
                     p.customerId(), p.customerCode(),
                     triad(p.tmRevenue(), a.tmRevenue()),
                     triad(p.fixedBidRevenue(), a.fixedBidRevenue()),
@@ -2234,8 +2254,9 @@ public class BudgetingService {
         }
 
         for (ClientRevenueFigures a : actual) {
-            if (!result.containsKey(a.customerId())) {
-                result.put(a.customerId(), new TriadClientRevenue(
+            String key = clientRevenueKey(a);
+            if (!result.containsKey(key)) {
+                result.put(key, new TriadClientRevenue(
                         a.customerId(), a.customerCode(),
                         triad(ZERO, a.tmRevenue()),
                         triad(ZERO, a.fixedBidRevenue()),
@@ -2534,7 +2555,7 @@ public class BudgetingService {
 
     private CategoryCost averageCategoryCosts(List<CategoryCost> costs) {
         if (costs.isEmpty()) {
-            return new CategoryCost("?", 0, ZERO, ZERO, "ESTIMATE_13PCT", ZERO, ZERO, ZERO, ZERO);
+            return new CategoryCost("?", 0, ZERO, ZERO, "PLAN", ZERO, ZERO, ZERO, ZERO);
         }
         int n = costs.size();
         BigDecimal nBd = new BigDecimal(n);
@@ -2678,28 +2699,40 @@ public class BudgetingService {
         if (month < 1 || month > 12) {
             throw new IllegalArgumentException("month must be between 1 and 12");
         }
+        return listClientRevenuePlans(month, year).stream()
+                .filter(p -> customerId.equals(p.customerId()))
+                .findFirst();
+    }
+
+    /**
+     * All client revenue plan rows for a calendar month from the active primary baseline
+     * (Revenue Dashboard full outer join with actuals — ADR-039).
+     */
+    public List<ClientRevenuePlanView> listClientRevenuePlans(int month, int year) {
+        if (month < 1 || month > 12) {
+            throw new IllegalArgumentException("month must be between 1 and 12");
+        }
         LocalDate asOf = LocalDate.of(year, month, 1);
         Optional<FinancialYearPlan> planOpt = financialYearPlanRepository
                 .findByFiscalYearStartLessThanEqualAndFiscalYearEndGreaterThanEqual(asOf, asOf);
         if (planOpt.isEmpty()) {
-            return Optional.empty();
+            return List.of();
         }
         Optional<ForecastVersion> baseline = getActiveBaseline(planOpt.get().getId());
         if (baseline.isEmpty()) {
-            return Optional.empty();
+            return List.of();
         }
         return clientRevenuePlanRepository
                 .findByForecastVersionIdAndPlanMonthAndPlanYear(baseline.get().getId(), month, year)
                 .stream()
-                .filter(p -> customerId.equals(p.getCustomerId()))
-                .findFirst()
                 .map(p -> new ClientRevenuePlanView(
                         p.getCustomerId(),
                         p.getPlanMonth(),
                         p.getPlanYear(),
                         nullSafe(p.getPlannedTmRevenue()),
                         nullSafe(p.getPlannedFixedBidRevenue()),
-                        nullSafe(p.getPlannedTmRevenue()).add(nullSafe(p.getPlannedFixedBidRevenue()))));
+                        nullSafe(p.getPlannedTmRevenue()).add(nullSafe(p.getPlannedFixedBidRevenue()))))
+                .toList();
     }
 
     /** Cross-module view of planned client revenue (Revenue module — ADR-039). */

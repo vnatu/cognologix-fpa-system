@@ -90,6 +90,7 @@ export function buildImportableVersionOptions(
         periodYear: period.periodYear,
         versionNumber: active.versionNumber,
         status: active.status,
+        isLatestFinalised: active.isLatestFinalised,
       });
     }
   }
@@ -121,6 +122,7 @@ function buildVersionOptionsForStatuses(
           periodYear: period.periodYear,
           versionNumber: version.versionNumber,
           status: version.status,
+          isLatestFinalised: version.isLatestFinalised,
         });
       }
     }
@@ -148,6 +150,7 @@ export function buildAllVersionOptions(periods: PeriodResponse[]): PeriodVersion
         periodYear: period.periodYear,
         versionNumber: version.versionNumber,
         status: version.status,
+        isLatestFinalised: version.isLatestFinalised,
       });
     }
   }
@@ -158,31 +161,126 @@ export function buildAllVersionOptions(periods: PeriodResponse[]): PeriodVersion
   });
 }
 
-/** Master Data period selector — excludes superseded versions unless requested. */
+/**
+ * Master Data period selector.
+ * Default: latest MASTER_BUILT and/or latest FINALISED per period (both if present).
+ * With includeSuperseded: all versions (any status).
+ * Option labels are short ("v5 — Master Built"); period shown via Select optgroup.
+ */
 export function buildMasterVersionOptions(
   periods: PeriodResponse[],
   includeSuperseded = false,
 ): PeriodVersionOption[] {
-  const all = buildAllVersionOptions(periods);
+  const all = buildAllVersionOptions(periods).map((o) => ({
+    ...o,
+    label: `v${o.versionNumber} — ${PERIOD_STATUS_LABELS[o.status] ?? o.status}`,
+  }));
+
   if (includeSuperseded) {
     return all;
   }
-  return all.filter((o) => o.status !== 'SUPERSEDED');
+
+  const byPeriod = new Map<string, PeriodVersionOption[]>();
+  for (const o of all) {
+    const key = `${o.periodYear}-${o.periodMonth}`;
+    const list = byPeriod.get(key) ?? [];
+    list.push(o);
+    byPeriod.set(key, list);
+  }
+
+  const selected: PeriodVersionOption[] = [];
+  for (const list of byPeriod.values()) {
+    const masterBuilt = list
+      .filter((o) => o.status === 'MASTER_BUILT')
+      .sort((a, b) => b.versionNumber - a.versionNumber)[0];
+    if (masterBuilt) {
+      selected.push(masterBuilt);
+    }
+    const latestFinalised = list.find(
+      (o) => o.status === 'FINALISED' && o.isLatestFinalised,
+    );
+    if (latestFinalised) {
+      selected.push(latestFinalised);
+    }
+  }
+
+  return selected.sort((a, b) => {
+    if (a.periodYear !== b.periodYear) return b.periodYear - a.periodYear;
+    if (a.periodMonth !== b.periodMonth) return b.periodMonth - a.periodMonth;
+    return b.versionNumber - a.versionNumber;
+  });
 }
 
+export type MasterVersionSelectGroup = {
+  label: string;
+  periodMonth: number;
+  periodYear: number;
+  options: PeriodVersionOption[];
+};
+
+/** Group master version options by period for Ant Design Select optgroups. */
+export function buildMasterVersionSelectGroups(
+  periods: PeriodResponse[],
+  includeSuperseded = false,
+): MasterVersionSelectGroup[] {
+  const options = buildMasterVersionOptions(periods, includeSuperseded);
+  const groups = new Map<string, MasterVersionSelectGroup>();
+
+  for (const o of options) {
+    const key = `${o.periodYear}-${o.periodMonth}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        label: formatPeriodLabel(o.periodMonth, o.periodYear),
+        periodMonth: o.periodMonth,
+        periodYear: o.periodYear,
+        options: [],
+      };
+      groups.set(key, group);
+    }
+    group.options.push(o);
+  }
+
+  return [...groups.values()].sort((a, b) => {
+    if (a.periodYear !== b.periodYear) return b.periodYear - a.periodYear;
+    return b.periodMonth - a.periodMonth;
+  });
+}
+
+/**
+ * Default Master Data selection: MASTER_BUILT for the most recent period if present,
+ * otherwise that period's latest FINALISED.
+ */
 export function pickDefaultMasterVersion(
   periods: PeriodResponse[],
 ): PeriodVersionOption | null {
-  const all = buildMasterVersionOptions(periods, false);
-  if (all.length === 0) return null;
+  const options = buildMasterVersionOptions(periods, false);
+  if (options.length === 0) return null;
 
-  const finalised = all.filter((o) => o.status === 'FINALISED');
-  if (finalised.length > 0) return finalised[0];
+  const mostRecentKey = `${options[0].periodYear}-${options[0].periodMonth}`;
+  const forMostRecent = options.filter(
+    (o) => `${o.periodYear}-${o.periodMonth}` === mostRecentKey,
+  );
+  const masterBuilt = forMostRecent.find((o) => o.status === 'MASTER_BUILT');
+  if (masterBuilt) return masterBuilt;
 
-  const masterBuilt = all.filter((o) => o.status === 'MASTER_BUILT');
-  if (masterBuilt.length > 0) return masterBuilt[0];
+  const finalised = forMostRecent.find((o) => o.status === 'FINALISED');
+  if (finalised) return finalised;
 
-  return all[0];
+  return options[0];
+}
+
+export function isMasterDefaultVisible(option: PeriodVersionOption): boolean {
+  return (
+    option.status === 'MASTER_BUILT' ||
+    (option.status === 'FINALISED' && option.isLatestFinalised)
+  );
+}
+
+export function formatMasterVersionSelectionLabel(
+  option: PeriodVersionOption,
+): string {
+  return `${formatPeriodLabel(option.periodMonth, option.periodYear)} — ${option.label}`;
 }
 
 export function activeVersionForPeriod(

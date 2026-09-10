@@ -376,7 +376,7 @@ final class ReportExcelSupport {
         r = writeHowToHeader(sheet, styles, r, "Data Type", "Source");
         r = writeHowToBody(sheet, styles, r, "Revenue Actuals", "Zoho Books invoices via Revenue module");
         r = writeHowToBody(sheet, styles, r, "Salary / Payroll Actuals",
-                "People & Payroll finalised periods — gross pay + employer contributions");
+                "People & Payroll finalised periods — Net Pay + employer contributions (VPF excluded)");
         r = writeHowToBody(sheet, styles, r, "Overhead Actuals", "Expenses module — entered by Finance");
         r = writeHowToBody(sheet, styles, r, "Plan / Budget figures",
                 "Budgeting & Forecasting Plan Setup — entered by Finance");
@@ -391,8 +391,8 @@ final class ReportExcelSupport {
                 "Support + Leadership + Management Payroll + Non-Delivery Overheads + Variable Pay", "");
         r = writeHowToBody(sheet, styles, r, "EBITDA", "Gross Profit − OpEx", "");
         r = writeHowToBody(sheet, styles, r, "Total Payroll Cost",
-                "Gross Pay + EPF + EPS + EDLI + EPF Admin + VPF + NPS + Gratuity",
-                "Plan uses 13% estimate; Actuals use Zoho contribution data");
+                "Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity (VPF excluded)",
+                "Plan: salary budget as entered by Finance. Actuals: Net Pay + Zoho contributions.");
         r = writeHowToBody(sheet, styles, r, "Billable Ratio %", "Billable HC ÷ Total HC × 100", "");
         r++;
 
@@ -446,7 +446,7 @@ final class ReportExcelSupport {
             {"EBITDA", "Operating profitability", "Gross Profit − OpEx", "Higher"},
             {"EBITDA Margin %", "EBITDA as % of Revenue", "EBITDA ÷ Revenue × 100", "Higher"},
             {"Total Payroll Cost", "True cost of employees",
-                    "Gross Pay + EPF + EPS + EDLI + EPF Admin + VPF + NPS + Gratuity", "Lower"},
+                    "Net Pay + EPF + EPS + EDLI + EPF Admin + NPS + Gratuity (VPF excluded)", "Lower"},
             {"Overhead", "Non-payroll operating spend by category", "Sum of expense line items in group", "Lower"},
             {"Billable HC", "Headcount assigned to billable work", "Count of billable master records", "Higher"},
             {"Billable Ratio %", "Share of workforce that is billable", "Billable HC ÷ Total HC × 100", "Higher"},
