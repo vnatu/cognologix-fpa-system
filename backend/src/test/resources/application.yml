@@ -1,0 +1,15 @@
+# Disable Spring AI provider auto-config in tests. BankReconAiConfig still
+# constructs Ollama beans from general_config; LLM/embedding calls are stubbed
+# in Bank Reconciliation tests. Other modules never invoke them.
+spring:
+  ai:
+    model:
+      chat: none
+      embedding: none
+    ollama:
+      init:
+        pull-model-strategy: never
+      base-url: http://127.0.0.1:1
+    vectorstore:
+      pgvector:
+        initialize-schema: false

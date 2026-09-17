@@ -19,6 +19,7 @@ const BudgetingRoutes = lazy(() => import('@/pages/budgeting/BudgetingRoutes'));
 const ReportsRoutes = lazy(() => import('@/pages/reports/ReportsRoutes'));
 const RevenueRoutes = lazy(() => import('@/pages/revenue/RevenueRoutes'));
 const ExpensesRoutes = lazy(() => import('@/pages/expenses/ExpensesRoutes'));
+const BankReconRoutes = lazy(() => import('@/pages/bank-reconciliation/BankReconRoutes'));
 const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'));
 const AccountPage = lazy(() => import('@/pages/AccountPage'));
 
@@ -81,6 +82,7 @@ export default function App() {
                 <Route path="reports/*" element={<ReportsRoutes />} />
                 <Route path="revenue/*" element={<RevenueRoutes />} />
                 <Route path="expenses/*" element={<ExpensesRoutes />} />
+                <Route path="bank-reconciliation/*" element={<BankReconRoutes />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="account" element={<AccountPage />} />
               </Route>

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Public mapping-template view for cross-module callers (Revenue — ADR-039).
+ * Public mapping-template view for cross-module callers (Revenue, Bank Reconciliation — ADR-019).
  * Lives in the people root package so other modules need not import people.domain.
  */
 public record MappingTemplateApi(

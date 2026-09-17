@@ -11,6 +11,7 @@ import {
   DollarOutlined,
   AccountBookOutlined,
   FileExcelOutlined,
+  BankOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import { useUnsavedChanges } from '@/context/UnsavedChangesContext';
@@ -36,6 +37,7 @@ const NAV_ITEMS = [
   { key: '/reports', icon: <FileExcelOutlined />, label: 'Reports' },
   { key: '/revenue', icon: <DollarOutlined />, label: 'Revenue' },
   { key: '/expenses', icon: <AccountBookOutlined />, label: 'Expenses' },
+  { key: '/bank-reconciliation', icon: <BankOutlined />, label: 'Bank Reconciliation' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -65,6 +67,10 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
     title: 'Expenses',
     subtitle: 'Monthly overhead actuals & category setup',
   },
+  '/bank-reconciliation': {
+    title: 'Bank Reconciliation',
+    subtitle: 'HDFC statements, TallyPrime mapping & FinSync export',
+  },
   '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
   '/account': { title: 'Account', subtitle: 'Profile & password' },
 };
@@ -79,6 +85,7 @@ function resolveTopbarMeta(pathname: string) {
   if (pathname.startsWith('/reports')) return TOPBAR_META['/reports'];
   if (pathname.startsWith('/revenue')) return TOPBAR_META['/revenue'];
   if (pathname.startsWith('/expenses')) return TOPBAR_META['/expenses'];
+  if (pathname.startsWith('/bank-reconciliation')) return TOPBAR_META['/bank-reconciliation'];
   return { title: '', subtitle: '' };
 }
 
@@ -89,6 +96,7 @@ function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/reports')) return '/reports';
   if (pathname.startsWith('/revenue')) return '/revenue';
   if (pathname.startsWith('/expenses')) return '/expenses';
+  if (pathname.startsWith('/bank-reconciliation')) return '/bank-reconciliation';
   if (pathname.startsWith('/account')) return '';
   return pathname;
 }
@@ -107,6 +115,7 @@ function resolveNavTarget(key: string): string {
   if (key === '/reports') return '/reports/standard';
   if (key === '/revenue') return '/revenue/imports/zoho-books-invoices';
   if (key === '/expenses') return '/expenses/entry';
+  if (key === '/bank-reconciliation') return '/bank-reconciliation/new-run';
   return key;
 }
 

@@ -41,7 +41,7 @@ class PeopleDashboardIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
     private static final AtomicInteger PERIOD_MONTH = new AtomicInteger(1);
     private static final AtomicInteger EMP_SEQ = new AtomicInteger(1);

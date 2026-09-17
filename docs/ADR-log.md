@@ -1518,4 +1518,51 @@ ADR-045 / ADR-052 defined Total Payroll Cost as Gross Pay + employer contributio
 
 ---
 
+## ADR-065: Bank Reconciliation Module (FinSync) — Spring AI + Ollama + pgvector Integration
+
+**Status:** Accepted — September 2026
+
+**Context**
+Cognologix Finance processes 100–200 HDFC bank transactions monthly, each requiring manual TallyPrime ledger assignment. A standalone FinSync prototype (FastAPI + Python + local Ollama) demonstrated AI-assisted mapping works (>80% first-run accuracy). Decision: integrate into FPA as Module 5 rather than maintaining a separate app.
+
+**Decision**
+New Spring Modulith module `com.cognologix.fpa.bankrecon`. Spring AI replaces the prototype's raw HTTP Ollama calls. ChatClient for structured LLM output, embeddings for narration, pgvector on existing PostgreSQL. Default chat model `qwen2.5:32b`; embedding model `nomic-embed-text`. Ollama URL + model configurable. Multi-shot batch prompting with fuzzy primary and semantic fallback. Transaction storage is temporary — purged on run close. Learned mappings are permanent. Phase 2: HSBC CC statement.
+
+**Consequences**
+- (+) Spring AI abstraction — cleaner, testable, provider-switchable later.
+- (+) Structured output eliminates manual JSON parsing.
+- (+) pgvector on existing PostgreSQL — no new infrastructure.
+- (+) Data stays on-premise — no external AI service calls.
+- (−) pgvector extension must be enabled before V33 migration.
+- (−) `qwen2.5:32b` (~20GB) must be pulled to Ollama before first run.
+
+Implementation notes (September 2026): Spring AI 1.0.0 GA renamed starters to `spring-ai-starter-model-ollama` and `spring-ai-starter-vector-store-pgvector`. Embeddings are stored on `learned_mapping.narration_embedding`; PgVectorStore auto-schema is disabled because that table is not Spring AI's default `vector_store`. Local Postgres image is `pgvector/pgvector:pg16`. Tally group seed listed `Stock-in-Hand` twice — the duplicate was replaced with `Current Assets` to satisfy UNIQUE `group_name` while keeping 28 groups. Batch mapping uses {@code ChatClient.call()} (not {@code stream()}) against Ollama {@code /api/chat}. RestClient forces {@code stream: false} in the request body and treats {@code application/octet-stream} as JSON so Spring AI does not fail extracting {@code OllamaApi$ChatResponse}. TallyPrime ledger XML: read `NAME` via `getAttribute` (DOM-decoded entities) then `StringEscapeUtils.unescapeXml`; strip CR/LF from extracted strings; empty `<PARENT/>` imports the ledger. Import also upserts `<GROUP>` rows into `tally_ledger_group`, walking the PARENT chain to a seeded standard group for `accounting_nature`. Ledgers are never dropped: unknown parents log a warning and use Payable→Liability, Receivable/Debtor→Asset, Income/Revenue→Income, Expense/Cost→Expense, else Liability. Re-import matches existing ledger rows after stripping CR/LF from stored names so dirty names are updated in place. Run Review mapped-ledger Select is server-side search (`GET /api/bank-recon/ledgers?search=&voucherType=&size=20`): PAYMENT=Liability+Expense, RECEIPT=Asset+Income, CONTRA=`is_bank_account`.
+
+---
+
+## ADR-066: HDFC Bank Statement Column Mapping Templates (ADR-019)
+
+**Status:** Accepted — September 2026
+
+**Context**
+HDFC statement ingest originally matched hardcoded column names (`Date`, `Narration`, `Withdrawal Amt.`, `Deposit Amt.`). Other FPA imports already store Finance-owned column mapping templates in shared `import_column_mapping` (ADR-019). Native HDFC exports and Finance-prepared files disagree on header spelling, so a fixed parser broke the People/Revenue upload pattern.
+
+`docs/Cognologix_BankReconciliation_RequirementsSpec_v1.0.md` is not in the repo; this decision follows ADR-065 plus the FinSync upload brief. Spec flag: do not silently restore hardcoded HDFC column names.
+
+**Decision**
+1. Add import type `HDFC_BANK_STATEMENT` to `import_column_mapping` (Flyway **V34** — next sequential version after V33; requested filename was V35).
+2. Map both statement **header-block** labels (`AccountNumber`, `FromDate`, `ToDate`, …) and **transaction** columns (`TransactionDate`, `TransactionDescription`, `TransactionAmount`, `DebitCredit`, …). Amount is a single mapped column plus D/C — not Withdrawal/Deposit pairs.
+3. Parser locates cells only through the saved mapping. Both sides of every header comparison use `ExcelParserUtils.normalizeHeader()`.
+4. Bank Reconciliation calls People `MappingTemplateApi` / `PeoplePayrollService` (same as Revenue). UI: four-step upload (period + file, mapping, review, result) and template management in Settings → Bank Reconciliation and Bank Reconciliation → Column Mapping.
+5. Sample workbook: `GET /api/bank-recon/runs/mapping/sample`.
+6. Flyway **V35** stores mapped header-block values on `recon_run` (`customer_name`, `opening_balance`, `closing_balance`). HDFC `.xlsx` date/amount cells are Excel NUMERIC serials; the parser keeps POI cell type (not `DataFormatter` strings alone) for TransactionDate, ValueDate, FromDate, ToDate, OpeningBalance, and ClosingBalance.
+
+**Consequences**
+- (+) Finance maps columns once; subsequent HDFC uploads pre-fill the template.
+- (+) Header drift (`Account Number` vs `account_number`) no longer requires a parser change.
+- (−) A statement without an active (or selected) template cannot be ingested.
+- (−) Native Withdrawal/Deposit-only HDFC layouts must be mapped into Amount + Debit/Credit (or a prepared file).
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*

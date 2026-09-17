@@ -5,6 +5,7 @@ import PeoplePayrollTab from './PeoplePayrollTab';
 import CustomerManagementTab from './CustomerManagementTab';
 import RevenueTab from './RevenueTab';
 import ExpensesTab from './ExpensesTab';
+import BankReconciliationTab from './BankReconciliationTab';
 import SecurityTab from './SecurityTab';
 
 const TABS = [
@@ -14,6 +15,7 @@ const TABS = [
   { key: 'customer-management', label: 'Customer Management', children: <CustomerManagementTab /> },
   { key: 'revenue',             label: 'Revenue',             children: <RevenueTab /> },
   { key: 'expenses',            label: 'Expenses',            children: <ExpensesTab /> },
+  { key: 'bank-reconciliation', label: 'Bank Reconciliation', children: <BankReconciliationTab /> },
 ];
 
 export default function SettingsPage() {
