@@ -52,3 +52,14 @@ app:
   jwt:
     secret: ${JWT_SECRET:dev-secret-change-in-production-must-be-32-chars}
     expiration-ms: 7200000   # 2 hours fallback; runtime uses general_config.jwt_expiry_hours (ADR-056)
+  public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:3000}
+  mail:
+    from: ${MAIL_FROM:noreply@cognologix.com}
+
+# Contract expiry email (ADR-067). Leave host unset to skip SMTP; in-app notifications still run.
+# spring:
+#   mail:
+#     host: smtp.example.com
+#     port: 587
+#     username:
+#     password:

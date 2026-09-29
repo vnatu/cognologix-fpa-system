@@ -219,6 +219,7 @@ export default function LoginPage() {
               rules={[{ required: true, message: 'Enter your email.' }]}
             >
               <Input
+                id="username"
                 prefix={<MailOutlined style={{ color: '#888888' }} />}
                 placeholder="you@cognologix.com"
                 size="large"

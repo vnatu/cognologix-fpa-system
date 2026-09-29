@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Layout, Menu, Button, Space, Tooltip } from 'antd';
+import { Layout, Menu, Button, Space, Tooltip, theme } from 'antd';
 import {
   DashboardOutlined,
   SettingOutlined,
@@ -12,14 +12,29 @@ import {
   AccountBookOutlined,
   FileExcelOutlined,
   BankOutlined,
+  FileProtectOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/context/AuthContext';
 import { useUnsavedChanges } from '@/context/UnsavedChangesContext';
 import { fetchMe } from '@/api/users';
 import AppLogo from '@/components/AppLogo';
+import NotificationBell from '@/components/NotificationBell';
+import { SidebarCollapseIcon, SidebarExpandIcon } from '@/components/icons/SidebarCollapseIcon';
 import { HEADING_FONT } from '@/theme/antdTheme';
 
 const { Header, Sider, Content } = Layout;
+
+const SIDEBAR_COLLAPSED_KEY = 'sidebar_collapsed';
+const SIDEBAR_EXPANDED_WIDTH = 220;
+const SIDEBAR_COLLAPSED_WIDTH = 64;
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
 
 const NAV_ITEMS = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
@@ -34,10 +49,11 @@ const NAV_ITEMS = [
     icon: <FundProjectionScreenOutlined />,
     label: 'Budgeting & Forecasting',
   },
-  { key: '/reports', icon: <FileExcelOutlined />, label: 'Reports' },
   { key: '/revenue', icon: <DollarOutlined />, label: 'Revenue' },
   { key: '/expenses', icon: <AccountBookOutlined />, label: 'Expenses' },
   { key: '/bank-reconciliation', icon: <BankOutlined />, label: 'Bank Reconciliation' },
+  { key: '/contracts', icon: <FileProtectOutlined />, label: 'Contracts' },
+  { key: '/reports', icon: <FileExcelOutlined />, label: 'Reports' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -71,6 +87,10 @@ const TOPBAR_META: Record<string, { title: string; subtitle: string }> = {
     title: 'Bank Reconciliation',
     subtitle: 'HDFC statements, TallyPrime mapping & FinSync export',
   },
+  '/contracts': {
+    title: 'Contracts',
+    subtitle: 'Repository, versions, expiry alerts & templates',
+  },
   '/settings': { title: 'Settings', subtitle: 'Workspace & members' },
   '/account': { title: 'Account', subtitle: 'Profile & password' },
 };
@@ -86,6 +106,7 @@ function resolveTopbarMeta(pathname: string) {
   if (pathname.startsWith('/revenue')) return TOPBAR_META['/revenue'];
   if (pathname.startsWith('/expenses')) return TOPBAR_META['/expenses'];
   if (pathname.startsWith('/bank-reconciliation')) return TOPBAR_META['/bank-reconciliation'];
+  if (pathname.startsWith('/contracts')) return TOPBAR_META['/contracts'];
   return { title: '', subtitle: '' };
 }
 
@@ -97,6 +118,7 @@ function selectedNavKey(pathname: string): string {
   if (pathname.startsWith('/revenue')) return '/revenue';
   if (pathname.startsWith('/expenses')) return '/expenses';
   if (pathname.startsWith('/bank-reconciliation')) return '/bank-reconciliation';
+  if (pathname.startsWith('/contracts')) return '/contracts';
   if (pathname.startsWith('/account')) return '';
   return pathname;
 }
@@ -116,6 +138,7 @@ function resolveNavTarget(key: string): string {
   if (key === '/revenue') return '/revenue/imports/zoho-books-invoices';
   if (key === '/expenses') return '/expenses/entry';
   if (key === '/bank-reconciliation') return '/bank-reconciliation/new-run';
+  if (key === '/contracts') return '/contracts/dashboard';
   return key;
 }
 
@@ -124,12 +147,25 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const { logout, mustChangePassword, role, email } = useAuth();
   const { confirmIfDirty } = useUnsavedChanges();
-  const [collapsed, setCollapsed] = useState(false);
+  const { token } = theme.useToken();
+  const [collapsed, setCollapsed] = useState(readSidebarCollapsed);
   const [displayName, setDisplayName] = useState(email ?? 'User');
 
   const go = (to: string) => {
     if (pathname === to) return;
     confirmIfDirty(() => navigate(to));
+  };
+
+  const toggleSidebar = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        /* preference is optional */
+      }
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -192,14 +228,17 @@ export default function AppLayout() {
           </div>
         </Space>
 
-        <Button
-          type="text"
-          icon={<LogoutOutlined />}
-          onClick={() => confirmIfDirty(() => logout('logged_out'))}
-          style={{ color: 'rgba(255,255,255,0.75)' }}
-        >
-          Sign out
-        </Button>
+        <Space align="center">
+          <NotificationBell />
+          <Button
+            type="text"
+            icon={<LogoutOutlined />}
+            onClick={() => confirmIfDirty(() => logout('logged_out'))}
+            style={{ color: 'rgba(255,255,255,0.75)' }}
+          >
+            Sign out
+          </Button>
+        </Space>
       </Header>
 
       <Layout>
@@ -207,19 +246,32 @@ export default function AppLayout() {
           collapsible
           collapsed={collapsed}
           onCollapse={setCollapsed}
-          width={220}
-          style={{ background: '#ffffff', borderRight: '1px solid #d8d8d8' }}
+          trigger={null}
+          width={SIDEBAR_EXPANDED_WIDTH}
+          collapsedWidth={SIDEBAR_COLLAPSED_WIDTH}
+          style={{
+            background: '#ffffff',
+            borderRight: '1px solid #d8d8d8',
+            transition: 'all 0.2s',
+          }}
         >
-          {!collapsed && (
-            <div
-              style={{
-                padding: '14px 20px 10px',
-                borderBottom: '1px solid #d8d8d8',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div
+            style={{
+              padding: collapsed ? '12px 0 10px' : '14px 8px 10px 20px',
+              borderBottom: '1px solid #d8d8d8',
+              display: 'flex',
+              flexDirection: collapsed ? 'column' : 'row',
+              alignItems: 'center',
+              justifyContent: collapsed ? 'center' : 'space-between',
+              gap: collapsed ? 8 : 0,
+            }}
+          >
+            {collapsed ? (
+              <AppLogo variant="light" height={22} showWordmark={false} />
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                 <AppLogo variant="light" height={22} showWordmark={false} />
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <div
                     style={{
                       fontFamily: HEADING_FONT,
@@ -234,32 +286,70 @@ export default function AppLayout() {
                   <div style={{ fontSize: 10, color: '#888888' }}>Financial planning</div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+            <Button
+              type="text"
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              icon={
+                collapsed ? (
+                  <SidebarExpandIcon color={token.colorTextSecondary} />
+                ) : (
+                  <SidebarCollapseIcon color={token.colorTextSecondary} />
+                )
+              }
+              onClick={toggleSidebar}
+              style={{
+                width: 32,
+                height: 32,
+                padding: 0,
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            />
+          </div>
 
           <Menu
             mode="inline"
+            inlineCollapsed={collapsed}
             selectedKeys={[selectedNavKey(pathname)]}
-            items={NAV_ITEMS.map((item) =>
-              mustChangePassword
-                ? {
-                    ...item,
-                    disabled: true,
-                    label: (
-                      <Tooltip title="Change your password to continue">
-                        <span>{item.label}</span>
-                      </Tooltip>
-                    ),
-                  }
-                : item,
-            )}
+            items={NAV_ITEMS.map((item) => {
+              if (!mustChangePassword) return item;
+              return {
+                ...item,
+                disabled: true,
+                label: collapsed ? (
+                  item.label
+                ) : (
+                  <Tooltip title="Change your password to continue">
+                    <span>{item.label}</span>
+                  </Tooltip>
+                ),
+              };
+            })}
             onClick={({ key }) => {
               if (mustChangePassword) return;
               go(resolveNavTarget(key));
             }}
-            style={{ border: 'none', marginTop: 8 }}
+            style={{
+              border: 'none',
+              marginTop: 8,
+              paddingBottom: 72,
+              width: collapsed ? SIDEBAR_COLLAPSED_WIDTH : '100%',
+            }}
           />
 
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              background: '#ffffff',
+            }}
+          >
+          <Tooltip title={collapsed ? displayName : undefined} placement="right">
           <div
             role="button"
             tabIndex={0}
@@ -268,14 +358,11 @@ export default function AppLayout() {
               if (e.key === 'Enter' || e.key === ' ') go('/account');
             }}
             style={{
-              position: 'absolute',
-              bottom: 48,
-              left: 0,
-              right: 0,
-              padding: '10px 14px',
+              padding: collapsed ? '10px 0' : '10px 14px',
               borderTop: '1px solid #d8d8d8',
               display: 'flex',
               alignItems: 'center',
+              justifyContent: collapsed ? 'center' : 'flex-start',
               gap: 10,
               cursor: 'pointer',
             }}
@@ -315,6 +402,8 @@ export default function AppLayout() {
                 <div style={{ fontSize: 11, color: '#888888' }}>{roleLabel}</div>
               </div>
             )}
+          </div>
+          </Tooltip>
           </div>
         </Sider>
 

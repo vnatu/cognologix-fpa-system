@@ -4,6 +4,6 @@
  */
 @org.springframework.modulith.ApplicationModule(
         type = org.springframework.modulith.ApplicationModule.Type.OPEN,
-        allowedDependencies = {"general", "customer", "people", "budgeting", "revenue"}
+        allowedDependencies = {"general", "customer", "people", "budgeting", "revenue", "contracts"}
 )
 package com.cognologix.fpa.system;

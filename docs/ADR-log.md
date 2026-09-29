@@ -1565,4 +1565,28 @@ HDFC statement ingest originally matched hardcoded column names (`Date`, `Narrat
 
 ---
 
+## ADR-067: Contract Management Module — Repository, Versioning, and Expiry Notifications
+
+**Status:** Accepted — September 2026
+
+**Context**
+Cognologix keeps client contracts in a shared folder. Finance needs a searchable repository for NDAs, MSAs, and SOWs (Third Party paper and Own paper), manual version history, expiry reminders, and a template library — without a full CLM workflow. Spec: `docs/Cognologix_ContractManagement_RequirementsSpec_v1.0.md` (Module 6). Navigation follows ADR-021 (domain-first top-level section).
+
+**Decision**
+1. New Spring Modulith module `com.cognologix.fpa.contracts`. Public API is `ContractService` in the root package. Entities and repositories are internal. Customer link is a soft reference via `CustomerService.findCustomerRef()` — no foreign key into Customer Management. Either `customer_id` or `party_name` is required, not both.
+2. Documents are PostgreSQL BYTEA (no `@Lob` / OID). Primary and template files are PDF or Word, max 20MB enforced in the service. Global multipart limit stays 50MB so other imports are unchanged.
+3. Contract numbers are `CON-{year}-{sequence}` from `contract_number_seq`. Uploading a version auto-sets the latest non-SUPERSEDED version to SUPERSEDED. SUPERSEDED cannot be set manually. At most one SIGNED version per contract.
+4. Reminder days and recipient emails live in `general_config` (`contract_reminder_days`, `contract_notification_recipients`). `general_config.config_value` is TEXT so a recipient list can exceed the original VARCHAR(255). A daily job at 08:00 Asia/Kolkata sends an in-app notification to the contract owner and email to the owner plus configured recipients. Dedup is `(contract, channel, days_before_expiry)`. Email is skipped when `spring.mail.host` is unset.
+5. In-app notifications use shared `app_notification` and `NotificationService` in the general module (`GET /api/notifications`, `PUT /api/notifications/{id}/read`, `PUT /api/notifications/read-all`).
+6. REST paths follow the implementation brief: document download is `/documents/{docId}/download` and notification settings are `/api/contracts/config`. Spec §8 uses shorter paths; this ADR is authoritative for those two routes.
+7. Backup (ADR-044) gains contract metadata workbooks plus `app_notifications.xlsx`. Document bytes are raw ZIP entries (`contract_blobs/{id}.bin`, `contract_template_blobs/{id}.bin`), not base64 inside Excel — a 20MB BYTEA cannot fit in a cell. Spec NFR asked for base64 ZIP entries; raw entries are the backup form used here.
+
+**Consequences**
+- (+) Contracts are a top-level nav section with the same Admin write / Viewer read split as other modules (ADR-042).
+- (+) No new infrastructure for files or mail queues.
+- (−) SMTP must be configured before expiry email is delivered. In-app notices still run.
+- (−) Restoring a backup remaps contract owners by email when the restored user id differs from the backup id (user restore does not preserve UUIDs).
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*
