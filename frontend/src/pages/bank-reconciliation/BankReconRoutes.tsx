@@ -5,6 +5,7 @@ import RunReviewPage from './RunReviewPage';
 import RunHistoryPage from './RunHistoryPage';
 import LedgerMasterPage from './config/LedgerMasterPage';
 import ColumnMappingPage from './config/ColumnMappingPage';
+import AccountMappingPage from './config/AccountMappingPage';
 import LearnedMappingsPage from './config/LearnedMappingsPage';
 import LlmHintsPage from './config/LlmHintsPage';
 import ContraRulesPage from './config/ContraRulesPage';
@@ -20,6 +21,7 @@ export default function BankReconRoutes() {
         <Route path="run-history" element={<RunHistoryPage />} />
         <Route path="config/ledgers" element={<LedgerMasterPage />} />
         <Route path="config/column-mapping" element={<ColumnMappingPage />} />
+        <Route path="config/account-mapping" element={<AccountMappingPage />} />
         <Route path="config/mappings" element={<LearnedMappingsPage />} />
         <Route path="config/hints" element={<LlmHintsPage />} />
         <Route path="config/contra-rules" element={<ContraRulesPage />} />

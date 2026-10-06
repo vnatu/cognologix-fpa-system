@@ -5,6 +5,7 @@ import {
   HistoryOutlined,
   PlusOutlined,
   BookOutlined,
+  BankOutlined,
   BulbOutlined,
   FilterOutlined,
   DatabaseOutlined,
@@ -20,10 +21,11 @@ const MENU_ITEMS: MenuProps['items'] = [
   { key: '/bank-reconciliation/run-history', icon: <HistoryOutlined />, label: 'Run History' },
   { key: '/bank-reconciliation/config/ledgers', icon: <BookOutlined />, label: 'Ledger Master' },
   { key: '/bank-reconciliation/config/column-mapping', icon: <TableOutlined />, label: 'Column Mapping' },
+  { key: '/bank-reconciliation/config/account-mapping', icon: <BankOutlined />, label: 'Account Mapping' },
   { key: '/bank-reconciliation/config/mappings', icon: <DatabaseOutlined />, label: 'Learned Mappings' },
   { key: '/bank-reconciliation/config/hints', icon: <BulbOutlined />, label: 'LLM Hints' },
   { key: '/bank-reconciliation/config/contra-rules', icon: <FilterOutlined />, label: 'Contra Rules' },
-  { key: '/bank-reconciliation/config/ollama', icon: <CloudServerOutlined />, label: 'Ollama Settings' },
+  { key: '/bank-reconciliation/config/ollama', icon: <CloudServerOutlined />, label: 'LLM Settings' },
 ];
 
 function selectedKey(pathname: string): string {
@@ -33,6 +35,7 @@ function selectedKey(pathname: string): string {
     '/bank-reconciliation/run-history',
     '/bank-reconciliation/config/ledgers',
     '/bank-reconciliation/config/column-mapping',
+    '/bank-reconciliation/config/account-mapping',
     '/bank-reconciliation/config/mappings',
     '/bank-reconciliation/config/hints',
     '/bank-reconciliation/config/contra-rules',

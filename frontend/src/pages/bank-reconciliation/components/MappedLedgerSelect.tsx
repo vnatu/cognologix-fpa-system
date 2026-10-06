@@ -13,11 +13,13 @@ export default function MappedLedgerSelect({
   voucherType,
   mappedLedger,
   disabled,
+  excludeLedger,
   onChange,
 }: {
   voucherType: VoucherType;
   mappedLedger: string | null;
   disabled: boolean;
+  excludeLedger?: string;
   onChange: (ledgerName: string | undefined) => void;
 }) {
   const [options, setOptions] = useState<LedgerOption[]>(
@@ -48,7 +50,9 @@ export default function MappedLedgerSelect({
   const load = (query: string) => {
     const id = ++requestId.current;
     setFetching(true);
-    fetchLedgers(query, 0, 20, voucherType)
+    fetchLedgers(query, 0, 20, voucherType, {
+      excludeLedger: voucherType === 'CONTRA' ? excludeLedger : undefined,
+    })
       .then((page) => {
         if (id !== requestId.current) return;
         const next = page.content.map((l) => optionFor(l.ledgerName));

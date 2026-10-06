@@ -5,6 +5,7 @@ import type {
   LearnedMapping,
   LlmHint,
   MappingTemplate,
+  LlmProvider,
   OllamaConfig,
   OllamaTestResult,
   PageResponse,
@@ -12,6 +13,8 @@ import type {
   ReconRun,
   TransactionRow,
   VoucherType,
+  AccountMapping,
+  LedgerHint,
 } from './types';
 import { HDFC_IMPORT_TYPE } from './constants';
 
@@ -112,10 +115,18 @@ export const fetchLedgers = (
   page = 0,
   size = 200,
   voucherType?: VoucherType,
+  options?: { excludeLedger?: string; hasHint?: boolean },
 ): Promise<PageResponse<Ledger>> =>
   axios
     .get<PageResponse<Ledger>>('/api/bank-recon/ledgers', {
-      params: { search, page, size, ...(voucherType ? { voucherType } : {}) },
+      params: {
+        search,
+        page,
+        size,
+        ...(voucherType ? { voucherType } : {}),
+        ...(options?.excludeLedger ? { excludeLedger: options.excludeLedger } : {}),
+        ...(options?.hasHint === undefined ? {} : { hasHint: options.hasHint }),
+      },
     })
     .then((r) => r.data);
 
@@ -168,5 +179,51 @@ export const fetchOllamaConfig = (): Promise<OllamaConfig> =>
 export const saveOllamaConfig = (payload: OllamaConfig): Promise<OllamaConfig> =>
   axios.put<OllamaConfig>('/api/bank-recon/config/ollama', payload).then((r) => r.data);
 
-export const testOllama = (): Promise<OllamaTestResult> =>
-  axios.post<OllamaTestResult>('/api/bank-recon/config/ollama/test').then((r) => r.data);
+export const testOllama = (payload: {
+  provider: LlmProvider;
+  baseUrl: string;
+  chatModel: string;
+  embeddingUrl?: string;
+  embeddingModel: string;
+  apiKey?: string;
+}): Promise<OllamaTestResult> =>
+  axios.post<OllamaTestResult>('/api/bank-recon/config/ollama/test', payload).then((r) => r.data);
+
+export const fetchAccountMappings = (): Promise<AccountMapping[]> =>
+  axios.get<AccountMapping[]>('/api/bank-recon/account-mappings').then((r) => r.data);
+
+export const createAccountMapping = (payload: {
+  statementType: AccountMapping['statementType'];
+  identifier: string;
+  ledgerName: string;
+  active: boolean;
+}): Promise<AccountMapping> =>
+  axios.post<AccountMapping>('/api/bank-recon/account-mappings', payload).then((r) => r.data);
+
+export const updateAccountMapping = (
+  id: string,
+  payload: {
+    statementType: AccountMapping['statementType'];
+    identifier: string;
+    ledgerName: string;
+    active: boolean;
+  },
+): Promise<AccountMapping> =>
+  axios.put<AccountMapping>(`/api/bank-recon/account-mappings/${id}`, payload).then((r) => r.data);
+
+export const deleteAccountMapping = (id: string): Promise<void> =>
+  axios.delete(`/api/bank-recon/account-mappings/${id}`).then(() => undefined);
+
+export const fetchLedgerHint = (ledgerId: string): Promise<LedgerHint> =>
+  axios.get<LedgerHint>(`/api/bank-recon/ledgers/${ledgerId}/hint`).then((r) => r.data);
+
+export const saveLedgerHint = (
+  ledgerId: string,
+  payload: {
+    purpose?: string;
+    keywords?: string;
+    typicalAmount?: string;
+    disambiguationNote?: string;
+  },
+): Promise<LedgerHint> =>
+  axios.put<LedgerHint>(`/api/bank-recon/ledgers/${ledgerId}/hint`, payload).then((r) => r.data);

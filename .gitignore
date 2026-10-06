@@ -16,6 +16,10 @@ frontend/.pnpm-store/
 .env.local
 *.env
 
+# Runtime logs (LLM trace rolling file)
+logs/
+backend/logs/
+
 # IDE
 .idea/
 *.iml

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -64,6 +64,7 @@ export default function NewRunPage() {
   const [saveNameModalOpen, setSaveNameModalOpen] = useState(false);
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [uploadResult, setUploadResult] = useState<ReconRun | null>(null);
+  const [mappingError, setMappingError] = useState<string | null>(null);
 
   const allHeaders = useMemo(
     () => [...headerFields, ...transactionColumns],
@@ -130,6 +131,7 @@ export default function NewRunPage() {
   const doUpload = async () => {
     if (!file) return;
     setUploading(true);
+    setMappingError(null);
     try {
       const mappingId = await ensureMappingId(
         template?.templateName ?? 'HDFC bank statement mapping',
@@ -144,6 +146,10 @@ export default function NewRunPage() {
         axios.isAxiosError(err) && typeof err.response?.data?.message === 'string'
           ? err.response.data.message
           : 'Upload failed';
+      if (axios.isAxiosError(err) && err.response?.status === 422) {
+        setMappingError(message);
+        return;
+      }
       notification.error({ message });
     } finally {
       setUploading(false);
@@ -183,6 +189,7 @@ export default function NewRunPage() {
     setRowCount(0);
     setMappings({});
     setUploadResult(null);
+    setMappingError(null);
   }, []);
 
   if (!isAdmin) {
@@ -326,6 +333,19 @@ export default function NewRunPage() {
               description={warnings.missingRequiredAttributes
                 .map((attr) => SYSTEM_ATTRIBUTE_LABELS[attr] ?? attr)
                 .join(', ')}
+            />
+          )}
+          {mappingError && (
+            <Alert
+              type="error"
+              showIcon
+              message="Account mapping required"
+              description={
+                <span>
+                  {mappingError}{' '}
+                  <Link to="/bank-reconciliation/config/account-mapping">Open Account Mapping</Link>
+                </span>
+              }
             />
           )}
           <Space>

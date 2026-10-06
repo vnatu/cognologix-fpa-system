@@ -35,6 +35,7 @@ export interface ReconRun {
   runNumber: string;
   statementNumber: string | null;
   accountNumber: string | null;
+  bankLedgerName: string | null;
   customerName: string | null;
   statementPeriodStart: string | null;
   statementPeriodEnd: string | null;
@@ -67,6 +68,7 @@ export interface Ledger {
   accountingNature: string;
   bankAccount: boolean;
   active: boolean;
+  hasHint: boolean;
 }
 
 export interface LearnedMapping {
@@ -93,13 +95,28 @@ export interface ContraRule {
   active: boolean;
 }
 
+export type LlmProvider = 'OLLAMA' | 'OMLX';
+
+export interface LlmProviderSettings {
+  baseUrl: string;
+  chatModel: string;
+  embeddingUrl: string;
+  embeddingModel: string;
+  apiKey: string;
+}
+
 export interface OllamaConfig {
   baseUrl: string;
   chatModel: string;
+  embeddingUrl: string;
   embeddingModel: string;
   batchSize: number;
   timeoutSeconds: number;
   companyName: string;
+  provider: LlmProvider;
+  apiKey: string;
+  ollamaSettings: LlmProviderSettings;
+  omlxSettings: LlmProviderSettings;
 }
 
 export interface OllamaTestResult {
@@ -132,4 +149,26 @@ export interface ParseHeadersResponse {
   transactionColumns: string[];
   headerFieldValues: Record<string, string>;
   rowCount: number;
+}
+
+export type StatementType = 'HDFC_BANK' | 'HSBC_CC';
+
+export interface AccountMapping {
+  id: string;
+  statementType: StatementType;
+  identifier: string;
+  ledgerName: string;
+  active: boolean;
+  createdAt: string;
+  createdBy: string | null;
+  warning: string | null;
+}
+
+export interface LedgerHint {
+  ledgerId: string;
+  purpose: string | null;
+  keywords: string | null;
+  typicalAmount: string | null;
+  disambiguationNote: string | null;
+  present: boolean;
 }

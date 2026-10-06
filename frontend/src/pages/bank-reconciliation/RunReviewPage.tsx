@@ -121,6 +121,7 @@ export default function RunReviewPage() {
         <MappedLedgerSelect
           voucherType={tx.voucherType}
           mappedLedger={tx.mappedLedger}
+          excludeLedger={run?.bankLedgerName ?? undefined}
           disabled={!isAdmin || run?.status === 'CLOSED'}
           onChange={(ledgerName) => patch(tx, { ledgerName: ledgerName ?? '' })}
         />
