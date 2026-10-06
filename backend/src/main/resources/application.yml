@@ -28,15 +28,24 @@ spring:
       - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
 
   ai:
+    # Beans are built in BankReconAiConfig from general_config. "none" stops
+    # OpenAI and Ollama auto-config from also creating ChatModel / EmbeddingModel.
+    model:
+      chat: none
+      embedding: none
+    # Default to MLX server (OpenAI-compatible /v1/chat/completions)
+    openai:
+      api-key: not-needed
+      base-url: http://localhost:9000
+      chat:
+        options:
+          model: mlx-community/Qwen3.6-35B-A3B-4bit
+          temperature: 0.0
+    # Embedding still via Ollama
     ollama:
       base-url: http://localhost:11434
       init:
         pull-model-strategy: never
-      chat:
-        model: qwen2.5:32b
-        options:
-          temperature: 0.0
-          num-predict: 2048
       embedding:
         model: nomic-embed-text
     vectorstore:
@@ -55,6 +64,16 @@ app:
   public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:3000}
   mail:
     from: ${MAIL_FROM:noreply@cognologix.com}
+
+# LLM request and response bodies. Summaries stay on the main log.
+# trace-enabled is on for the testing phase and should be reviewed when that phase ends.
+logging:
+  level:
+    llm.trace: INFO
+
+bankrecon:
+  llm:
+    trace-enabled: true
 
 # Contract expiry email (ADR-067). Leave host unset to skip SMTP; in-app notifications still run.
 # spring:

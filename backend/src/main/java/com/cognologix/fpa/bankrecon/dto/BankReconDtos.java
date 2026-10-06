@@ -45,6 +45,7 @@ public final class BankReconDtos {
             String runNumber,
             String statementNumber,
             String accountNumber,
+            String bankLedgerName,
             String customerName,
             LocalDate statementPeriodStart,
             LocalDate statementPeriodEnd,
@@ -86,7 +87,8 @@ public final class BankReconDtos {
             String groupName,
             String accountingNature,
             boolean bankAccount,
-            boolean active
+            boolean active,
+            boolean hasHint
     ) {}
 
     public record CreateLedgerRequest(
@@ -95,6 +97,40 @@ public final class BankReconDtos {
     ) {}
 
     public record ImportCountResponse(int imported, int updated) {}
+
+    public record AccountMappingRequest(
+            String statementType,
+            String identifier,
+            String ledgerName,
+            Boolean active
+    ) {}
+
+    public record AccountMappingResponse(
+            UUID id,
+            String statementType,
+            String identifier,
+            String ledgerName,
+            boolean active,
+            Instant createdAt,
+            String createdBy,
+            String warning
+    ) {}
+
+    public record LedgerHintRequest(
+            String purpose,
+            String keywords,
+            String typicalAmount,
+            String disambiguationNote
+    ) {}
+
+    public record LedgerHintResponse(
+            UUID ledgerId,
+            String purpose,
+            String keywords,
+            String typicalAmount,
+            String disambiguationNote,
+            boolean present
+    ) {}
 
     public record MappingResponse(
             UUID id,
@@ -124,22 +160,38 @@ public final class BankReconDtos {
 
     public record ContraRuleRequest(PatternType patternType, String patternValue) {}
 
+    public record LlmProviderSettings(
+            String baseUrl,
+            String chatModel,
+            String embeddingUrl,
+            String embeddingModel,
+            String apiKey
+    ) {}
+
     public record OllamaConfigResponse(
             String baseUrl,
             String chatModel,
+            String embeddingUrl,
             String embeddingModel,
             int batchSize,
             int timeoutSeconds,
-            String companyName
+            String companyName,
+            String provider,
+            String apiKey,
+            LlmProviderSettings ollamaSettings,
+            LlmProviderSettings omlxSettings
     ) {}
 
     public record OllamaConfigRequest(
             String baseUrl,
             String chatModel,
+            String embeddingUrl,
             String embeddingModel,
             Integer batchSize,
             Integer timeoutSeconds,
-            String companyName
+            String companyName,
+            String provider,
+            String apiKey
     ) {}
 
     public record OllamaTestResponse(

@@ -11,7 +11,8 @@ import com.cognologix.fpa.contracts.ContractDtos.CountByLabel;
 import com.cognologix.fpa.contracts.ContractDtos.CreateContractRequest;
 import com.cognologix.fpa.contracts.ContractDtos.CreateContractTypeRequest;
 import com.cognologix.fpa.contracts.ContractDtos.CreateTemplateRequest;
-import com.cognologix.fpa.contracts.ContractDtos.DocumentMeta;
+import com.cognologix.fpa.contracts.dto.DocumentMeta;
+import com.cognologix.fpa.contracts.dto.TemplateDocumentMeta;
 import com.cognologix.fpa.contracts.ContractDtos.NotificationHistoryEntry;
 import com.cognologix.fpa.contracts.ContractDtos.TemplateGroup;
 import com.cognologix.fpa.contracts.ContractDtos.TemplateSummary;
@@ -393,16 +394,16 @@ public class ContractService {
     @Transactional(readOnly = true)
     public List<TemplateGroup> listTemplates() {
         List<ContractTemplate> templates = contractTemplateRepository.findByActiveTrueOrderByTemplateNameAsc();
-        Map<UUID, ContractDtos.TemplateDocumentMeta> latest = Map.of();
+        Map<UUID, TemplateDocumentMeta> latest = Map.of();
         if (!templates.isEmpty()) {
             latest = contractTemplateDocumentRepository
                     .findLatestMeta(templates.stream().map(ContractTemplate::getId).toList())
                     .stream()
-                    .collect(Collectors.toMap(ContractDtos.TemplateDocumentMeta::templateId, meta -> meta));
+                    .collect(Collectors.toMap(TemplateDocumentMeta::templateId, meta -> meta));
         }
         Map<UUID, List<TemplateSummary>> byType = new LinkedHashMap<>();
         for (ContractTemplate template : templates) {
-            ContractDtos.TemplateDocumentMeta meta = latest.get(template.getId());
+            TemplateDocumentMeta meta = latest.get(template.getId());
             var summary = new TemplateSummary(
                     template.getId(),
                     template.getContractType().getId(),

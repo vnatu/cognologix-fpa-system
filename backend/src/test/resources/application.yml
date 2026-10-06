@@ -6,6 +6,9 @@ spring:
     model:
       chat: none
       embedding: none
+    openai:
+      api-key: not-needed
+      base-url: http://127.0.0.1:1
     ollama:
       init:
         pull-model-strategy: never

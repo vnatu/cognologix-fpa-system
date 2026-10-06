@@ -149,10 +149,55 @@ public class BankReconController {
     public PageResponse<LedgerResponse> ledgers(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String voucherType,
+            @RequestParam(required = false) String excludeLedger,
+            @RequestParam(required = false) Boolean hasHint,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "200") int size) {
         VoucherType type = parseVoucherType(voucherType);
-        return bankReconService.listLedgers(search, type, page, size);
+        return bankReconService.listLedgers(search, type, page, size, excludeLedger, hasHint);
+    }
+
+    @GetMapping("/ledgers/{id}/hint")
+    public LedgerHintResponse ledgerHint(@PathVariable UUID id) {
+        return bankReconService.getLedgerHint(id);
+    }
+
+    @AdminOnly
+    @PutMapping("/ledgers/{id}/hint")
+    public LedgerHintResponse saveLedgerHint(
+            @PathVariable UUID id,
+            @RequestBody LedgerHintRequest request,
+            Authentication auth) {
+        return bankReconService.saveLedgerHint(id, request, actor(auth));
+    }
+
+    @GetMapping("/account-mappings")
+    public List<AccountMappingResponse> accountMappings() {
+        return bankReconService.listAccountMappings();
+    }
+
+    @AdminOnly
+    @PostMapping("/account-mappings")
+    public ResponseEntity<AccountMappingResponse> createAccountMapping(
+            @RequestBody AccountMappingRequest request,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(bankReconService.createAccountMapping(request, actor(auth)));
+    }
+
+    @AdminOnly
+    @PutMapping("/account-mappings/{id}")
+    public AccountMappingResponse updateAccountMapping(
+            @PathVariable UUID id,
+            @RequestBody AccountMappingRequest request) {
+        return bankReconService.updateAccountMapping(id, request);
+    }
+
+    @AdminOnly
+    @DeleteMapping("/account-mappings/{id}")
+    public ResponseEntity<Void> deleteAccountMapping(@PathVariable UUID id) {
+        bankReconService.deleteAccountMapping(id);
+        return ResponseEntity.noContent().build();
     }
 
     @AdminOnly
@@ -238,8 +283,10 @@ public class BankReconController {
 
     @AdminOnly
     @PostMapping("/config/ollama/test")
-    public OllamaTestResponse testOllama() {
-        return bankReconService.testOllamaConnection();
+    public OllamaTestResponse testOllama(
+            @RequestParam(required = false) String target,
+            @RequestBody(required = false) OllamaConfigRequest request) {
+        return bankReconService.testOllamaConnection(target, request);
     }
 
     @AdminOnly

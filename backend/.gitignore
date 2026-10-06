@@ -20,6 +20,9 @@ spring-pid
 # Test output
 surefire-reports/
 
+# LLM trace rolling file
+logs/
+
 # Environment overrides
 application-local.yml
 application-local.properties

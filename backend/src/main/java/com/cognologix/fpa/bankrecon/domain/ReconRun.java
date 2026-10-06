@@ -30,6 +30,9 @@ public class ReconRun {
     @Column(name = "account_number", length = 50)
     private String accountNumber;
 
+    @Column(name = "bank_ledger_name", length = 500)
+    private String bankLedgerName;
+
     @Column(name = "customer_name", length = 500)
     private String customerName;
 

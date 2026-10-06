@@ -1,5 +1,6 @@
 package com.cognologix.fpa.contracts;
 
+import com.cognologix.fpa.contracts.dto.DocumentMeta;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -153,17 +154,6 @@ public record VersionResponse(
         List<DocumentMeta> documents
 ) {}
 
-public record DocumentMeta(
-        UUID id,
-        UUID contractVersionId,
-        DocumentType documentType,
-        String filename,
-        String contentType,
-        long fileSizeBytes,
-        Instant uploadedAt,
-        String uploadedBy
-) {}
-
 public record ContractDocumentDownload(String filename, String contentType, byte[] fileData) {}
 
 public record ContractDashboard(
@@ -183,17 +173,6 @@ public record ContractTypeResponse(
         String displayName,
         String description,
         boolean active
-) {}
-
-public record TemplateDocumentMeta(
-        UUID id,
-        UUID templateId,
-        int versionNumber,
-        String filename,
-        String contentType,
-        long fileSizeBytes,
-        Instant uploadedAt,
-        String uploadedBy
 ) {}
 
 public record TemplateSummary(

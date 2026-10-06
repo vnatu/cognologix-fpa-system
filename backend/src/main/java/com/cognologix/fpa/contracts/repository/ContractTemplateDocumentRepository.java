@@ -1,6 +1,6 @@
 package com.cognologix.fpa.contracts.repository;
 
-import com.cognologix.fpa.contracts.ContractDtos.TemplateDocumentMeta;
+import com.cognologix.fpa.contracts.dto.TemplateDocumentMeta;
 import com.cognologix.fpa.contracts.domain.ContractTemplateDocument;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -18,7 +18,7 @@ public interface ContractTemplateDocumentRepository extends JpaRepository<Contra
     int maxVersionNumber(UUID templateId);
 
     @Query("""
-            select new com.cognologix.fpa.contracts.ContractDtos.TemplateDocumentMeta(
+            select new com.cognologix.fpa.contracts.dto.TemplateDocumentMeta(
                 d.id, d.templateId, d.versionNumber, d.filename, d.contentType,
                 d.fileSizeBytes, d.uploadedAt, d.uploadedBy)
             from ContractTemplateDocument d
