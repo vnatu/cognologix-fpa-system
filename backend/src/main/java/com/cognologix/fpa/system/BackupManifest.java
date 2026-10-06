@@ -34,7 +34,15 @@ public final class BackupManifest {
             "period_actuals.xlsx",
             "overhead_actuals.xlsx",
             "revenue_invoices.xlsx",
-            "revenue_credit_notes.xlsx"
+            "revenue_credit_notes.xlsx",
+            "contract_types.xlsx",
+            "contracts.xlsx",
+            "contract_versions.xlsx",
+            "contract_documents.xlsx",
+            "contract_templates.xlsx",
+            "contract_template_documents.xlsx",
+            "contract_notification_log.xlsx",
+            "app_notifications.xlsx"
     );
 
     public static final String TEMP_RESTORE_PASSWORD = "RestoreMe123!";

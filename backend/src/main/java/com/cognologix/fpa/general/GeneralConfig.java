@@ -23,6 +23,6 @@ public class GeneralConfig {
     @Column(name = "config_key", length = 100)
     private String configKey;
 
-    @Column(name = "config_value", nullable = false, length = 255)
+    @Column(name = "config_value", nullable = false, columnDefinition = "text")
     private String configValue;
 }

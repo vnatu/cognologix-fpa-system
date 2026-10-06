@@ -42,7 +42,7 @@ class CustomerExportImportIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
     @Autowired MockMvc mockMvc;
     @Autowired CustomerService customerService;

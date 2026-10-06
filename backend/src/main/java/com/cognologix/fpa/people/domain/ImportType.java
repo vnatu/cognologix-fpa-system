@@ -8,5 +8,7 @@ public enum ImportType {
     /** Revenue module — Zoho Books invoices (ADR-039, ADR-040). Stored in shared import_column_mapping. */
     ZOHO_BOOKS_INVOICES,
     /** Revenue module — Zoho Books credit notes (ADR-040). Stored in shared import_column_mapping. */
-    ZOHO_BOOKS_CREDIT_NOTES
+    ZOHO_BOOKS_CREDIT_NOTES,
+    /** Bank Reconciliation — HDFC statement ingest (ADR-019 template reuse). */
+    HDFC_BANK_STATEMENT
 }

@@ -1518,4 +1518,125 @@ ADR-045 / ADR-052 defined Total Payroll Cost as Gross Pay + employer contributio
 
 ---
 
+## ADR-065: Bank Reconciliation Module (FinSync) — Spring AI + Ollama + pgvector Integration
+
+**Status:** Accepted — September 2026
+
+**Context**
+Cognologix Finance processes 100–200 HDFC bank transactions monthly, each requiring manual TallyPrime ledger assignment. A standalone FinSync prototype (FastAPI + Python + local Ollama) demonstrated AI-assisted mapping works (>80% first-run accuracy). Decision: integrate into FPA as Module 5 rather than maintaining a separate app.
+
+**Decision**
+New Spring Modulith module `com.cognologix.fpa.bankrecon`. Spring AI replaces the prototype's raw HTTP Ollama calls. ChatClient for structured LLM output, embeddings for narration, pgvector on existing PostgreSQL. Default chat model `qwen2.5:32b`; embedding model `nomic-embed-text`. Ollama URL + model configurable. Multi-shot batch prompting with fuzzy primary and semantic fallback. Transaction storage is temporary — purged on run close. Learned mappings are permanent. Phase 2: HSBC CC statement.
+
+Amendment (September 2026): chat moves to Spring AI's OpenAI-compatible client so it can call an MLX-LM server at `/v1/chat/completions`. Default chat URL `http://localhost:9000`, model `mlx-community/Qwen3.6-35B-A3B-4bit`. Existing rows still set to the old Ollama chat defaults are updated by V37; a custom URL or model name is left as stored.
+
+Amendment (October 2026): `llm_provider` is `OLLAMA` or `OMLX` (default `OMLX`). Ollama uses `OllamaChatModel` and `OllamaEmbeddingModel` with no API key; chat default `http://localhost:11434` / `qwen2.5:32b`, embeddings `nomic-embed-text` (embedding URL may match the chat URL). oMLX uses `OpenAiChatModel` and `OpenAiEmbeddingModel` against one base URL (`http://localhost:9000`), `mlx_api_key`, chat model `mlx-community/Qwen3.6-35B-A3B-4bit`, and embedding model `mlx-community/nomicai-modernbert-embed-base-4bit`. The oMLX connection test calls `/v1/chat/completions` and `/v1/embeddings` with that key. `nomic-ai/modernbert-embed-base` publishes `hidden_size` 768, the same width as `learned_mapping.narration_embedding vector(768)`, so V38 does not alter the column. Confirm the live server's embedding length before switching production embeddings; change the vector column only if that length is not 768. V39 stores the two profiles separately (`ollama_*` and `mlx_*`). Saving writes only the selected provider, and the settings screen shows only that provider's fields.
+
+**Consequences**
+- (+) Spring AI abstraction — cleaner, testable, provider-switchable later.
+- (+) Structured output eliminates manual JSON parsing.
+- (+) pgvector on existing PostgreSQL — no new infrastructure.
+- (+) Data stays on-premise — no external AI service calls.
+- (−) pgvector extension must be enabled before V33 migration.
+- (−) The selected provider must be running: Ollama at its chat URL, or oMLX at `mlx_base_url` (default `http://localhost:9000`, separate from `server.port` 8080) with `mlx_api_key` set.
+- (−) Switching the embedding model does not rewrite existing `narration_embedding` values. If a live oMLX embedding response is not 768 floats, alter `vector(768)` before using that model.
+- (−) The bank side of each voucher is the ledger mapped to the statement account (ADR-068), not the first bank ledger in Tally.
+
+Implementation notes (September 2026): Spring AI 1.0.0 GA renamed starters to `spring-ai-starter-model-ollama` and `spring-ai-starter-vector-store-pgvector`. Embeddings are stored on `learned_mapping.narration_embedding`; PgVectorStore auto-schema is disabled because that table is not Spring AI's default `vector_store`. Local Postgres image is `pgvector/pgvector:pg16`. Tally group seed listed `Stock-in-Hand` twice — the duplicate was replaced with `Current Assets` to satisfy UNIQUE `group_name` while keeping 28 groups. Batch mapping uses {@code ChatClient.call()} (not {@code stream()}) against Ollama {@code /api/chat}. RestClient forces {@code stream: false} in the request body and treats {@code application/octet-stream} as JSON so Spring AI does not fail extracting {@code OllamaApi$ChatResponse}. TallyPrime ledger XML: read `NAME` via `getAttribute` (DOM-decoded entities) then `StringEscapeUtils.unescapeXml`; strip CR/LF from extracted strings; empty `<PARENT/>` imports the ledger. Import also upserts `<GROUP>` rows into `tally_ledger_group`, walking the PARENT chain to a seeded standard group for `accounting_nature`. Ledgers are never dropped: unknown parents log a warning and use Payable→Liability, Receivable/Debtor→Asset, Income/Revenue→Income, Expense/Cost→Expense, else Liability. Re-import matches existing ledger rows after stripping CR/LF from stored names so dirty names are updated in place. Run Review mapped-ledger Select is server-side search (`GET /api/bank-recon/ledgers?search=&voucherType=&size=20`): PAYMENT=Liability+Expense, RECEIPT=Asset+Income, CONTRA=`is_bank_account`.
+
+---
+
+## ADR-066: HDFC Bank Statement Column Mapping Templates (ADR-019)
+
+**Status:** Accepted — September 2026
+
+**Context**
+HDFC statement ingest originally matched hardcoded column names (`Date`, `Narration`, `Withdrawal Amt.`, `Deposit Amt.`). Other FPA imports already store Finance-owned column mapping templates in shared `import_column_mapping` (ADR-019). Native HDFC exports and Finance-prepared files disagree on header spelling, so a fixed parser broke the People/Revenue upload pattern.
+
+`docs/Cognologix_BankReconciliation_RequirementsSpec_v1.0.md` is not in the repo; this decision follows ADR-065 plus the FinSync upload brief. Spec flag: do not silently restore hardcoded HDFC column names.
+
+**Decision**
+1. Add import type `HDFC_BANK_STATEMENT` to `import_column_mapping` (Flyway **V34** — next sequential version after V33; requested filename was V35).
+2. Map both statement **header-block** labels (`AccountNumber`, `FromDate`, `ToDate`, …) and **transaction** columns (`TransactionDate`, `TransactionDescription`, `TransactionAmount`, `DebitCredit`, …). Amount is a single mapped column plus D/C — not Withdrawal/Deposit pairs.
+3. Parser locates cells only through the saved mapping. Both sides of every header comparison use `ExcelParserUtils.normalizeHeader()`.
+4. Bank Reconciliation calls People `MappingTemplateApi` / `PeoplePayrollService` (same as Revenue). UI: four-step upload (period + file, mapping, review, result) and template management in Settings → Bank Reconciliation and Bank Reconciliation → Column Mapping.
+5. Sample workbook: `GET /api/bank-recon/runs/mapping/sample`.
+6. Flyway **V35** stores mapped header-block values on `recon_run` (`customer_name`, `opening_balance`, `closing_balance`). HDFC `.xlsx` date/amount cells are Excel NUMERIC serials; the parser keeps POI cell type (not `DataFormatter` strings alone) for TransactionDate, ValueDate, FromDate, ToDate, OpeningBalance, and ClosingBalance.
+
+**Consequences**
+- (+) Finance maps columns once; subsequent HDFC uploads pre-fill the template.
+- (+) Header drift (`Account Number` vs `account_number`) no longer requires a parser change.
+- (−) A statement without an active (or selected) template cannot be ingested.
+- (−) Native Withdrawal/Deposit-only HDFC layouts must be mapped into Amount + Debit/Credit (or a prepared file).
+
+---
+
+## ADR-067: Contract Management Module — Repository, Versioning, and Expiry Notifications
+
+**Status:** Accepted — September 2026
+
+**Context**
+Cognologix keeps client contracts in a shared folder. Finance needs a searchable repository for NDAs, MSAs, and SOWs (Third Party paper and Own paper), manual version history, expiry reminders, and a template library — without a full CLM workflow. Spec: `docs/Cognologix_ContractManagement_RequirementsSpec_v1.0.md` (Module 6). Navigation follows ADR-021 (domain-first top-level section).
+
+**Decision**
+1. New Spring Modulith module `com.cognologix.fpa.contracts`. Public API is `ContractService` in the root package. Entities and repositories are internal. Customer link is a soft reference via `CustomerService.findCustomerRef()` — no foreign key into Customer Management. Either `customer_id` or `party_name` is required, not both. JPQL constructor targets `DocumentMeta` and `TemplateDocumentMeta` are top-level types in `contracts.dto` (a Modulith named interface) because Hibernate cannot instantiate a nested class from `select new`.
+2. Documents are PostgreSQL BYTEA (no `@Lob` / OID). Primary and template files are PDF or Word, max 20MB enforced in the service. Global multipart limit stays 50MB so other imports are unchanged.
+3. Contract numbers are `CON-{year}-{sequence}` from `contract_number_seq`. Uploading a version auto-sets the latest non-SUPERSEDED version to SUPERSEDED. SUPERSEDED cannot be set manually. At most one SIGNED version per contract.
+4. Reminder days and recipient emails live in `general_config` (`contract_reminder_days`, `contract_notification_recipients`). `general_config.config_value` is TEXT so a recipient list can exceed the original VARCHAR(255). A daily job at 08:00 Asia/Kolkata sends an in-app notification to the contract owner and email to the owner plus configured recipients. Dedup is `(contract, channel, days_before_expiry)`. Email is skipped when `spring.mail.host` is unset.
+5. In-app notifications use shared `app_notification` and `NotificationService` in the general module (`GET /api/notifications`, `PUT /api/notifications/{id}/read`, `PUT /api/notifications/read-all`).
+6. REST paths follow the implementation brief: document download is `/documents/{docId}/download` and notification settings are `/api/contracts/config`. Spec §8 uses shorter paths; this ADR is authoritative for those two routes.
+7. Backup (ADR-044) gains contract metadata workbooks plus `app_notifications.xlsx`. Document bytes are raw ZIP entries (`contract_blobs/{id}.bin`, `contract_template_blobs/{id}.bin`), not base64 inside Excel — a 20MB BYTEA cannot fit in a cell. Spec NFR asked for base64 ZIP entries; raw entries are the backup form used here.
+
+**Consequences**
+- (+) Contracts are a top-level nav section with the same Admin write / Viewer read split as other modules (ADR-042).
+- (+) No new infrastructure for files or mail queues.
+- (−) SMTP must be configured before expiry email is delivered. In-app notices still run.
+- (−) Restoring a backup remaps contract owners by email when the restored user id differs from the backup id (user restore does not preserve UUIDs).
+
+---
+
+## ADR-068: Bank Reconciliation account mapping, ledger hints, and prompt prefix
+
+**Status:** Accepted — October 2026
+
+**Context**
+Export used the first `is_bank_account` ledger it found, so an HDFC statement could be credited to Deutsche Bank. Learned mappings had no confirmed amount, and the mapping prompt mixed per-run examples into the middle of the catalog, so MLX could not reuse a cached prefix. `docs/Cognologix_BankReconciliation_RequirementsSpec_v1.0.md` is still not in the repo; this follows ADR-065 and ADR-066. `amount_min` / `amount_max` are not on `learned_mapping`. Async run processing is not in the service. There was no token-budget split; this ADR adds one.
+
+**Decision**
+1. Flyway **V40** adds `recon_account_mapping` (`HDFC_BANK` account number or `HSBC_CC` card last 4), `recon_run.bank_ledger_name`, `tally_ledger_hint`, and `learned_mapping.last_amount`. Hints live outside `tally_ledger` so a Tally XML re-import cannot overwrite them.
+2. Upload of an HDFC statement looks up an active mapping for the trimmed account number. If none exists, the upload is rejected with HTTP 422: `No ledger is mapped for account {number}. Add it in Configuration → Account Mapping.` A mapping stores that ledger on the run. Payment, Receipt, and Contra exports use `bank_ledger_name` for the statement's own bank side. Contra counterparties stay a manual choice. Contra rows are not sent to the LLM and stay unmapped until Finance selects a ledger.
+3. Saving a mapping requires a case-sensitive `tally_ledger.ledger_name`. A bank-side group does not warn. Bank-side groups match case-insensitively: exact `Bank Accounts`, exact `Credit Cards`, and any group whose name starts with `Bank OD` (`Bank OD`, `Bank OD A/c`, `Bank OD Accounts`). `Credit Card EMI` is not a bank-side group.
+4. Ledger import updates only name, group, and nature on an existing row. It does not change `is_bank_account` or `is_active`, and it never deletes a ledger, including one that has a hint.
+5. The mapping prompt is system instructions, then active `llm_hint` rows, then the Payment catalog (Liability and Expense) and Receipt catalog (Asset and Income), then the transactions. Catalog lines are `Ledger Name | keywords | purpose | typical amount | note`, omitting empty parts, sorted by group name then ledger name. The same bank-side groups are omitted, plus any ledger named in `recon_account_mapping`. `Credit Card EMI` stays in the catalog unless that ledger is mapped. Each Payment or Receipt line carries up to three examples (fuzzy match, then semantic fallback). An example shows narration, `last_amount`, and ledger. `last_amount` is set when Finance confirms or corrects a mapping. Stage 1 exact match stays narration plus voucher type and does not use amount.
+6. A returned ledger must exactly match that voucher type's catalog or the transaction stays unmapped. Prompt size is estimated as characters / 4. Above 12,000 tokens the transaction list is split and each part is sent separately. The prompt numbers transactions 1 to N; the server maps those ids back to the batch. Completion `max_tokens` is 40 per transaction plus a 500-token margin. If `finish_reason` is `length` or the JSON array is incomplete, parsed rows are kept and the rest are sent in a follow-up call. Contra mapped-ledger search is `is_bank_account = true`, excluding the run's own bank ledger.
+7. Each chat call, follow-up, and embedding call is logged with a call id `{runNumber}#{sequence}` (for example `R-005#2`) on every line. The main log records, before the call, provider, base URL, model, transaction count, catalog ledger count, a 12-character SHA-256 of the catalog, estimated prompt tokens, `max_tokens`, and whether thinking is disabled. Chat options do not disable thinking, so that field is false. After the call the main log records elapsed milliseconds, HTTP status, `finish_reason`, prompt tokens, completion tokens, and prompt tokens per second when the prompt-token count and elapsed time are both present. After parsing it records rows returned, parsed, accepted, rejected, and rows the model marked `UNMAPPED`, plus up to five rejected examples (transaction id, ledger string, reason). A reply that parses to nothing logs the first 500 characters at WARN. Connection errors, timeouts, and non-2xx responses are logged at ERROR with the call id, status, and response body truncated to 2,000 characters. Logger `llm.trace` is INFO by default and is also gated by `bankrecon.llm.trace-enabled` (default true for the testing phase, to be reviewed when that phase ends). That logger writes only to `logs/llm-trace.log`, 10 MB per file, 7 files kept. The ledger catalog is written in full on the first call of a run; later calls in that run log `catalog: <hash> (N ledgers, unchanged)`. A response longer than 20,000 characters logs the first and last 5,000 characters and the total length. The API key and the Authorization header are never written.
+
+**Consequences**
+- (+) An HDFC statement can no longer post to a different bank's ledger.
+- (+) Hints survive Tally re-import. An unchanged catalog is a byte-identical prompt prefix.
+- (−) Uploads for an unmapped account are blocked until Finance adds the mapping.
+- (−) 12,000 tokens is an estimate, not the model's tokenizer. A single transaction that still exceeds it is sent anyway and logged.
+- (−) With `bankrecon.llm.trace-enabled` true, request and response bodies are written to `logs/llm-trace.log`. Turn it off when the testing phase ends.
+
+---
+
+## ADR-069: Contra detection uses the narration text, not the reference-stripped key
+
+**Status:** Accepted — October 2026
+
+**Context**
+HDFC internal credits such as `RTGS Cr-…-COGNOLOGIX TECHNOLOGIES…` were classified as Receipt. Upload does run the contra classifier after parsing. It was reading only `normalised_description`. `NarrationNormalizer` deletes every 6-character alphanumeric token that follows a hyphen, which removed the letter-only company token `COGNOLOGIX` before the company-name check. The PREFIX `RTGS` / `NEFT` rules then never ran, and a credit fell through to Receipt. Those rows were sent to the LLM. `ollama_company_name` was uppercased but not trimmed.
+
+**Decision**
+1. A post-hyphen token is stripped as a reference only when it is at least 6 characters and contains a digit. Letter-only tokens, including the company name, stay in the normalised narration.
+2. Contra classification folds case and whitespace on the company name (`ollama_company_name`), on the raw narration, and on the normalised narration. The company matches if either narration contains the folded name. A PREFIX or CONTAINS rule matches if either narration matches. An empty company name does not match. Each row logs the decision at DEBUG: the rule that matched, or why none did, including the company-name check.
+3. Contra rows are still excluded from LLM batches and stay unmapped until Finance picks the counterparty ledger. The Contra Rules screen shows the company-name value the rules use.
+
+**Consequences**
+- (+) An internal transfer whose company name sits after a hyphen is contra when a prefix or contains rule matches.
+- (−) A letter-only reference of 6 or more characters after a hyphen is no longer removed from the learned-mapping key.
+- (−) Existing `learned_mapping` rows cannot be re-normalised. The table stores `normalised_narration` only. The raw bank narration is not kept there, and `recon_transaction.description` is deleted when the run is closed. Running the new normaliser on the stored key cannot restore a letter-only token the old normaliser already removed.
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*

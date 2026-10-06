@@ -1,6 +1,10 @@
 spring:
   application:
     name: fpa-backend
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
 
   datasource:
     url: jdbc:postgresql://localhost:5432/cognologix_fpa
@@ -19,6 +23,37 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: false
 
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
+
+  ai:
+    # Beans are built in BankReconAiConfig from general_config. "none" stops
+    # OpenAI and Ollama auto-config from also creating ChatModel / EmbeddingModel.
+    model:
+      chat: none
+      embedding: none
+    # Default to MLX server (OpenAI-compatible /v1/chat/completions)
+    openai:
+      api-key: not-needed
+      base-url: http://localhost:9000
+      chat:
+        options:
+          model: mlx-community/Qwen3.6-35B-A3B-4bit
+          temperature: 0.0
+    # Embedding still via Ollama
+    ollama:
+      base-url: http://localhost:11434
+      init:
+        pull-model-strategy: never
+      embedding:
+        model: nomic-embed-text
+    vectorstore:
+      pgvector:
+        initialize-schema: false
+        dimensions: 768
+        distance-type: COSINE_DISTANCE
+
 server:
   port: 8080
 
@@ -26,3 +61,24 @@ app:
   jwt:
     secret: ${JWT_SECRET:dev-secret-change-in-production-must-be-32-chars}
     expiration-ms: 7200000   # 2 hours fallback; runtime uses general_config.jwt_expiry_hours (ADR-056)
+  public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:3000}
+  mail:
+    from: ${MAIL_FROM:noreply@cognologix.com}
+
+# LLM request and response bodies. Summaries stay on the main log.
+# trace-enabled is on for the testing phase and should be reviewed when that phase ends.
+logging:
+  level:
+    llm.trace: INFO
+
+bankrecon:
+  llm:
+    trace-enabled: true
+
+# Contract expiry email (ADR-067). Leave host unset to skip SMTP; in-app notifications still run.
+# spring:
+#   mail:
+#     host: smtp.example.com
+#     port: 587
+#     username:
+#     password:

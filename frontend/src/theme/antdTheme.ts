@@ -68,3 +68,6 @@ export const antdTheme: ThemeConfig = {
 // Applied via className on Typography.Title or a wrapper element,
 // since Ant Design has no dedicated heading-font token.
 export const HEADING_FONT = "'Montserrat', 'Trebuchet MS', system-ui, sans-serif";
+
+/** 61–90 day contract expiry band. Ant Design has no yellow status token. */
+export const EXPIRY_BAND_90 = '#e6b325';

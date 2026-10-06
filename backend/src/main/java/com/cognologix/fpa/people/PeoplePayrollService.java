@@ -320,6 +320,9 @@ public class PeoplePayrollService {
             ImportType.ZOHO_BOOKS_INVOICES,
             ImportType.ZOHO_BOOKS_CREDIT_NOTES);
 
+    private static final Set<ImportType> BANK_RECON_IMPORT_TYPES = EnumSet.of(
+            ImportType.HDFC_BANK_STATEMENT);
+
     public List<ImportColumnMapping> findActiveMappings() {
         List<ImportColumnMapping> mappings = importColumnMappingRepository.findByActiveTrue().stream()
                 .filter(m -> PEOPLE_IMPORT_TYPES.contains(m.getImportType()))
@@ -368,7 +371,9 @@ public class PeoplePayrollService {
     public MappingTemplateApi saveMappingTemplateApi(
             String importTypeName, String templateName, List<MappingLineInput> lines) {
         ImportType importType = MappingTemplateApi.requireKnownType(importTypeName);
-        if (!REVENUE_IMPORT_TYPES.contains(importType) && !PEOPLE_IMPORT_TYPES.contains(importType)) {
+        if (!REVENUE_IMPORT_TYPES.contains(importType)
+                && !PEOPLE_IMPORT_TYPES.contains(importType)
+                && !BANK_RECON_IMPORT_TYPES.contains(importType)) {
             throw new BadRequestException("Unsupported import type: " + importTypeName);
         }
         return MappingTemplateApi.from(saveMappingTemplate(importType, templateName, lines));
@@ -540,6 +545,9 @@ public class PeoplePayrollService {
             case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES ->
                     throw new BadRequestException(
                             "Revenue import types must be uploaded via /api/revenue/imports");
+            case HDFC_BANK_STATEMENT ->
+                    throw new BadRequestException(
+                            "HDFC bank statements must be uploaded via /api/bank-recon/runs/upload");
         }
 
         upload.setUnrecognizedBuCodes(joinCsv(unrecognizedBus));
@@ -627,6 +635,9 @@ public class PeoplePayrollService {
             case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES ->
                     throw new BadRequestException(
                             "Revenue import types do not have people snapshot detail");
+            case HDFC_BANK_STATEMENT ->
+                    throw new BadRequestException(
+                            "HDFC bank statements do not have people snapshot detail");
         };
     }
 
@@ -1328,7 +1339,7 @@ public class PeoplePayrollService {
                     payrollSnapshotRepository.existsByPeriodVersionIdAndImportType(periodVersionId, importType);
             case ZOHO_PEOPLE_EXITED -> peopleSnapshotRepository
                     .countByPeriodVersionIdAndEmployeeStatus(periodVersionId, EmployeeStatus.EXITED) > 0;
-            case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES -> false;
+            case ZOHO_BOOKS_INVOICES, ZOHO_BOOKS_CREDIT_NOTES, HDFC_BANK_STATEMENT -> false;
         };
     }
 

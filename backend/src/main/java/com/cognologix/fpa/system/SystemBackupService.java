@@ -1,10 +1,12 @@
 package com.cognologix.fpa.system;
 
 import com.cognologix.fpa.budgeting.BudgetingService;
+import com.cognologix.fpa.contracts.ContractService;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.general.BackupSheet;
 import com.cognologix.fpa.general.GeneralBadRequestException;
 import com.cognologix.fpa.general.GeneralConfigService;
+import com.cognologix.fpa.general.NotificationService;
 import com.cognologix.fpa.general.UserService;
 import com.cognologix.fpa.people.PeoplePayrollService;
 import com.cognologix.fpa.revenue.RevenueService;
@@ -43,6 +45,8 @@ public class SystemBackupService {
     private final PeoplePayrollService peoplePayrollService;
     private final BudgetingService budgetingService;
     private final RevenueService revenueService;
+    private final ContractService contractService;
+    private final NotificationService notificationService;
 
     private final ConcurrentHashMap<String, PendingRestore> pendingRestores = new ConcurrentHashMap<>();
 
@@ -52,6 +56,7 @@ public class SystemBackupService {
             String token,
             Instant expiresAt,
             Map<String, List<String[]>> rowsByFile,
+            Map<String, byte[]> binaries,
             Map<String, Integer> recordCounts,
             String createdBy
     ) {}
@@ -66,7 +71,7 @@ public class SystemBackupService {
         for (String name : BackupManifest.EXPECTED_FILES) {
             ordered.add(byName.getOrDefault(name, emptySheet(name)));
         }
-        byte[] zip = BackupZipIO.buildZip(ordered);
+        byte[] zip = BackupZipIO.buildZip(ordered, contractService.exportDocumentBlobs());
         String filename = "cognologix_backup_" + LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE) + ".zip";
         generalConfigService.setConfigValue(
                 GeneralConfigService.LAST_BACKUP_AT_KEY, Instant.now().toString());
@@ -88,7 +93,8 @@ public class SystemBackupService {
             throw new GeneralBadRequestException("Failed to read uploaded ZIP: " + e.getMessage());
         }
 
-        Map<String, List<String[]>> rowsByFile = BackupZipIO.readZip(bytes);
+        BackupZipIO.ZipPayload payload = BackupZipIO.readZipPayload(bytes);
+        Map<String, List<String[]>> rowsByFile = payload.sheets();
         List<String> present = new ArrayList<>();
         List<String> missing = new ArrayList<>();
         Map<String, Integer> counts = new LinkedHashMap<>();
@@ -105,7 +111,8 @@ public class SystemBackupService {
 
         String token = UUID.randomUUID().toString();
         Instant expires = Instant.now().plus(RESTORE_TOKEN_TTL_MINUTES, ChronoUnit.MINUTES);
-        pendingRestores.put(token, new PendingRestore(token, expires, rowsByFile, counts, actorEmail));
+        pendingRestores.put(token, new PendingRestore(
+                token, expires, rowsByFile, payload.binaries(), counts, actorEmail));
         purgeExpiredTokens();
 
         String warning = "This backup contains "
@@ -138,6 +145,8 @@ public class SystemBackupService {
             peoplePayrollService.wipeForRestore();
             customerService.wipeForRestore();
             generalConfigService.wipeForRestore();
+            contractService.wipeForRestore();
+            notificationService.wipeForRestore();
             userService.wipeUsersExcept(actorEmail);
 
             // Forward insert order
@@ -148,6 +157,21 @@ public class SystemBackupService {
                     BackupManifest.TEMP_RESTORE_PASSWORD,
                     actorEmail);
             restored.put("users", users);
+
+            mergeCounts(restored, Map.of(
+                    NotificationService.BACKUP_FILE,
+                    notificationService.restoreBackupSheet(
+                            data.getOrDefault(NotificationService.BACKUP_FILE, List.of()))), errors);
+
+            mergeCounts(restored, contractService.restoreBackupSheets(filterFor(
+                    data,
+                    "contract_types.xlsx",
+                    "contracts.xlsx",
+                    "contract_versions.xlsx",
+                    "contract_documents.xlsx",
+                    "contract_templates.xlsx",
+                    "contract_template_documents.xlsx",
+                    "contract_notification_log.xlsx"), pending.binaries()), errors);
 
             mergeCounts(restored, generalConfigService.restoreBackupSheets(filterFor(
                     data, "general_config.xlsx", "fx_rates.xlsx")), errors);
@@ -209,6 +233,8 @@ public class SystemBackupService {
         sheets.addAll(peoplePayrollService.exportBackupSheets());
         sheets.addAll(budgetingService.exportBackupSheets());
         sheets.addAll(revenueService.exportBackupSheets());
+        sheets.addAll(contractService.exportBackupSheets());
+        sheets.add(notificationService.exportBackupSheet());
         return sheets;
     }
 

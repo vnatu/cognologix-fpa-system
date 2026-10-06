@@ -29,12 +29,23 @@ public final class BackupZipIO {
     private BackupZipIO() {}
 
     public static byte[] buildZip(List<BackupSheet> sheetsInOrder) {
+        return buildZip(sheetsInOrder, Map.of());
+    }
+
+    public static byte[] buildZip(List<BackupSheet> sheetsInOrder, Map<String, byte[]> binaryEntries) {
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
              ZipOutputStream zos = new ZipOutputStream(bos)) {
             for (BackupSheet sheet : sheetsInOrder) {
                 zos.putNextEntry(new ZipEntry(sheet.fileName()));
                 zos.write(ExcelGrid.toWorkbookBytes(sheet));
                 zos.closeEntry();
+            }
+            if (binaryEntries != null) {
+                for (Map.Entry<String, byte[]> entry : binaryEntries.entrySet()) {
+                    zos.putNextEntry(new ZipEntry(entry.getKey()));
+                    zos.write(entry.getValue() == null ? new byte[0] : entry.getValue());
+                    zos.closeEntry();
+                }
             }
             zos.finish();
             return bos.toByteArray();
@@ -43,11 +54,18 @@ public final class BackupZipIO {
         }
     }
 
+    public record ZipPayload(Map<String, List<String[]>> sheets, Map<String, byte[]> binaries) {}
+
     /**
      * @return map of filename → data rows (header row stripped)
      */
     public static Map<String, List<String[]>> readZip(byte[] zipBytes) {
-        Map<String, List<String[]>> result = new LinkedHashMap<>();
+        return readZipPayload(zipBytes).sheets();
+    }
+
+    public static ZipPayload readZipPayload(byte[] zipBytes) {
+        Map<String, List<String[]>> sheets = new LinkedHashMap<>();
+        Map<String, byte[]> binaries = new LinkedHashMap<>();
         try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
@@ -55,19 +73,18 @@ public final class BackupZipIO {
                     continue;
                 }
                 String name = entry.getName();
-                if (name.contains("/")) {
-                    name = name.substring(name.lastIndexOf('/') + 1);
-                }
-                if (!name.endsWith(".xlsx") && !name.endsWith(".xls")) {
-                    continue;
-                }
                 byte[] content = zis.readAllBytes();
-                result.put(name, readExcelDataRows(content));
+                String simple = name.contains("/") ? name.substring(name.lastIndexOf('/') + 1) : name;
+                if (simple.endsWith(".xlsx") || simple.endsWith(".xls")) {
+                    sheets.put(simple, readExcelDataRows(content));
+                } else {
+                    binaries.put(name, content);
+                }
             }
         } catch (IOException e) {
             throw new GeneralBadRequestException("Failed to read backup ZIP: " + e.getMessage());
         }
-        return result;
+        return new ZipPayload(sheets, binaries);
     }
 
     public static List<String[]> readExcelDataRows(byte[] excelBytes) {
