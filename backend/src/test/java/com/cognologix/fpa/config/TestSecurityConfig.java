@@ -20,8 +20,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 
 /**
- * Test security: permit-all HTTP + authenticated ADMIN principal so {@code @AdminOnly}
- * method security passes in integration / WebMvc tests that import this config.
+ * MVC-slice security only. {@code @TestConfiguration} is not component-scanned.
+ * {@code @WebMvcTest} does not load {@code SecurityConfig}, so this is the one
+ * catch-all chain for those slices. {@code @SpringBootTest} must not import it.
  */
 @TestConfiguration
 @EnableMethodSecurity

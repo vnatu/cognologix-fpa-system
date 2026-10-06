@@ -1,6 +1,5 @@
 package com.cognologix.fpa.people;
 
-import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.people.domain.PeriodStatus;
 import com.cognologix.fpa.people.domain.ReconciliationStatus;
@@ -14,8 +13,8 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
@@ -40,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestSecurityConfig.class)
+@WithMockUser(roles = "ADMIN")
 @Testcontainers
 @RecordApplicationEvents
 class PeoplePayrollEndToEndIntegrationTest {

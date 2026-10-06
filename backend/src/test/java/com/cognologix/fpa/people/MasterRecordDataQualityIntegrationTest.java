@@ -1,6 +1,5 @@
 package com.cognologix.fpa.people;
 
-import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.customer.domain.LifecycleStatus;
 import com.cognologix.fpa.people.domain.ImportType;
@@ -12,7 +11,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockMultipartFile;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -29,7 +27,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestSecurityConfig.class)
 @Testcontainers
 class MasterRecordDataQualityIntegrationTest {
 

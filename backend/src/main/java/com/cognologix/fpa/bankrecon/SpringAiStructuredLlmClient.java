@@ -7,7 +7,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.ollama.api.OllamaOptions;
+import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
@@ -78,7 +78,7 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
                     .prompt()
                     .user(prompt)
                     .options(ollama
-                            ? OllamaOptions.builder()
+                            ? OllamaChatOptions.builder()
                                     .model(endpoint.model())
                                     .temperature(0.0)
                                     .numPredict(maxTokens)

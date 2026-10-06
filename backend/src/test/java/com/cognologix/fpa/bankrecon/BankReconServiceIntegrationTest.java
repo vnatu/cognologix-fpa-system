@@ -14,7 +14,6 @@ import com.cognologix.fpa.bankrecon.dto.BankReconDtos.RunResponse;
 import com.cognologix.fpa.bankrecon.dto.BankReconDtos.TransactionResponse;
 import com.cognologix.fpa.bankrecon.repository.LearnedMappingRepository;
 import com.cognologix.fpa.bankrecon.repository.ReconTransactionRepository;
-import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.people.PeoplePayrollService;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -27,7 +26,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -51,7 +49,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest
-@Import(TestSecurityConfig.class)
 @Testcontainers
 class BankReconServiceIntegrationTest {
 
@@ -130,25 +127,16 @@ class BankReconServiceIntegrationTest {
     @Test
     void llmValidLedgerIsAssignedAndInvalidIsUnmapped() {
         ensureLedger("Internet Charges", "Indirect Expenses");
-        when(structuredLlmClient.mapBatch(anyString(), anyInt())).thenAnswer(invocation -> {
-            throw new IllegalStateException("captured later");
-        });
+        when(structuredLlmClient.mapBatch(anyString(), anyInt())).thenReturn(
+                LlmBatchResult.complete(List.of(new LedgerMappingResult("1", "Internet Charges"))),
+                LlmBatchResult.complete(List.of(new LedgerMappingResult("1", "Not A Real Ledger"))));
 
         RunResponse first = bankReconService.uploadStatement(csvWithSinglePayment("CLOUD HOSTING AWS"), "tester");
         UUID txId = first.transactions().getFirst().id();
-
-        when(structuredLlmClient.mapBatch(anyString(), anyInt())).thenReturn(LlmBatchResult.complete(List.of(
-                new LedgerMappingResult("1", "Internet Charges"))));
         var tx = transactionRepository.findById(txId).orElseThrow();
-        bankReconService.mapBatchWithLlm(List.of(tx));
-        assertThat(transactionRepository.findById(txId).orElseThrow().getMappedLedger())
-                .isEqualTo("Internet Charges");
-        assertThat(transactionRepository.findById(txId).orElseThrow().getMappingSource())
-                .isEqualTo(MappingSource.LLM);
+        assertThat(tx.getMappedLedger()).isEqualTo("Internet Charges");
+        assertThat(tx.getMappingSource()).isEqualTo(MappingSource.LLM);
 
-        when(structuredLlmClient.mapBatch(anyString(), anyInt())).thenReturn(LlmBatchResult.complete(List.of(
-                new LedgerMappingResult("1", "Not A Real Ledger"))));
-        tx = transactionRepository.findById(txId).orElseThrow();
         tx.setMappedLedger(null);
         tx.setMappingSource(null);
         bankReconService.mapBatchWithLlm(List.of(tx));
@@ -394,14 +382,23 @@ class BankReconServiceIntegrationTest {
     @Test
     void contraRowsStayUnmappedAndAreNotSentToTheLlm() {
         ArgumentCaptor<String> prompts = ArgumentCaptor.forClass(String.class);
-        RunResponse run = bankReconService.uploadStatement(sampleCsv(), "tester");
-        verify(structuredLlmClient, atLeastOnce()).mapBatch(prompts.capture(), anyInt());
-        assertThat(prompts.getAllValues()).noneMatch(prompt -> prompt.contains("NEFT"));
+        RunResponse run = bankReconService.uploadStatement(csvWithContraMarker(), "tester");
         TransactionResponse contra = run.transactions().stream()
-                .filter(t -> t.voucherType() == VoucherType.CONTRA)
+                .filter(t -> t.description().contains("ZZCONTRAMARKER"))
                 .findFirst()
                 .orElseThrow();
+        assertThat(contra.voucherType()).isEqualTo(VoucherType.CONTRA);
         assertThat(contra.mappedLedger()).isNull();
+        assertThat(contra.mappingSource()).isNull();
+        verify(structuredLlmClient, atLeastOnce()).mapBatch(prompts.capture(), anyInt());
+        String contraId = contra.id().toString();
+        assertThat(prompts.getAllValues()).allSatisfy(prompt -> {
+            int section = prompt.indexOf("TRANSACTIONS\n");
+            assertThat(section).isGreaterThanOrEqualTo(0);
+            String sent = prompt.substring(section);
+            assertThat(sent).doesNotContain("ZZCONTRAMARKER");
+            assertThat(sent).doesNotContain(contraId);
+        });
     }
 
     @Test
@@ -548,6 +545,20 @@ class BankReconServiceIntegrationTest {
         if (!exists) {
             bankReconService.addLedger(new CreateLedgerRequest(name, group));
         }
+    }
+
+    private static MockMultipartFile csvWithContraMarker() {
+        String csv = """
+                Account Number,50100123456789
+                From Date,01/08/2026
+                To Date,31/08/2026
+
+                Transaction Date,Transaction Description,Transaction Amount,Debit/Credit,Reference No,Value Date,Transaction Branch,Running Balance
+                01/08/2026,NEFT COGNOLOGIX ZZCONTRAMARKER,10000.00,D,N1,01/08/2026,PUNE,90000.00
+                01/08/2026,UPI-VENDOR PAYMENT XYZ,500.00,D,U2,01/08/2026,PUNE,89500.00
+                01/08/2026,IMPS INWARD ACME LTD,25000.00,C,I3,01/08/2026,PUNE,114500.00
+                """;
+        return multipart("hdfc-contra.csv", csv);
     }
 
     private static MockMultipartFile sampleCsv() {

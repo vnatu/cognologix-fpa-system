@@ -2,7 +2,6 @@ package com.cognologix.fpa.budgeting;
 
 import com.cognologix.fpa.budgeting.domain.*;
 import com.cognologix.fpa.budgeting.repository.*;
-import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.customer.domain.LifecycleStatus;
 import com.cognologix.fpa.customer.repository.CustomerRepository;
@@ -31,7 +30,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -43,7 +41,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-@Import(TestSecurityConfig.class)
 @Testcontainers
 class BudgetingCalculationsIntegrationTest {
 
