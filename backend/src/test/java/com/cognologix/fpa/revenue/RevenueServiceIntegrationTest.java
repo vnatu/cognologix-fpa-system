@@ -1,6 +1,5 @@
 package com.cognologix.fpa.revenue;
 
-import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.customer.domain.LifecycleStatus;
 import com.cognologix.fpa.general.GeneralConfigService;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockMultipartFile;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -32,7 +30,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-@Import(TestSecurityConfig.class)
 @Testcontainers
 class RevenueServiceIntegrationTest {
 

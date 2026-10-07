@@ -1,7 +1,28 @@
-# Disable Spring AI provider auto-config in tests. BankReconAiConfig still
-# constructs Ollama beans from general_config; LLM/embedding calls are stubbed
-# in Bank Reconciliation tests. Other modules never invoke them.
+# This file replaces src/main/resources/application.yml on the test classpath.
+# It must carry every setting the tests need. Datasource comes from Testcontainers
+# @ServiceConnection, not from the dev database. Model URLs point at a closed port
+# so a context can start while oMLX and Ollama are down. Bank reconciliation tests
+# stub the LLM client; nothing here should call a real model.
 spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
+
   ai:
     model:
       chat: none
@@ -16,3 +37,15 @@ spring:
     vectorstore:
       pgvector:
         initialize-schema: false
+
+app:
+  jwt:
+    secret: test-only-jwt-secret-not-a-real-key-0123456789
+    expiration-ms: 7200000
+  public-base-url: http://localhost:3000
+  mail:
+    from: noreply@cognologix.com
+
+bankrecon:
+  llm:
+    trace-enabled: true

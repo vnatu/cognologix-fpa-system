@@ -14,7 +14,6 @@ import com.cognologix.fpa.budgeting.repository.OverheadActualsRepository;
 import com.cognologix.fpa.budgeting.repository.OverheadBudgetRepository;
 import com.cognologix.fpa.budgeting.repository.PeriodActualsRepository;
 import com.cognologix.fpa.budgeting.repository.SalaryBudgetRepository;
-import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.expenses.ExpenseService;
 import com.cognologix.fpa.expenses.dto.ExpenseDtos.ExpenseEntryRequest;
 import com.cognologix.fpa.expenses.repository.ExpenseActualRepository;
@@ -46,7 +45,7 @@ import java.util.concurrent.Executor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-@Import({TestSecurityConfig.class, BudgetingServiceIntegrationTest.SyncAsyncConfig.class})
+@Import(BudgetingServiceIntegrationTest.SyncAsyncConfig.class)
 @Testcontainers
 class BudgetingServiceIntegrationTest {
 

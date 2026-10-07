@@ -1639,4 +1639,25 @@ HDFC internal credits such as `RTGS Cr-…-COGNOLOGIX TECHNOLOGIES…` were clas
 
 ---
 
+## ADR-070: Spring Boot upgrade path — 3.3.2 to 3.5.x, then 4.1.x
+
+**Status:** Accepted — October 2026
+
+**Context**
+The backend parent is Spring Boot 3.3.2. Spring Boot 3.3 went end of life on 30 June 2025. Spring Boot 3.5 goes end of life on 30 June 2026. The Boot 4.0 migration guide says to move to the latest 3.5.x and clear deprecations before 4.0. 4.1.x then removes what 4.0 deprecated. `docs/upgrade-assessment.md` records the dependency and compile trial for this tree.
+
+**Decision**
+Upgrade in two steps. Do not jump from 3.3.2 to 4.1.x.
+
+1. **3.3.2 → 3.5.x.** This step uses parent **3.5.16**, Spring Modulith **1.4.13** (the Boot 3.5 line), and Spring AI BOM **1.1.8**. Testcontainers stays unpinned so the Boot BOM manages it. Spring AI 1.1 removes `OllamaOptions`; chat uses `OllamaChatOptions` and embeddings use `OllamaEmbeddingOptions`. The Ollama non-streaming request interceptor stays on the Ollama `RestClient`.
+2. **3.5.x → 4.1.x.** That step is not in this change. The assessment targets Boot 4.1.1 with Spring AI 2.0.x, Modulith 2.1.x, the Boot 4 starter and Testcontainers renames, and the `@MockBean` replacement. It waits until 3.5.x compiles and the suite is understood.
+
+**Consequences**
+- (+) 3.3.2 is no longer the runtime. The supported line is 3.5 until the 4.1 step.
+- (+) Deprecations on 3.5 are visible before the Boot 4 compile breaks (`@MockBean`, Spring AI 2 client construction).
+- (−) 3.5 itself reaches EOL on 30 June 2026, so the 4.1 step is still required.
+- (−) This step does not rewrite the oMLX `OpenAiApi` client or move springdoc. Those stay with the 4.1 step.
+
+---
+
 *(Further ADRs to be added as decisions are finalized.)*

@@ -8,7 +8,8 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.OllamaEmbeddingModel;
 import org.springframework.ai.ollama.api.OllamaApi;
-import org.springframework.ai.ollama.api.OllamaOptions;
+import org.springframework.ai.ollama.api.OllamaChatOptions;
+import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
@@ -87,7 +88,7 @@ public class BankReconAiConfig {
         } catch (Exception e) {
             return OllamaEmbeddingModel.builder()
                     .ollamaApi(OllamaApi.builder().baseUrl(DEFAULT_OLLAMA_URL).build())
-                    .defaultOptions(OllamaOptions.builder().model(DEFAULT_OLLAMA_EMBED_MODEL).build())
+                    .defaultOptions(OllamaEmbeddingOptions.builder().model(DEFAULT_OLLAMA_EMBED_MODEL).build())
                     .build();
         }
     }
@@ -108,7 +109,7 @@ public class BankReconAiConfig {
             String model = configService.getConfigValue(CFG_CHAT_MODEL).orElse(DEFAULT_OLLAMA_CHAT_MODEL);
             return OllamaChatModel.builder()
                     .ollamaApi(ollamaApi(configService, url))
-                    .defaultOptions(OllamaOptions.builder()
+                    .defaultOptions(OllamaChatOptions.builder()
                             .model(model)
                             .temperature(0.0)
                             .numPredict(2048)
@@ -129,7 +130,7 @@ public class BankReconAiConfig {
             String model = configService.getConfigValue(CFG_EMBED_MODEL).orElse(DEFAULT_OLLAMA_EMBED_MODEL);
             return OllamaEmbeddingModel.builder()
                     .ollamaApi(ollamaApi(configService, url))
-                    .defaultOptions(OllamaOptions.builder().model(model).build())
+                    .defaultOptions(OllamaEmbeddingOptions.builder().model(model).build())
                     .build();
         }
         String url = configService.getConfigValue(CFG_MLX_BASE_URL).orElse(DEFAULT_CHAT_URL);
@@ -200,7 +201,7 @@ public class BankReconAiConfig {
      * unless {@code stream: false} is present. Spring AI 1.0 {@code ChatClient.call()} then
      * fails extracting {@code OllamaApi$ChatResponse}.
      */
-    private static final class NonStreamingChatInterceptor implements ClientHttpRequestInterceptor {
+    static final class NonStreamingChatInterceptor implements ClientHttpRequestInterceptor {
         @Override
         public ClientHttpResponse intercept(
                 HttpRequest request, byte[] body, ClientHttpRequestExecution execution) throws IOException {
