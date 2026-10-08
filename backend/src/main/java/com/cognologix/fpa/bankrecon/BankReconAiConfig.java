@@ -14,7 +14,8 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
+import org.springframework.ai.openai.setup.OpenAiSetup;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -29,11 +30,18 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.web.client.RestClient;
 
+import com.openai.client.OpenAIClient;
+import com.openai.core.Timeout;
+import io.micrometer.observation.ObservationRegistry;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * FinSync model clients (ADR-065). {@code llm_provider} selects Ollama or oMLX.
@@ -70,13 +78,8 @@ public class BankReconAiConfig {
         try {
             return buildChatModel(configService);
         } catch (Exception e) {
-            return OpenAiChatModel.builder()
-                    .openAiApi(OpenAiApi.builder()
-                            .baseUrl(DEFAULT_CHAT_URL)
-                            .apiKey("not-needed")
-                            .build())
-                    .defaultOptions(chatOptions(DEFAULT_CHAT_MODEL))
-                    .build();
+            return openAiChatModel(DEFAULT_CHAT_URL, DEFAULT_CHAT_MODEL, "not-needed",
+                    Duration.ofSeconds(120), 2048);
         }
     }
 
@@ -88,7 +91,7 @@ public class BankReconAiConfig {
         } catch (Exception e) {
             return OllamaEmbeddingModel.builder()
                     .ollamaApi(OllamaApi.builder().baseUrl(DEFAULT_OLLAMA_URL).build())
-                    .defaultOptions(OllamaEmbeddingOptions.builder().model(DEFAULT_OLLAMA_EMBED_MODEL).build())
+                    .options(OllamaEmbeddingOptions.builder().model(DEFAULT_OLLAMA_EMBED_MODEL).build())
                     .build();
         }
     }
@@ -109,7 +112,7 @@ public class BankReconAiConfig {
             String model = configService.getConfigValue(CFG_CHAT_MODEL).orElse(DEFAULT_OLLAMA_CHAT_MODEL);
             return OllamaChatModel.builder()
                     .ollamaApi(ollamaApi(configService, url))
-                    .defaultOptions(OllamaChatOptions.builder()
+                    .options(OllamaChatOptions.builder()
                             .model(model)
                             .temperature(0.0)
                             .numPredict(2048)
@@ -118,10 +121,7 @@ public class BankReconAiConfig {
         }
         String url = configService.getConfigValue(CFG_MLX_BASE_URL).orElse(DEFAULT_CHAT_URL);
         String model = configService.getConfigValue(CFG_MLX_CHAT_MODEL).orElse(DEFAULT_CHAT_MODEL);
-        return OpenAiChatModel.builder()
-                .openAiApi(openAiApi(configService, url))
-                .defaultOptions(chatOptions(model))
-                .build();
+        return openAiChatModel(url, model, apiKey(configService), readTimeout(configService), 2048);
     }
 
     static EmbeddingModel buildEmbeddingModel(GeneralConfigService configService) {
@@ -130,33 +130,18 @@ public class BankReconAiConfig {
             String model = configService.getConfigValue(CFG_EMBED_MODEL).orElse(DEFAULT_OLLAMA_EMBED_MODEL);
             return OllamaEmbeddingModel.builder()
                     .ollamaApi(ollamaApi(configService, url))
-                    .defaultOptions(OllamaEmbeddingOptions.builder().model(model).build())
+                    .options(OllamaEmbeddingOptions.builder().model(model).build())
                     .build();
         }
         String url = configService.getConfigValue(CFG_MLX_BASE_URL).orElse(DEFAULT_CHAT_URL);
         String model = configService.getConfigValue(CFG_MLX_EMBED_MODEL).orElse(DEFAULT_OMLX_EMBED_MODEL);
-        return new OpenAiEmbeddingModel(
-                openAiApi(configService, url),
-                MetadataMode.EMBED,
-                OpenAiEmbeddingOptions.builder().model(model).build());
-    }
-
-    static OpenAiChatOptions chatOptions(String chatModel) {
-        return chatOptions(chatModel, 2048);
+        return openAiEmbeddingModel(url, model, apiKey(configService), readTimeout(configService));
     }
 
     /**
      * Chat options do not send {@code enable_thinking=false}. The call log reports this value.
      */
     static final boolean THINKING_DISABLED = false;
-
-    static OpenAiChatOptions chatOptions(String chatModel, int maxTokens) {
-        return OpenAiChatOptions.builder()
-                .model(chatModel)
-                .temperature(0.0)
-                .maxTokens(maxTokens)
-                .build();
-    }
 
     static String apiKey(GeneralConfigService configService) {
         String key = configService.getConfigValue(CFG_API_KEY).orElse("").trim();
@@ -166,12 +151,116 @@ public class BankReconAiConfig {
         return key;
     }
 
-    private static OpenAiApi openAiApi(GeneralConfigService configService, String baseUrl) {
-        return OpenAiApi.builder()
-                .baseUrl(baseUrl)
-                .apiKey(apiKey(configService))
-                .restClientBuilder(timedRestClient(configService))
+    /**
+     * Spring AI 1.0 appended {@code /v1/chat/completions} and {@code /v1/embeddings} to the
+     * configured base URL. The OpenAI Java SDK treats the base URL as the {@code /v1} root.
+     */
+    static String openAiSdkBaseUrl(String configured) {
+        String trimmed = configured == null ? "" : configured.trim();
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        if (trimmed.endsWith("/v1")) {
+            return trimmed;
+        }
+        return trimmed + "/v1";
+    }
+
+    static Duration readTimeout(GeneralConfigService configService) {
+        int seconds = parseInt(configService.getConfigValue(CFG_TIMEOUT).orElse("120"), 120);
+        if (seconds <= 0) {
+            seconds = 120;
+        }
+        return Duration.ofSeconds(seconds);
+    }
+
+    static ChatModel openAiChatModel(
+            String configuredBaseUrl, String model, String key, Duration readTimeout, int maxTokens) {
+        OpenAiHttpClientBuilderCustomizer customizer = openAiCustomizer(readTimeout);
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .baseUrl(openAiSdkBaseUrl(configuredBaseUrl))
+                .apiKey(key)
+                .model(model)
+                .temperature(0.0)
+                .maxTokens(maxTokens)
+                .timeout(readTimeout)
+                .maxRetries(0)
                 .build();
+        return OpenAiChatModel.builder()
+                .openAiClient(openAiClient(options.getBaseUrl(), options.getApiKey(), options.getModel(),
+                        options.getTimeout(), options.getMaxRetries(), customizer))
+                .options(options)
+                .httpClientBuilderCustomizer(customizer)
+                .build();
+    }
+
+    static EmbeddingModel openAiEmbeddingModel(
+            String configuredBaseUrl, String model, String key, Duration readTimeout) {
+        OpenAiHttpClientBuilderCustomizer customizer = openAiCustomizer(readTimeout);
+        OpenAiEmbeddingOptions options = OpenAiEmbeddingOptions.builder()
+                .baseUrl(openAiSdkBaseUrl(configuredBaseUrl))
+                .apiKey(key)
+                .model(model)
+                .timeout(readTimeout)
+                .maxRetries(0)
+                .build();
+        return OpenAiEmbeddingModel.builder()
+                .openAiClient(openAiClient(options.getBaseUrl(), options.getApiKey(), options.getModel(),
+                        options.getTimeout(), options.getMaxRetries(), customizer))
+                .metadataMode(MetadataMode.EMBED)
+                .options(options)
+                .httpClientBuilderCustomizer(customizer)
+                .build();
+    }
+
+    private static OpenAIClient openAiClient(
+            String sdkBaseUrl,
+            String key,
+            String model,
+            Duration readTimeout,
+            int maxRetries,
+            OpenAiHttpClientBuilderCustomizer customizer) {
+        return OpenAiSetup.setupSyncClient(
+                sdkBaseUrl,
+                key,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                model,
+                readTimeout,
+                maxRetries,
+                null,
+                null,
+                ObservationRegistry.NOOP,
+                null,
+                List.of(customizer));
+    }
+
+    /**
+     * Connect is 10 seconds, so a dead oMLX host does not hold the call for a minute.
+     * {@code RequestOptions.timeout(Duration)} leaves connect unset, and {@code Timeout.connect()}
+     * then defaults to one minute and replaces the builder timeout on each call.
+     * {@code withConnectTimeout} puts the 10 second limit on the call itself.
+     * The read timeout is the configured request timeout.
+     * The interceptor records the response body for the redacted call log.
+     */
+    static OpenAiHttpClientBuilderCustomizer openAiCustomizer(Duration readTimeout) {
+        long seconds = readTimeout == null ? 120 : readTimeout.getSeconds();
+        Duration connect = Duration.ofSeconds(10);
+        Duration read = Duration.ofSeconds(Math.max(seconds, 1));
+        return builder -> builder
+                .timeout(Timeout.builder().connect(connect).read(read).write(read).request(read).build())
+                .interceptor(chain -> {
+                    Response response = chain.withConnectTimeout(10, TimeUnit.SECONDS).proceed(chain.request());
+                    ResponseBody responseBody = response.body();
+                    byte[] bytes = responseBody == null ? new byte[0] : responseBody.bytes();
+                    okhttp3.MediaType mediaType = responseBody == null ? null : responseBody.contentType();
+                    LlmHttpCapture.record(response.code(), new String(bytes, StandardCharsets.UTF_8));
+                    return response.newBuilder().body(ResponseBody.create(bytes, mediaType)).build();
+                });
     }
 
     private static OllamaApi ollamaApi(GeneralConfigService configService, String baseUrl) {

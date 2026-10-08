@@ -37,10 +37,6 @@ spring:
     openai:
       api-key: not-needed
       base-url: http://localhost:9000
-      chat:
-        options:
-          model: mlx-community/Qwen3.6-35B-A3B-4bit
-          temperature: 0.0
     # Embedding still via Ollama
     ollama:
       base-url: http://localhost:11434

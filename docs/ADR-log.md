@@ -1639,7 +1639,7 @@ HDFC internal credits such as `RTGS Cr-…-COGNOLOGIX TECHNOLOGIES…` were clas
 
 ---
 
-## ADR-070: Spring Boot upgrade path — 3.3.2 to 3.5.x, then 4.1.x
+## ADR-070: Spring Boot upgrade path — 3.3.2 to 3.5.16, then 4.1.1
 
 **Status:** Accepted — October 2026
 
@@ -1649,14 +1649,31 @@ The backend parent is Spring Boot 3.3.2. Spring Boot 3.3 went end of life on 30 
 **Decision**
 Upgrade in two steps. Do not jump from 3.3.2 to 4.1.x.
 
-1. **3.3.2 → 3.5.x.** This step uses parent **3.5.16**, Spring Modulith **1.4.13** (the Boot 3.5 line), and Spring AI BOM **1.1.8**. Testcontainers stays unpinned so the Boot BOM manages it. Spring AI 1.1 removes `OllamaOptions`; chat uses `OllamaChatOptions` and embeddings use `OllamaEmbeddingOptions`. The Ollama non-streaming request interceptor stays on the Ollama `RestClient`.
-2. **3.5.x → 4.1.x.** That step is not in this change. The assessment targets Boot 4.1.1 with Spring AI 2.0.x, Modulith 2.1.x, the Boot 4 starter and Testcontainers renames, and the `@MockBean` replacement. It waits until 3.5.x compiles and the suite is understood.
+1. **3.3.2 → 3.5.16.** Parent **3.5.16**, Spring Modulith **1.4.13**, Spring AI BOM **1.1.8**. Chat uses `OllamaChatOptions` and embeddings use `OllamaEmbeddingOptions`. The Ollama non-streaming request interceptor stays on the Ollama `RestClient`.
+2. **3.5.16 → 4.1.1.** Parent **4.1.1**, Spring Modulith **2.1.1**, Spring AI BOM **2.0.1**, springdoc **3.1.1**. `spring-boot-starter-web` becomes `spring-boot-starter-webmvc`. `flyway-core` becomes `spring-boot-starter-flyway`, and `flyway-database-postgresql` stays. Tests use `spring-boot-starter-webmvc-test` and `spring-boot-starter-security-test`. Testcontainers artifacts are `testcontainers-junit-jupiter` and `testcontainers-postgresql`. `@MockBean` is `@MockitoBean`. The five tests that autowired Jackson 2 `ObjectMapper` autowire Jackson 3 `JsonMapper`. JWT payload decoding in the auth test still uses Jackson 2, which is what `jjwt-jackson` 0.12.6 brings.
+
+The oMLX path builds an `OpenAIClient` through `OpenAiSetup.setupSyncClient`, passes it to `OpenAiChatModel` / `OpenAiEmbeddingModel` with `.options(...)` and `httpClientBuilderCustomizer`, and passes option builders into `ChatClient`. The configured base URL is given to the SDK as a `/v1` root so calls still go to `/v1/chat/completions` and `/v1/embeddings`. Each call still reads base URL, model, and API key from `general_config`. The read timeout is `ollama_request_timeout_seconds`. The OpenAI customizer sets a 10 second connect timeout on the client and again on the call, because `RequestOptions.timeout(Duration)` leaves connect unset and `Timeout.connect()` would otherwise stay at one minute. The OkHttp customizer records the response body for the existing redacted trace. Ollama keeps `OllamaChatOptions`, `OllamaEmbeddingOptions`, and the non-streaming `RestClient` interceptor. Prompt text and `MappingResponseParser` are unchanged. Chat options still do not send `enable_thinking=false`.
+
+`spring-boot-properties-migrator` 4.1.1 was on the classpath for one full `mvn test` (215 tests, 0 failures) and printed no renamed or removed property. It was then removed. Boot keys in both YAML files (`spring.servlet.multipart`, `spring.datasource`, `spring.jpa`, `spring.flyway`) were not reported. `spring.ai.openai.chat.options.model` and `spring.ai.openai.chat.options.temperature` were removed from `application.yml`. No application code reads them. `OpenAiChatAutoConfiguration` binds `OpenAiChatProperties` only when `spring.ai.model.chat` is `openai`, and this app sets `none`. The chat model name comes from `general_config` (`mlx_chat_model`, seeded by V37) and the call sets temperature to 0.0 in code.
+
+Capability checks for the 2.0.1 OpenAI path, from `OpenAiPathCapabilityTest` against a local HTTP server:
+
+| Capability | Result | Evidence | Effort to use it |
+| --- | --- | --- | --- |
+| Send `chat_template_kwargs: {"enable_thinking": false}` | Yes | `extraBodyFieldIsSentOnTheWire` captured that object in the JSON body | Set `OpenAiChatOptions.extraBody`. Not set in production. The call log still reports `thinkingDisabled=false`. |
+| Force `stream: false` | Yes, through `extraBody` | A normal non-streaming call sent `{"messages":[...],"model":"stream-model","max_tokens":16,"temperature":0.0}` with no `stream` field. `extraBody` `stream: false` put `"stream":false` on the wire | One `extraBody` entry if oMLX requires the field. Production does not add it. The Ollama interceptor still forces `stream: false`. |
+| Log the real request and response bodies with the API key redacted | Yes | An OkHttp interceptor read the same request body the server received. `LlmHttpCapture` stored the response. `LlmTrace.redact` removed `Bearer sk-redact-this-key-value` and left `[redacted]` | The response capture is in the production customizer. Request-body logging is the same interceptor hook and is not added to the trace. The trace still logs the prompt text. |
+| Set a read timeout | Yes | `timeout` of 1 second aborted a handler that slept 5 seconds in under 4 seconds | Wired from `ollama_request_timeout_seconds` via `options.timeout` and the customizer. Connect is a fixed 10 seconds on the call, because `RequestOptions.timeout(Duration)` sets only the request budget and `Timeout.connect()` would otherwise stay at one minute. |
+| Embeddings against a custom base URL with an API key | Yes | `POST /v1/embeddings` carried `Bearer sk-embed-key` and model `embed-model`, and `embed` returned `[0.25, 0.5]` | Already how `buildEmbeddingModel` works. |
+| Change base URL, model, and key at runtime without a restart | Yes | After the config map changed, a second `buildChatModel` hit a different port with `sk-second-key` and `model-second` | Already how `mapBatch` rebuilds the client from `general_config`. |
+
+Hibernate 7.4.5 on Postgres 16, in `Hibernate7PostgresTest`: both `select new` queries returned document metadata, `Contract.reminderDaysOverride` round-tripped as `integer[]`, and the payroll generated columns reloaded as employer contributions 15.00 (VPF excluded), payroll cost 115.00, and master total payroll cost 100.00. `AuthAndUserManagementIntegrationTest` logged in and parsed the JWT with JJWT on Jackson 2. `FpaApplicationTests` loaded the context and `GET /v3/api-docs` returned an OpenAPI document on springdoc 3.1.1.
 
 **Consequences**
-- (+) 3.3.2 is no longer the runtime. The supported line is 3.5 until the 4.1 step.
-- (+) Deprecations on 3.5 are visible before the Boot 4 compile breaks (`@MockBean`, Spring AI 2 client construction).
-- (−) 3.5 itself reaches EOL on 30 June 2026, so the 4.1 step is still required.
-- (−) This step does not rewrite the oMLX `OpenAiApi` client or move springdoc. Those stay with the 4.1 step.
+- (+) The runtime is Spring Boot 4.1.1, Spring AI 2.0.1, and Spring Modulith 2.1.1.
+- (+) Base URL, model, API key, read timeout, redacted trace logging, and the Ollama non-streaming interceptor behave as they did on 3.5.16.
+- (+) A dead oMLX host fails the OpenAI connect in 10 seconds.
+- (−) A non-streaming OpenAI call omits `stream`. oMLX sees that as its own default unless `extraBody` is set later.
 
 ---
 

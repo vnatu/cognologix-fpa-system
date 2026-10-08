@@ -18,7 +18,7 @@ public class BankReconExceptionHandler {
 
     @ExceptionHandler(UnmappedAccountException.class)
     public ResponseEntity<Map<String, String>> unmappedAccount(UnmappedAccountException ex) {
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
                 .body(Map.of("message", ex.getMessage() != null ? ex.getMessage() : "Account is not mapped"));
     }
 

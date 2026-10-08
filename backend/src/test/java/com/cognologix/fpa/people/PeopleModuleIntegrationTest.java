@@ -1,7 +1,7 @@
 package com.cognologix.fpa.people;
 
 import com.cognologix.fpa.customer.CustomerService;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.modulith.test.ApplicationModuleTest;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -22,6 +22,6 @@ abstract class PeopleModuleIntegrationTest {
     }
 
     /** Cross-module dependency — mocked so the people slice does not need the customer module. */
-    @MockBean
+    @MockitoBean
     CustomerService customerService;
 }

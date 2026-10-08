@@ -3,6 +3,7 @@ package com.cognologix.fpa;
 import org.junit.jupiter.api.Test;
 import org.springframework.modulith.core.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.core.DependencyDepth;
 import org.springframework.modulith.core.DependencyType;
 
 import java.util.Set;
@@ -18,7 +19,7 @@ class ModularityTest {
         modules.verify();
 
         Set<String> names = modules.stream()
-                .map(ApplicationModule::getName)
+                .map(module -> module.getIdentifier().toString())
                 .collect(Collectors.toSet());
 
         assertThat(names)
@@ -32,7 +33,7 @@ class ModularityTest {
         ApplicationModules modules = ApplicationModules.of(FpaApplication.class);
         ApplicationModule budgeting = modules.getModuleByName("budgeting").orElseThrow();
 
-        assertThat(budgeting.getDependencies(modules, DependencyType.USES_COMPONENT)
+        assertThat(budgeting.getDependencies(modules, DependencyDepth.IMMEDIATE, DependencyType.USES_COMPONENT)
                 .containsModuleNamed("revenue"))
                 .as("Budgeting must depend on Revenue in-process for actual revenue figures (ADR-043)")
                 .isTrue();
@@ -43,7 +44,7 @@ class ModularityTest {
         ApplicationModules modules = ApplicationModules.of(FpaApplication.class);
         ApplicationModule budgeting = modules.getModuleByName("budgeting").orElseThrow();
 
-        assertThat(budgeting.getDependencies(modules, DependencyType.USES_COMPONENT)
+        assertThat(budgeting.getDependencies(modules, DependencyDepth.IMMEDIATE, DependencyType.USES_COMPONENT)
                 .containsModuleNamed("expenses"))
                 .as("Budgeting must depend on Expenses in-process for overhead actuals (ADR-050)")
                 .isTrue();

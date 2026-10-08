@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
@@ -62,8 +62,8 @@ class BankReconServiceIntegrationTest {
     @Autowired LearnedMappingRepository learnedMappingRepository;
     @Autowired JdbcTemplate jdbcTemplate;
 
-    @MockBean StructuredLlmClient structuredLlmClient;
-    @MockBean NarrationEmbedder narrationEmbedder;
+    @MockitoBean StructuredLlmClient structuredLlmClient;
+    @MockitoBean NarrationEmbedder narrationEmbedder;
 
     @BeforeEach
     void stubs() {
