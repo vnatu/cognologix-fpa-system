@@ -95,6 +95,7 @@ public record PeriodFinalisedEvent(
     }
 
     /** @deprecated Prefer {@link #empty(UUID, int, int)} with period month/year. */
+    @Deprecated
     public static PeriodFinalisedEvent empty(UUID periodVersionId) {
         return empty(periodVersionId, 1, 1970);
     }

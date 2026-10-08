@@ -1,16 +1,17 @@
 package com.cognologix.fpa.people;
 
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.people.domain.ImportColumnMapping;
 import com.cognologix.fpa.people.domain.ImportType;
 import com.cognologix.fpa.people.domain.PeriodStatus;
 import com.cognologix.fpa.people.dto.SnapshotDetailResponse;
 import com.cognologix.fpa.people.dto.SnapshotUploadMetadataResponse;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
@@ -21,18 +22,21 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+@AutoConfigureMockMvc
 @WebMvcTest(controllers = {ImportController.class, PeopleExceptionHandler.class})
 @Import(TestSecurityConfig.class)
 class ImportControllerTest {
 
     @Autowired MockMvc mockMvc;
-    @Autowired ObjectMapper objectMapper;
-    @MockBean PeoplePayrollService peoplePayrollService;
-    @MockBean ExcelSnapshotParser excelSnapshotParser;
+    @Autowired JsonMapper objectMapper;
+    @MockitoBean PeoplePayrollService peoplePayrollService;
+    @MockitoBean ExcelSnapshotParser excelSnapshotParser;
 
     @Test
     void createMapping_returnsCreated() throws Exception {
@@ -56,6 +60,19 @@ class ImportControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.importType").value("ZOHO_PEOPLE"))
                 .andExpect(jsonPath("$.templateName").value("Default People"));
+    }
+
+    @Test
+    void createMapping_invalidLine_returns400() throws Exception {
+        var body = """
+                {"importType":"ZOHO_PEOPLE","templateName":"Default People",
+                 "lines":[{"excelColumnName":"","systemAttribute":"EmployeeID"}]}
+                """;
+        mockMvc.perform(post("/api/people/imports/mappings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+        verify(peoplePayrollService, never()).saveMappingTemplate(any(), any(), any());
     }
 
     @Test

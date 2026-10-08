@@ -4,14 +4,14 @@ import com.cognologix.fpa.customer.CustomerService;
 import com.cognologix.fpa.people.domain.PeriodStatus;
 import com.cognologix.fpa.people.domain.ReconciliationStatus;
 import com.cognologix.fpa.people.domain.SystemAttribute;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -49,9 +49,9 @@ class PeoplePayrollEndToEndIntegrationTest {
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
     @Autowired MockMvc mockMvc;
-    @Autowired ObjectMapper objectMapper;
+    @Autowired JsonMapper objectMapper;
 
-    @MockBean CustomerService customerService;
+    @MockitoBean CustomerService customerService;
 
     @Test
     void uploadViaHttp_buildMaster_finalise_publishesEvent(ApplicationEvents events) throws Exception {

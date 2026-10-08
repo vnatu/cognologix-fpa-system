@@ -1,12 +1,41 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+    <!-- Replaces base.xml: Boot defaults and the console appender only -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <property name="LOG_DIR" value="${LOG_DIR:-./logs}"/>
+
+    <!-- Everything the console shows -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/fpa-backend.log</file>
+        <encoder><pattern>${FILE_LOG_PATTERN}</pattern></encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/fpa-backend.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- WARN and above only -->
+    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/fpa-error.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter"><level>WARN</level></filter>
+        <encoder><pattern>${FILE_LOG_PATTERN}</pattern></encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/fpa-error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
 
     <!-- Request and response bodies only. Summary lines stay on the main log. -->
     <appender name="LLM_TRACE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/llm-trace.log</file>
+        <file>${LOG_DIR}/llm-trace.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
-            <fileNamePattern>logs/llm-trace.%i.log</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/llm-trace.%i.log</fileNamePattern>
             <minIndex>1</minIndex>
             <maxIndex>7</maxIndex>
         </rollingPolicy>
@@ -21,4 +50,10 @@
     <logger name="llm.trace" level="INFO" additivity="false">
         <appender-ref ref="LLM_TRACE"/>
     </logger>
-</configuration>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </root>
+</configuration>

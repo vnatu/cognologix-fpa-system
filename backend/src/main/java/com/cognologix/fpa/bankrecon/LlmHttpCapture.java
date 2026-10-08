@@ -26,6 +26,10 @@ final class LlmHttpCapture implements ClientHttpRequestInterceptor {
         LAST.remove();
     }
 
+    static void record(int status, String body) {
+        LAST.set(new Snapshot(status, body == null ? "" : body));
+    }
+
     static Snapshot take() {
         Snapshot snapshot = LAST.get();
         LAST.remove();

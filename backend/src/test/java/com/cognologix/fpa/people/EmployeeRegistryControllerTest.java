@@ -1,11 +1,12 @@
 package com.cognologix.fpa.people;
 
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.people.domain.ExitStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -17,12 +18,13 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+@AutoConfigureMockMvc
 @WebMvcTest(EmployeeRegistryController.class)
 @Import(TestSecurityConfig.class)
 class EmployeeRegistryControllerTest {
 
     @Autowired MockMvc mockMvc;
-    @MockBean PeoplePayrollService peoplePayrollService;
+    @MockitoBean PeoplePayrollService peoplePayrollService;
 
     @Test
     void listRegistry_returnsOk() throws Exception {

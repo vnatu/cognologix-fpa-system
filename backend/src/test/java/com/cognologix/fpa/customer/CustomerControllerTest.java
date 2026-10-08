@@ -1,13 +1,14 @@
 package com.cognologix.fpa.customer;
 
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import com.cognologix.fpa.config.TestSecurityConfig;
 import com.cognologix.fpa.customer.domain.*;
 import com.cognologix.fpa.customer.dto.CustomerDetailResponse;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -21,16 +22,19 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+@AutoConfigureMockMvc
 @WebMvcTest(CustomerController.class)
 @Import(TestSecurityConfig.class)
 class CustomerControllerTest {
 
     @Autowired MockMvc mockMvc;
-    @Autowired ObjectMapper objectMapper;
-    @MockBean CustomerService customerService;
+    @Autowired JsonMapper objectMapper;
+    @MockitoBean CustomerService customerService;
 
     private Customer sampleCustomer() {
         var c = new Customer();
@@ -137,6 +141,37 @@ class CustomerControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.name").value("FY2526 Standard"))
                 .andExpect(jsonPath("$.currency").value("INR"));
+    }
+
+    @Test
+    void createRateCard_invalidLine_returns400() throws Exception {
+        var id = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        var body = """
+                {"name":"FY2526 Standard","rateCardType":"FLAT","currency":"INR",
+                 "effectiveFrom":"2026-04-01","lines":[{"rateAmount":0}]}
+                """;
+        mockMvc.perform(post("/api/customers/{id}/rate-cards", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+        verify(customerService, never()).createRateCard(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void updateRateCard_invalidLine_returns400() throws Exception {
+        var id = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        var rateCardId = UUID.randomUUID();
+        var body = """
+                {"effectiveTo":"2026-03-31","effectiveFrom":"2026-04-01",
+                 "name":"FY2526 Standard","rateCardType":"FLAT","currency":"INR",
+                 "lines":[{"jobLevel":"L1"}]}
+                """;
+        mockMvc.perform(put("/api/customers/{id}/rate-cards/{rateCardId}", id, rateCardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+        verify(customerService, never()).updateRateCard(
+                any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

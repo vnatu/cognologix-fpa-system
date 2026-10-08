@@ -8,6 +8,7 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
@@ -74,16 +75,16 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
         LlmHttpCapture.clear();
         long started = System.nanoTime();
         try {
-            ChatResponse response = ChatClient.builder(chatModel).build()
-                    .prompt()
-                    .user(prompt)
-                    .options(ollama
-                            ? OllamaChatOptions.builder()
-                                    .model(endpoint.model())
-                                    .temperature(0.0)
-                                    .numPredict(maxTokens)
-                                    .build()
-                            : BankReconAiConfig.chatOptions(endpoint.model(), maxTokens))
+            var request = ChatClient.builder(chatModel).build().prompt().user(prompt);
+            ChatResponse response = (ollama
+                    ? request.options(OllamaChatOptions.builder()
+                            .model(endpoint.model())
+                            .temperature(0.0)
+                            .numPredict(maxTokens))
+                    : request.options(OpenAiChatOptions.builder()
+                            .model(endpoint.model())
+                            .temperature(0.0)
+                            .maxTokens(maxTokens)))
                     .call()
                     .chatResponse();
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
