@@ -1597,7 +1597,7 @@ Cognologix keeps client contracts in a shared folder. Finance needs a searchable
 
 ## ADR-068: Bank Reconciliation account mapping, ledger hints, and prompt prefix
 
-**Status:** Accepted — October 2026
+**Status:** Accepted — October 2026. Points 5–7 are superseded by ADR-071 for the catalog split, exact-name acceptance, token ceiling, truncation retry, and thinking log field.
 
 **Context**
 Export used the first `is_bank_account` ledger it found, so an HDFC statement could be credited to Deutsche Bank. Learned mappings had no confirmed amount, and the mapping prompt mixed per-run examples into the middle of the catalog, so MLX could not reuse a cached prefix. `docs/Cognologix_BankReconciliation_RequirementsSpec_v1.0.md` is still not in the repo; this follows ADR-065 and ADR-066. `amount_min` / `amount_max` are not on `learned_mapping`. Async run processing is not in the service. There was no token-budget split; this ADR adds one.
@@ -1652,7 +1652,7 @@ Upgrade in two steps. Do not jump from 3.3.2 to 4.1.x.
 1. **3.3.2 → 3.5.16.** Parent **3.5.16**, Spring Modulith **1.4.13**, Spring AI BOM **1.1.8**. Chat uses `OllamaChatOptions` and embeddings use `OllamaEmbeddingOptions`. The Ollama non-streaming request interceptor stays on the Ollama `RestClient`.
 2. **3.5.16 → 4.1.1.** Parent **4.1.1**, Spring Modulith **2.1.1**, Spring AI BOM **2.0.1**, springdoc **3.1.1**. `spring-boot-starter-web` becomes `spring-boot-starter-webmvc`. `flyway-core` becomes `spring-boot-starter-flyway`, and `flyway-database-postgresql` stays. Tests use `spring-boot-starter-webmvc-test` and `spring-boot-starter-security-test`. Testcontainers artifacts are `testcontainers-junit-jupiter` and `testcontainers-postgresql`. `@MockBean` is `@MockitoBean`. The five tests that autowired Jackson 2 `ObjectMapper` autowire Jackson 3 `JsonMapper`. JWT payload decoding in the auth test still uses Jackson 2, which is what `jjwt-jackson` 0.12.6 brings.
 
-The oMLX path builds an `OpenAIClient` through `OpenAiSetup.setupSyncClient`, passes it to `OpenAiChatModel` / `OpenAiEmbeddingModel` with `.options(...)` and `httpClientBuilderCustomizer`, and passes option builders into `ChatClient`. The configured base URL is given to the SDK as a `/v1` root so calls still go to `/v1/chat/completions` and `/v1/embeddings`. Each call still reads base URL, model, and API key from `general_config`. The read timeout is `ollama_request_timeout_seconds`. The OpenAI customizer sets a 10 second connect timeout on the client and again on the call, because `RequestOptions.timeout(Duration)` leaves connect unset and `Timeout.connect()` would otherwise stay at one minute. The OkHttp customizer records the response body for the existing redacted trace. Ollama keeps `OllamaChatOptions`, `OllamaEmbeddingOptions`, and the non-streaming `RestClient` interceptor. Prompt text and `MappingResponseParser` are unchanged. Chat options still do not send `enable_thinking=false`.
+The oMLX path builds an `OpenAIClient` through `OpenAiSetup.setupSyncClient`, passes it to `OpenAiChatModel` / `OpenAiEmbeddingModel` with `.options(...)` and `httpClientBuilderCustomizer`, and passes option builders into `ChatClient`. The configured base URL is given to the SDK as a `/v1` root so calls still go to `/v1/chat/completions` and `/v1/embeddings`. Each call still reads base URL, model, and API key from `general_config`. The read timeout is `ollama_request_timeout_seconds`. The OpenAI customizer sets a 10 second connect timeout on the client and again on the call, because `RequestOptions.timeout(Duration)` leaves connect unset and `Timeout.connect()` would otherwise stay at one minute. The OkHttp customizer records the response body for the existing redacted trace. Ollama keeps `OllamaChatOptions`, `OllamaEmbeddingOptions`, and the non-streaming `RestClient` interceptor. Prompt text and `MappingResponseParser` are unchanged by this upgrade. Chat options did not send `enable_thinking=false`; ADR-071 turns thinking off by default through `extraBody`.
 
 `spring-boot-properties-migrator` 4.1.1 was on the classpath for one full `mvn test` (215 tests, 0 failures) and printed no renamed or removed property. It was then removed. Boot keys in both YAML files (`spring.servlet.multipart`, `spring.datasource`, `spring.jpa`, `spring.flyway`) were not reported. `spring.ai.openai.chat.options.model` and `spring.ai.openai.chat.options.temperature` were removed from `application.yml`. No application code reads them. `OpenAiChatAutoConfiguration` binds `OpenAiChatProperties` only when `spring.ai.model.chat` is `openai`, and this app sets `none`. The chat model name comes from `general_config` (`mlx_chat_model`, seeded by V37) and the call sets temperature to 0.0 in code.
 
@@ -1660,7 +1660,7 @@ Capability checks for the 2.0.1 OpenAI path, from `OpenAiPathCapabilityTest` aga
 
 | Capability | Result | Evidence | Effort to use it |
 | --- | --- | --- | --- |
-| Send `chat_template_kwargs: {"enable_thinking": false}` | Yes | `extraBodyFieldIsSentOnTheWire` captured that object in the JSON body | Set `OpenAiChatOptions.extraBody`. Not set in production. The call log still reports `thinkingDisabled=false`. |
+| Send `chat_template_kwargs: {"enable_thinking": false}` | Yes | `extraBodyFieldIsSentOnTheWire` captured that object in the JSON body | Set `OpenAiChatOptions.extraBody`. ADR-071 sends it when `llm_thinking_enabled` is false. |
 | Force `stream: false` | Yes, through `extraBody` | A normal non-streaming call sent `{"messages":[...],"model":"stream-model","max_tokens":16,"temperature":0.0}` with no `stream` field. `extraBody` `stream: false` put `"stream":false` on the wire | One `extraBody` entry if oMLX requires the field. Production does not add it. The Ollama interceptor still forces `stream: false`. |
 | Log the real request and response bodies with the API key redacted | Yes | An OkHttp interceptor read the same request body the server received. `LlmHttpCapture` stored the response. `LlmTrace.redact` removed `Bearer sk-redact-this-key-value` and left `[redacted]` | The response capture is in the production customizer. Request-body logging is the same interceptor hook and is not added to the trace. The trace still logs the prompt text. |
 | Set a read timeout | Yes | `timeout` of 1 second aborted a handler that slept 5 seconds in under 4 seconds | Wired from `ollama_request_timeout_seconds` via `options.timeout` and the customizer. Connect is a fixed 10 seconds on the call, because `RequestOptions.timeout(Duration)` sets only the request budget and `Timeout.connect()` would otherwise stay at one minute. |
@@ -1674,6 +1674,71 @@ Hibernate 7.4.5 on Postgres 16, in `Hibernate7PostgresTest`: both `select new` q
 - (+) Base URL, model, API key, read timeout, redacted trace logging, and the Ollama non-streaming interceptor behave as they did on 3.5.16.
 - (+) A dead oMLX host fails the OpenAI connect in 10 seconds.
 - (−) A non-streaming OpenAI call omits `stream`. oMLX sees that as its own default unless `extraBody` is set later.
+
+---
+
+## ADR-071: One ledger catalog, thinking off, and a bounded LLM mapping call
+
+**Status:** Accepted — October 2026
+
+**Context**
+Replaying a logged oMLX call showed that thinking on a 10-row batch took about 34 seconds and about 2,900 output tokens. The 900-token ceiling (`40 * rows + 500`) cut the reply off with no answer. The same call with `enable_thinking: false` took about 4 seconds and 266 tokens. The Payment catalog was Liability and Expense and the Receipt catalog was Asset and Income, so an asset ledger such as `Salary Advance - …` never appeared for a payment row. ADR-068 points 5–7 and the ADR-070 note that production does not send `enable_thinking=false` are superseded here. Examples, embeddings, and the upload parse/classify path stay as they are. The pipeline stays synchronous.
+
+**Decision**
+1. Flyway **V41** adds `llm_thinking_enabled` (default `false`), `llm_max_tokens_base` (500), `llm_max_tokens_per_row` (40), `llm_max_tokens_base_thinking` (1000), `llm_max_tokens_per_row_thinking` (400), and `llm_batch_size` (20). `ollama_batch_size` stays in the table and is no longer read. The same migration adds `recon_run.processing_error`, `recon_transaction.llm_name_resolution`, and `recon_transaction.review_tag`. LLM Settings shows the thinking switch for oMLX and the four token ceilings. Values are read when the call is made.
+2. When thinking is off, the OpenAI chat options send `chat_template_kwargs: {"enable_thinking": false}` through `extraBody`. When it is on, that body is omitted. The before-call log line reports the real `thinkingEnabled` value. There is no `/no_think` handling.
+3. Every Payment and Receipt row sees one catalog. Exclusions stay: Bank Accounts, Credit Cards, groups whose names start with Bank OD, and ledgers named in an account mapping. Order stays group name then ledger name. A line stays `Ledger Name | keywords | purpose | typical amount | note`, omitting empty parts. Each transaction line still carries its voucher type and its examples.
+4. The system message is, in order: the instruction, the output format stated once (a bare JSON array of `{"transactionId": <int>, "ledgerName": "<exact catalog name or UNMAPPED>"}` with nothing before or after it), the matching rules, the full catalog, then Finance's transaction hints. The user message is only the transactions. The catalog hash logged on each call is the catalog body, so editing a hint does not change it.
+5. A returned name is kept when it matches a catalog entry exactly. Otherwise it matches after normalising case, punctuation, spaces, and the words Ltd/Limited and Pvt/Private. Otherwise a single close candidate (normalised edit distance at most 2) is accepted. Several matches leave the row unmapped and set `review_tag` to `AMBIGUOUS`. `llm_name_resolution` records `EXACT` or `RESOLVED`.
+6. The completion ceiling is base plus per-row times the row count, using the thinking pair when thinking is on. Batches run one after another at `llm_batch_size`. Each batch is saved when it finishes. A failed batch records its error on the run, leaves only its own rows unmapped, and the later batches still run.
+7. Only the reply content is parsed. `id` or `transactionId`, `ledger` or `ledgerName`, and a `{"mappings":[...]}` wrapper are accepted. When `finish_reason` is `length`, parsed rows are kept and the rest are sent once more with the ceiling doubled. If that retry is also `length` or does not reply, `recon_run.processing_error` is `LLM response truncated`. Up to five rejected rows are logged in full at WARN with id, returned name, and reason. If rows came back and every one was rejected, the run shows `LLM returned rows but none were accepted`.
+8. The review Mapped Ledger dropdown searches every ledger for Payment and Receipt. Contra still searches bank accounts and excludes the run's own bank. `GET` ledgers with an explicit voucher type keeps the previous nature filter.
+
+**Consequences**
+- (+) A payment row can be mapped to an asset ledger, and a 10-row call with thinking off fits the default ceiling.
+- (+) A truncated or failed batch no longer drops the mappings from the other batches.
+- (−) A name within two edits of exactly one catalog entry is accepted even when the model shortened it.
+- (−) The ledger list API still filters by voucher type when the caller passes one. Only the review dropdown stops sending Payment and Receipt.
+
+---
+
+## ADR-072: Ledger Master Excel export
+
+**Status:** Accepted — October 2026
+
+**Context**
+Finance needs the ledger list, including hint text, as a spreadsheet. The list already filters by search text, voucher type, an excluded ledger name, and whether a hint exists. It does not filter by group or active flag. `ReportExcelSupport` owns the report header style, but it is package-private in `reports`, and bank reconciliation may depend only on `general` and `people`.
+
+**Decision**
+1. `GET /api/bank-recon/ledgers/export` takes the same filters as `GET /api/bank-recon/ledgers` except page and size. Admin and Viewer can both call it. The file is `ledger-master-YYYY-MM-DD.xlsx`.
+2. One sheet, `Ledger Master`, sorted by group then ledger name. Columns are Ledger Name, Group, Accounting Nature, Bank Account, Active, Has Hint, Purpose, Keywords, Typical Amount, Disambiguation Note, and Hint Updated. Yes/No cells use those words. A ledger with no hint leaves the hint columns blank and Hint Updated empty.
+3. The header uses the report header style: orange `#F68C45`, white bold 11-point, centred, thin border. The header row is frozen, the sheet has an autofilter, and columns have fixed widths. Ledger names and hint text are shared-string cells with the Excel text format `@`.
+4. The Ledger Master toolbar downloads that file for the search and hint filter currently applied. The request goes through the existing API client so the JWT stays in the header, and the saved name comes from `Content-Disposition`.
+
+**Consequences**
+- (+) A Viewer can take the filtered ledger list, including hints, without an admin login.
+- (−) The header style is copied rather than called, because the reports helper is not on this module's allowed dependencies.
+
+---
+
+## ADR-073: Ledger codes
+
+**Status:** Accepted — October 2026
+
+**Context**
+A bank narration often contains the vendor's own short code as a whole word. Finance wants that word to select the ledger before learned mappings and the LLM, and wants to load the codes from Excel, including ledgers that are not in Tally yet. The ledger list, the Tally XML import, and the ledger workbook already exist.
+
+**Decision**
+1. `tally_ledger.ledger_code` is nullable, 2 to 10 letters and digits, stored uppercase, and unique where it is not null. `added_in_app` defaults to false. A code must not be `FT`, `NEFT`, `RTGS`, `IMPS`, `UPI`, `ATM`, `ACH`, `NACH`, `CBDT`, `TDS`, `GST`, `SALARY`, or `REFUND`. `recon_transaction.mapping_source` accepts `CODE`, and `note` stores the matched word and its position, or the conflict.
+2. After Contra classification and before learned mappings, a non-Contra row is scanned on its raw description. The scan stops at the first run of 9 or more digits. Each word before that point is compared with the codes. One ledger assigns `CODE` and leaves the row out of the LLM batch. Two or more assign nothing, record the conflict, and let the later steps run. A `CODE` row creates no learned mapping. Changing the ledger on the Review screen is a normal correction.
+3. A Tally XML import never changes or clears a code and never deletes a ledger. When the XML contains a ledger of the same name, `added_in_app` is cleared. Ledgers created with Add Ledger or the code workbook set `added_in_app`.
+4. The ledger export columns are Ledger Name, Group, Accounting Nature, Bank Account, Active, Ledger Code, In Tally XML, Purpose, Keywords, Typical Amount, and Disambiguation Note. This replaces Has Hint and Hint Updated from ADR-072. In Tally XML is Yes when `added_in_app` is false. Every cell stays text.
+5. `POST /api/bank-recon/ledgers/codes/import` previews updates, additions, unchanged rows, and errors. An exact name updates. A name that matches only after ignoring case, spaces, and punctuation is an error (`possible match: <existing name>`) and adds nothing. A new ledger takes its nature and bank flag from an existing group and sets `added_in_app`. A blank cell never clears a code or a hint. Nothing is saved until `confirm=true` and the preview has no errors, in one transaction, with an `IMPORT` row in `recon_audit_log`.
+
+**Consequences**
+- (+) A code in the narration selects the ledger without an LLM call, and a code that only appears in the bank-appended account tail does not.
+- (+) A ledger typed in the app survives the next Tally import, and its code survives being seen in the XML.
+- (−) The export no longer has Has Hint or Hint Updated. A hint is visible from the purpose and keyword columns.
 
 ---
 

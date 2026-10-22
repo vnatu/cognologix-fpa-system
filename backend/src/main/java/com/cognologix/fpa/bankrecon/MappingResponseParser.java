@@ -18,8 +18,10 @@ final class MappingResponseParser {
             "\"(?:transactionId|id)\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
     private static final Pattern NUMERIC_ID = Pattern.compile(
             "\"(?:transactionId|id)\"\\s*:\\s*(-?\\d+)");
-    private static final Pattern QUOTED_LEDGER = Pattern.compile(
+    private static final Pattern QUOTED_LEDGER_NAME = Pattern.compile(
             "\"ledgerName\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
+    private static final Pattern QUOTED_LEDGER = Pattern.compile(
+            "\"ledger\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
 
     private MappingResponseParser() {}
 
@@ -28,7 +30,7 @@ final class MappingResponseParser {
             return new Parsed(List.of(), true, 0);
         }
         String text = stripFence(content.trim());
-        int start = text.indexOf('[');
+        int start = arrayStart(text);
         if (start < 0) {
             return new Parsed(List.of(), true, 0);
         }
@@ -61,6 +63,18 @@ final class MappingResponseParser {
             i = end;
         }
         return new Parsed(List.copyOf(rows), !closed, returned);
+    }
+
+    /** Prefer the array under {@code "mappings"} when the reply is wrapped. */
+    private static int arrayStart(String text) {
+        int mappings = text.indexOf("\"mappings\"");
+        if (mappings >= 0) {
+            int bracket = text.indexOf('[', mappings);
+            if (bracket >= 0) {
+                return bracket;
+            }
+        }
+        return text.indexOf('[');
     }
 
     private static String stripFence(String text) {
@@ -111,7 +125,10 @@ final class MappingResponseParser {
         if (id == null || id.isBlank()) {
             return null;
         }
-        String ledger = first(QUOTED_LEDGER, json);
+        String ledger = first(QUOTED_LEDGER_NAME, json);
+        if (ledger == null) {
+            ledger = first(QUOTED_LEDGER, json);
+        }
         return new LedgerMappingResult(unescape(id.trim()), ledger == null ? "" : unescape(ledger).trim());
     }
 

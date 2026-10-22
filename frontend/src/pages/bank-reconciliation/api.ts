@@ -15,6 +15,7 @@ import type {
   VoucherType,
   AccountMapping,
   LedgerHint,
+  LedgerCodeImportPreview,
 } from './types';
 import { HDFC_IMPORT_TYPE } from './constants';
 
@@ -115,7 +116,7 @@ export const fetchLedgers = (
   page = 0,
   size = 200,
   voucherType?: VoucherType,
-  options?: { excludeLedger?: string; hasHint?: boolean },
+  options?: { excludeLedger?: string; hasHint?: boolean; hasCode?: boolean; addedInApp?: boolean },
 ): Promise<PageResponse<Ledger>> =>
   axios
     .get<PageResponse<Ledger>>('/api/bank-recon/ledgers', {
@@ -126,14 +127,52 @@ export const fetchLedgers = (
         ...(voucherType ? { voucherType } : {}),
         ...(options?.excludeLedger ? { excludeLedger: options.excludeLedger } : {}),
         ...(options?.hasHint === undefined ? {} : { hasHint: options.hasHint }),
+        ...(options?.hasCode === undefined ? {} : { hasCode: options.hasCode }),
+        ...(options?.addedInApp === undefined ? {} : { addedInApp: options.addedInApp }),
       },
     })
     .then((r) => r.data);
+
+export const exportLedgers = async (
+  search = '',
+  filters?: { hasHint?: boolean; hasCode?: boolean; addedInApp?: boolean },
+): Promise<void> => {
+  const response = await axios.get<Blob>('/api/bank-recon/ledgers/export', {
+    responseType: 'blob',
+    params: {
+      ...(search ? { search } : {}),
+      ...(filters?.hasHint === undefined ? {} : { hasHint: filters.hasHint }),
+      ...(filters?.hasCode === undefined ? {} : { hasCode: filters.hasCode }),
+      ...(filters?.addedInApp === undefined ? {} : { addedInApp: filters.addedInApp }),
+    },
+  });
+  const disposition = response.headers['content-disposition'];
+  const named = typeof disposition === 'string'
+    ? /filename="([^"]+)"/i.exec(disposition)?.[1]
+    : undefined;
+  const filename = named ?? 'ledger-master.xlsx';
+  const url = window.URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 export const importLedgers = (file: File) => {
   const form = new FormData();
   form.append('file', file);
   return axios.post<{ imported: number; updated: number }>('/api/bank-recon/ledgers/import', form).then((r) => r.data);
+};
+
+export const importLedgerCodes = (file: File, confirm = false) => {
+  const form = new FormData();
+  form.append('file', file);
+  return axios
+    .post<LedgerCodeImportPreview>('/api/bank-recon/ledgers/codes/import', form, { params: { confirm } })
+    .then((r) => r.data);
 };
 
 export const addLedger = (ledgerName: string, groupName: string): Promise<Ledger> =>
@@ -224,6 +263,7 @@ export const saveLedgerHint = (
     keywords?: string;
     typicalAmount?: string;
     disambiguationNote?: string;
+    ledgerCode?: string;
   },
 ): Promise<LedgerHint> =>
   axios.put<LedgerHint>(`/api/bank-recon/ledgers/${ledgerId}/hint`, payload).then((r) => r.data);

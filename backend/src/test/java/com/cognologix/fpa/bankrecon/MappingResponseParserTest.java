@@ -26,4 +26,22 @@ class MappingResponseParserTest {
         assertThat(parsed.mappings().getFirst().transactionId()).isEqualTo("1");
         assertThat(parsed.mappings().getFirst().ledgerName()).isEqualTo("Rent");
     }
+
+    @Test
+    void mappingsWrapperIsRead() {
+        MappingResponseParser.Parsed parsed = MappingResponseParser.parse("""
+                {"mappings":[{"transactionId":1,"ledgerName":"Rent"}]}
+                """);
+        assertThat(parsed.incomplete()).isFalse();
+        assertThat(parsed.mappings()).containsExactly(new com.cognologix.fpa.bankrecon.dto.BankReconDtos.LedgerMappingResult("1", "Rent"));
+    }
+
+    @Test
+    void idAndLedgerFieldNamesAreAccepted() {
+        MappingResponseParser.Parsed parsed = MappingResponseParser.parse("""
+                [{"id":7,"ledger":"Office Rent"},{"transactionId":8,"ledgerName":"Rent"}]
+                """);
+        assertThat(parsed.mappings()).extracting(row -> row.transactionId()).containsExactly("7", "8");
+        assertThat(parsed.mappings()).extracting(row -> row.ledgerName()).containsExactly("Office Rent", "Rent");
+    }
 }

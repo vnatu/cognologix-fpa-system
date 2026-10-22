@@ -62,7 +62,6 @@ class LlmTraceTest {
                 List.of(),
                 List.of(new MappingPrompt.LedgerLine(
                         "Direct Expenses", "Office Rent Unique", null, null, null, null)),
-                List.of(),
                 List.of(new MappingPrompt.TransactionLine("1", "rent", "10.00", "PAYMENT", List.of())));
         String catalog = MappingPrompt.catalogSection(prompt);
         String hash = LlmTrace.shortSha256(catalog);

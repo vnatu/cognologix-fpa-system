@@ -71,7 +71,7 @@ final class LlmTrace {
             String catalogHash,
             int estimatedPromptTokens,
             String maxTokens,
-            String thinkingDisabled,
+            String thinkingEnabled,
             String apiKey) {
         return redact(
                 "callId=" + callId
@@ -84,7 +84,7 @@ final class LlmTrace {
                         + " catalogHash=" + catalogHash
                         + " estimatedPromptTokens=" + estimatedPromptTokens
                         + " maxTokens=" + maxTokens
-                        + " thinkingDisabled=" + thinkingDisabled,
+                        + " thinkingEnabled=" + thinkingEnabled,
                 apiKey);
     }
 
@@ -115,17 +115,17 @@ final class LlmTrace {
             String baseUrl,
             String model,
             int maxTokens,
-            boolean thinkingDisabled,
+            boolean thinkingEnabled,
             CatalogMemory memory,
             String apiKey) {
-        String system = systemBlock(prompt);
-        String user = userBlock(prompt, memory);
+        String system = collapseCatalog(MappingPrompt.systemMessage(prompt), memory);
+        String user = MappingPrompt.userMessage(prompt);
         String options = "provider=" + provider
                 + " baseUrl=" + safeBaseUrl(baseUrl, apiKey)
                 + " model=" + model
                 + " temperature=0"
                 + " maxTokens=" + maxTokens
-                + " thinkingDisabled=" + thinkingDisabled;
+                + " thinkingEnabled=" + thinkingEnabled;
         return "system:\n" + system + "\nuser:\n" + user + "\noptions:\n" + options;
     }
 
@@ -188,7 +188,7 @@ final class LlmTrace {
         int count = 0;
         for (String line : catalog.split("\n", -1)) {
             String trimmed = line.trim();
-            if (trimmed.isEmpty() || trimmed.equals("PAYMENT") || trimmed.equals("RECEIPT") || trimmed.startsWith("##")) {
+            if (trimmed.isEmpty() || trimmed.startsWith("##")) {
                 continue;
             }
             count++;
@@ -260,45 +260,35 @@ final class LlmTrace {
         return sb.toString();
     }
 
-    private static String systemBlock(String prompt) {
-        if (prompt == null) {
+    private static String collapseCatalog(String system, CatalogMemory memory) {
+        if (system == null) {
             return "";
         }
-        int hints = prompt.indexOf("TRANSACTION HINTS\n");
-        if (hints < 0) {
-            return "";
-        }
-        return prompt.substring(0, hints).stripTrailing();
-    }
-
-    private static String userBlock(String prompt, CatalogMemory memory) {
-        if (prompt == null) {
-            return "";
-        }
-        int hints = prompt.indexOf("TRANSACTION HINTS\n");
-        String user = hints < 0 ? prompt : prompt.substring(hints);
-        String catalog = MappingPrompt.catalogSection(prompt);
+        String catalog = MappingPrompt.catalogSection(system);
         if (catalog.isEmpty()) {
-            return user;
+            return system;
         }
         String hash = shortSha256(catalog);
         int ledgers = catalogLedgerCount(catalog);
         CatalogMemory state = memory == null ? new CatalogMemory() : memory;
         if (hash.equals(state.loggedHash)) {
-            return replaceCatalog(user, "catalog: " + hash + " (" + ledgers + " ledgers, unchanged)");
+            return replaceCatalog(system, "catalog: " + hash + " (" + ledgers + " ledgers, unchanged)");
         }
         state.loggedHash = hash;
-        return user;
+        return system;
     }
 
-    private static String replaceCatalog(String user, String replacement) {
-        int start = user.indexOf("LEDGER CATALOG\n");
-        int end = user.indexOf("\nTRANSACTIONS\n");
-        if (start < 0 || end < 0 || end < start) {
-            return user;
+    private static String replaceCatalog(String text, String replacement) {
+        int start = text.indexOf("LEDGER CATALOG\n");
+        if (start < 0) {
+            return text;
         }
         int from = start + "LEDGER CATALOG\n".length();
-        return user.substring(0, from) + replacement + user.substring(end);
+        int end = MappingPrompt.catalogBodyEnd(text, from);
+        if (end < 0 || end < from) {
+            return text;
+        }
+        return text.substring(0, from) + replacement + text.substring(end);
     }
 
     private static String stripUrlSecrets(String url) {

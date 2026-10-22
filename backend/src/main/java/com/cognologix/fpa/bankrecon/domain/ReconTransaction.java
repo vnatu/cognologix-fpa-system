@@ -74,4 +74,16 @@ public class ReconTransaction {
     @Column(name = "sort_order", nullable = false)
     @Builder.Default
     private int sortOrder = 0;
+
+    /** EXACT or RESOLVED when the model name was accepted. */
+    @Column(name = "llm_name_resolution", length = 16)
+    private String llmNameResolution;
+
+    /** AMBIGUOUS when several catalog ledgers match the returned name. */
+    @Column(name = "review_tag", length = 32)
+    private String reviewTag;
+
+    /** Matched code word and its position, or a note that two codes conflicted. */
+    @Column(name = "note", columnDefinition = "TEXT")
+    private String note;
 }

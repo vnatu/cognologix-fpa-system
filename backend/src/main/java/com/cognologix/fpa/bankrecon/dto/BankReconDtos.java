@@ -37,7 +37,11 @@ public final class BankReconDtos {
             MappingSource mappingSource,
             boolean excluded,
             boolean reviewed,
-            int sortOrder
+            int sortOrder,
+            String llmNameResolution,
+            String reviewTag,
+            String note,
+            boolean notInTally
     ) {}
 
     public record RunResponse(
@@ -61,7 +65,8 @@ public final class BankReconDtos {
             Instant createdAt,
             String createdBy,
             List<TransactionResponse> transactions,
-            List<ExportResponse> exports
+            List<ExportResponse> exports,
+            String processingError
     ) {}
 
     public record ExportResponse(
@@ -88,7 +93,9 @@ public final class BankReconDtos {
             String accountingNature,
             boolean bankAccount,
             boolean active,
-            boolean hasHint
+            boolean hasHint,
+            String ledgerCode,
+            boolean addedInApp
     ) {}
 
     public record CreateLedgerRequest(
@@ -120,7 +127,20 @@ public final class BankReconDtos {
             String purpose,
             String keywords,
             String typicalAmount,
-            String disambiguationNote
+            String disambiguationNote,
+            String ledgerCode
+    ) {}
+
+    public record LedgerCodeImportLine(int rowNumber, String ledgerName, String ledgerCode, String groupName) {}
+
+    public record LedgerCodeImportIssue(int rowNumber, String ledgerName, String message) {}
+
+    public record LedgerCodeImportPreview(
+            java.util.List<LedgerCodeImportLine> toUpdate,
+            java.util.List<LedgerCodeImportLine> toAdd,
+            java.util.List<LedgerCodeImportLine> unchanged,
+            java.util.List<LedgerCodeImportIssue> errors,
+            boolean saved
     ) {}
 
     public record LedgerHintResponse(
@@ -179,7 +199,12 @@ public final class BankReconDtos {
             String provider,
             String apiKey,
             LlmProviderSettings ollamaSettings,
-            LlmProviderSettings omlxSettings
+            LlmProviderSettings omlxSettings,
+            boolean thinkingEnabled,
+            int maxTokensBase,
+            int maxTokensPerRow,
+            int maxTokensBaseThinking,
+            int maxTokensPerRowThinking
     ) {}
 
     public record OllamaConfigRequest(
@@ -191,7 +216,12 @@ public final class BankReconDtos {
             Integer timeoutSeconds,
             String companyName,
             String provider,
-            String apiKey
+            String apiKey,
+            Boolean thinkingEnabled,
+            Integer maxTokensBase,
+            Integer maxTokensPerRow,
+            Integer maxTokensBaseThinking,
+            Integer maxTokensPerRowThinking
     ) {}
 
     public record OllamaTestResponse(

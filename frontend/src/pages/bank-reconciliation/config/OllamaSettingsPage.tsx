@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Form, Input, InputNumber, Radio, Space, Typography, notification, theme } from 'antd';
+import { Button, Form, Input, InputNumber, Radio, Space, Switch, Typography, notification, theme } from 'antd';
 import { AdminGate } from '@/components/AdminGate';
 import { HEADING_FONT } from '@/theme/antdTheme';
 import { fetchOllamaConfig, saveOllamaConfig, testOllama } from '../api';
@@ -47,6 +47,11 @@ function fingerprint(provider: LlmProvider, values: Partial<OllamaConfig>): stri
     batchSize: values.batchSize ?? null,
     timeoutSeconds: values.timeoutSeconds ?? null,
     companyName: (values.companyName ?? '').trim(),
+    thinkingEnabled: values.thinkingEnabled ?? false,
+    maxTokensBase: values.maxTokensBase ?? null,
+    maxTokensPerRow: values.maxTokensPerRow ?? null,
+    maxTokensBaseThinking: values.maxTokensBaseThinking ?? null,
+    maxTokensPerRowThinking: values.maxTokensPerRowThinking ?? null,
   });
 }
 
@@ -102,6 +107,11 @@ export default function OllamaSettingsPage() {
           batchSize: cfg.batchSize,
           timeoutSeconds: cfg.timeoutSeconds,
           companyName: cfg.companyName,
+          thinkingEnabled: cfg.thinkingEnabled,
+          maxTokensBase: cfg.maxTokensBase,
+          maxTokensPerRow: cfg.maxTokensPerRow,
+          maxTokensBaseThinking: cfg.maxTokensBaseThinking,
+          maxTokensPerRowThinking: cfg.maxTokensPerRowThinking,
         });
         savedKey.current = fingerprint(provider, form.getFieldsValue());
         setDirty(false);
@@ -169,6 +179,11 @@ export default function OllamaSettingsPage() {
                 batchSize: saved.batchSize,
                 timeoutSeconds: saved.timeoutSeconds,
                 companyName: saved.companyName,
+                thinkingEnabled: saved.thinkingEnabled,
+                maxTokensBase: saved.maxTokensBase,
+                maxTokensPerRow: saved.maxTokensPerRow,
+                maxTokensBaseThinking: saved.maxTokensBaseThinking,
+                maxTokensPerRowThinking: saved.maxTokensPerRowThinking,
               });
               savedKey.current = fingerprint(provider, form.getFieldsValue());
               setDirty(false);
@@ -228,8 +243,29 @@ export default function OllamaSettingsPage() {
           </>
         )}
 
-        <Form.Item name="batchSize" label="Batch size" style={{ marginTop: 28 }}>
+        <Form.Item
+          name="thinkingEnabled"
+          label="Enable thinking"
+          valuePropName="checked"
+          hidden={selected !== 'OMLX'}
+          style={{ marginTop: 28 }}
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item name="batchSize" label="Batch size" style={{ marginTop: selected === 'OMLX' ? 0 : 28 }}>
           <InputNumber min={1} max={50} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item name="maxTokensBase" label="Max tokens base">
+          <InputNumber min={1} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item name="maxTokensPerRow" label="Max tokens per row">
+          <InputNumber min={1} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item name="maxTokensBaseThinking" label="Max tokens base (thinking)">
+          <InputNumber min={1} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item name="maxTokensPerRowThinking" label="Max tokens per row (thinking)">
+          <InputNumber min={1} style={{ width: '100%' }} />
         </Form.Item>
         <Form.Item name="timeoutSeconds" label="Timeout (seconds)">
           <InputNumber min={10} max={600} style={{ width: '100%' }} />

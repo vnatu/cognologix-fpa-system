@@ -50,7 +50,8 @@ export default function MappedLedgerSelect({
   const load = (query: string) => {
     const id = ++requestId.current;
     setFetching(true);
-    fetchLedgers(query, 0, 20, voucherType, {
+    const searchType = voucherType === 'CONTRA' ? voucherType : undefined;
+    fetchLedgers(query, 0, 20, searchType, {
       excludeLedger: voucherType === 'CONTRA' ? excludeLedger : undefined,
     })
       .then((page) => {

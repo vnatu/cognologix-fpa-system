@@ -15,11 +15,23 @@ record LlmBatchResult(
         String rawText,
         int returned,
         int parsed,
-        boolean replied) {
+        boolean replied,
+        String finishReason,
+        String errorMessage) {
 
     LlmBatchResult {
         mappings = mappings == null ? List.of() : List.copyOf(mappings);
         rawText = rawText == null ? "" : rawText;
+    }
+
+    LlmBatchResult(
+            List<LedgerMappingResult> mappings,
+            boolean truncated,
+            String rawText,
+            int returned,
+            int parsed,
+            boolean replied) {
+        this(mappings, truncated, rawText, returned, parsed, replied, null, null);
     }
 
     LlmBatchResult(List<LedgerMappingResult> mappings, boolean truncated) {
@@ -34,6 +46,10 @@ record LlmBatchResult(
     }
 
     static LlmBatchResult failed() {
-        return new LlmBatchResult(List.of(), false, "", 0, 0, false);
+        return failed(null);
+    }
+
+    static LlmBatchResult failed(String errorMessage) {
+        return new LlmBatchResult(List.of(), false, "", 0, 0, false, null, errorMessage);
     }
 }

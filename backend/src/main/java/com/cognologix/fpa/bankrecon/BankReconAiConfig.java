@@ -138,10 +138,13 @@ public class BankReconAiConfig {
         return openAiEmbeddingModel(url, model, apiKey(configService), readTimeout(configService));
     }
 
-    /**
-     * Chat options do not send {@code enable_thinking=false}. The call log reports this value.
-     */
-    static final boolean THINKING_DISABLED = false;
+    static final String CFG_THINKING = "llm_thinking_enabled";
+
+    /** Read at call time. Missing or anything other than true leaves thinking off. */
+    static boolean thinkingEnabled(GeneralConfigService configService) {
+        String raw = configService.getConfigValue(CFG_THINKING).orElse("false");
+        return "true".equalsIgnoreCase(raw.trim());
+    }
 
     static String apiKey(GeneralConfigService configService) {
         String key = configService.getConfigValue(CFG_API_KEY).orElse("").trim();

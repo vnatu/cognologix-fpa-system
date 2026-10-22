@@ -1,5 +1,5 @@
 export type VoucherType = 'PAYMENT' | 'RECEIPT' | 'CONTRA';
-export type MappingSource = 'LEARNED' | 'LLM' | 'MANUAL' | null;
+export type MappingSource = 'LEARNED' | 'LLM' | 'MANUAL' | 'CODE' | null;
 export type RunStatus = 'OPEN' | 'CLOSED';
 
 export interface TransactionRow {
@@ -19,6 +19,10 @@ export interface TransactionRow {
   excluded: boolean;
   reviewed: boolean;
   sortOrder: number;
+  llmNameResolution: string | null;
+  reviewTag: string | null;
+  note: string | null;
+  notInTally: boolean;
 }
 
 export interface ReconExport {
@@ -52,6 +56,7 @@ export interface ReconRun {
   createdBy: string | null;
   transactions: TransactionRow[];
   exports: ReconExport[];
+  processingError: string | null;
 }
 
 export interface PageResponse<T> {
@@ -69,6 +74,8 @@ export interface Ledger {
   bankAccount: boolean;
   active: boolean;
   hasHint: boolean;
+  ledgerCode: string | null;
+  addedInApp: boolean;
 }
 
 export interface LearnedMapping {
@@ -117,6 +124,11 @@ export interface OllamaConfig {
   apiKey: string;
   ollamaSettings: LlmProviderSettings;
   omlxSettings: LlmProviderSettings;
+  thinkingEnabled: boolean;
+  maxTokensBase: number;
+  maxTokensPerRow: number;
+  maxTokensBaseThinking: number;
+  maxTokensPerRowThinking: number;
 }
 
 export interface OllamaTestResult {
@@ -171,4 +183,25 @@ export interface LedgerHint {
   typicalAmount: string | null;
   disambiguationNote: string | null;
   present: boolean;
+}
+
+export interface LedgerCodeImportLine {
+  rowNumber: number;
+  ledgerName: string;
+  ledgerCode: string;
+  groupName: string;
+}
+
+export interface LedgerCodeImportIssue {
+  rowNumber: number;
+  ledgerName: string;
+  message: string;
+}
+
+export interface LedgerCodeImportPreview {
+  toUpdate: LedgerCodeImportLine[];
+  toAdd: LedgerCodeImportLine[];
+  unchanged: LedgerCodeImportLine[];
+  errors: LedgerCodeImportIssue[];
+  saved: boolean;
 }

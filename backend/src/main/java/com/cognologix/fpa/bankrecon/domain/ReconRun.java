@@ -82,4 +82,7 @@ public class ReconRun {
 
     @Column(name = "created_by")
     private String createdBy;
+
+    @Column(name = "processing_error", columnDefinition = "TEXT")
+    private String processingError;
 }

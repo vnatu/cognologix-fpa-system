@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  Alert,
   Button,
   Checkbox,
   Modal,
@@ -9,6 +10,7 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
   notification,
 } from 'antd';
@@ -26,12 +28,20 @@ const SOURCE_COLOR: Record<string, string> = {
   LEARNED: 'green',
   LLM: 'blue',
   MANUAL: 'orange',
+  CODE: 'purple',
   UNMAPPED: 'red',
 };
 
 function sourceLabel(tx: TransactionRow): string {
   if (tx.excluded) return tx.mappingSource ?? 'UNMAPPED';
   return tx.mappedLedger ? (tx.mappingSource ?? 'MANUAL') : 'UNMAPPED';
+}
+
+function notInTallyLedgers(run: ReconRun, selected: string[]): string[] {
+  const names = run.transactions
+    .filter((tx) => selected.includes(tx.id) && tx.notInTally && tx.mappedLedger)
+    .map((tx) => tx.mappedLedger as string);
+  return [...new Set(names)];
 }
 
 function formatPeriod(run: ReconRun): string {
@@ -132,7 +142,15 @@ export default function RunReviewPage() {
       width: 120,
       render: (_, tx) => {
         const label = sourceLabel(tx);
-        return <Tag color={SOURCE_COLOR[label] ?? 'default'}>{label}</Tag>;
+        const sourceTag = <Tag color={SOURCE_COLOR[label] ?? 'default'}>{label}</Tag>;
+        return (
+          <Space size={4} wrap>
+            {tx.note ? <Tooltip title={tx.note}>{sourceTag}</Tooltip> : sourceTag}
+            {tx.reviewTag === 'AMBIGUOUS' && <Tag color="gold">AMBIGUOUS</Tag>}
+            {tx.llmNameResolution === 'EXACT' && <Tag>exact</Tag>}
+            {tx.llmNameResolution === 'RESOLVED' && <Tag>resolved</Tag>}
+          </Space>
+        );
       },
     },
     {
@@ -172,6 +190,9 @@ export default function RunReviewPage() {
         {' · '}
         {run.originalFilename}
       </Text>
+      {run.processingError && (
+        <Alert type="warning" showIcon style={{ marginTop: 16 }} message={run.processingError} />
+      )}
       <Space size="large" style={{ display: 'flex', marginTop: 16, marginBottom: 16 }}>
         <Text>Total {run.totalTransactions}</Text>
         <Text style={{ color: '#389e0d' }}>Mapped {run.mappedCount}</Text>
@@ -259,6 +280,15 @@ export default function RunReviewPage() {
         }}
         okText="Generate Export"
       >
+        {notInTallyLedgers(run, selected).length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="not in Tally yet"
+            description={notInTallyLedgers(run, selected).join(', ')}
+          />
+        )}
         <Checkbox.Group
           style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
           value={selected}

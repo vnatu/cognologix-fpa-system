@@ -45,12 +45,11 @@ class MappingPromptTest {
 
     @Test
     void catalogIsIdenticalWhenOnlyTransactionsChange() {
-        List<MappingPrompt.LedgerLine> payment = List.of(
-                new MappingPrompt.LedgerLine("Indirect Expenses", "Rent", "rent, office", "Office costs", null, null));
-        List<MappingPrompt.LedgerLine> receipt = List.of(
+        List<MappingPrompt.LedgerLine> catalog = List.of(
+                new MappingPrompt.LedgerLine("Indirect Expenses", "Rent", "rent, office", "Office costs", null, null),
                 new MappingPrompt.LedgerLine("Indirect Income", "Client Receipts", null, null, null, null));
-        String first = MappingPrompt.build(List.of(), payment, receipt, List.of(tx("tx-1", "ALPHA")));
-        String second = MappingPrompt.build(List.of(), payment, receipt, List.of(tx("tx-2", "BETA")));
+        String first = MappingPrompt.build(List.of(), catalog, List.of(tx("tx-1", "ALPHA")));
+        String second = MappingPrompt.build(List.of(), catalog, List.of(tx("tx-2", "BETA")));
         assertThat(MappingPrompt.staticPrefix(first)).isEqualTo(MappingPrompt.staticPrefix(second));
         assertThat(first).isNotEqualTo(second);
         assertThat(MappingPrompt.catalogSection(first)).contains("Rent | rent, office | Office costs");
@@ -70,7 +69,6 @@ class MappingPromptTest {
         String prompt = MappingPrompt.build(
                 List.of(new MappingPrompt.HintLine("PAYMENT", "Prefer the vendor ledger")),
                 List.of(new MappingPrompt.LedgerLine("Indirect Expenses", "Rent", null, null, null, null)),
-                List.of(),
                 List.of(
                         new MappingPrompt.TransactionLine(
                                 "tx-1",
@@ -82,8 +80,32 @@ class MappingPromptTest {
         assertThat(prompt).contains("amount=4321.50");
         assertThat(prompt).contains("ledger=Rent");
         assertThat(prompt).contains("examples: []");
-        assertThat(prompt.indexOf("LEDGER CATALOG")).isLessThan(prompt.indexOf("TRANSACTIONS"));
-        assertThat(prompt).contains("Use UNMAPPED when unsure.");
+        assertThat(prompt).contains("type=PAYMENT");
+        assertThat(prompt.indexOf("Map each transaction")).isLessThan(prompt.indexOf("Output format:"));
+        assertThat(prompt.indexOf("Output format:")).isLessThan(prompt.indexOf("Matching rules:"));
+        assertThat(prompt.indexOf("Matching rules:")).isLessThan(prompt.indexOf("LEDGER CATALOG"));
+        assertThat(prompt.indexOf("LEDGER CATALOG")).isLessThan(prompt.indexOf("TRANSACTION HINTS"));
+        assertThat(prompt.indexOf("TRANSACTION HINTS")).isLessThan(prompt.indexOf("TRANSACTIONS"));
+        assertThat(prompt).contains(MappingPrompt.MATCHING_RULES.trim());
+        assertThat(prompt.indexOf(MappingPrompt.MATCHING_RULES.trim()))
+                .isEqualTo(prompt.lastIndexOf(MappingPrompt.MATCHING_RULES.trim()));
+        String user = MappingPrompt.userMessage(prompt);
+        assertThat(user).startsWith("TRANSACTIONS");
+        assertThat(user).doesNotContain("LEDGER CATALOG");
+        assertThat(user).doesNotContain("Matching rules:");
+    }
+
+    @Test
+    void catalogHashIgnoresAHintEdit() {
+        List<MappingPrompt.LedgerLine> catalog = List.of(
+                new MappingPrompt.LedgerLine("Indirect Expenses", "Rent", null, null, null, null));
+        String first = MappingPrompt.build(
+                List.of(new MappingPrompt.HintLine("ALL", "first hint")), catalog, List.of(tx("1", "A")));
+        String second = MappingPrompt.build(
+                List.of(new MappingPrompt.HintLine("ALL", "edited hint")), catalog, List.of(tx("1", "A")));
+        assertThat(MappingPrompt.catalogSection(first)).isEqualTo(MappingPrompt.catalogSection(second));
+        assertThat(first).contains("first hint");
+        assertThat(second).contains("edited hint");
     }
 
     @Test
@@ -102,6 +124,6 @@ class MappingPromptTest {
                 line.groupName(), line.ledgerName(), mappedLedgerNames)
                 ? List.of()
                 : List.of(line);
-        return MappingPrompt.catalogSection(MappingPrompt.build(List.of(), kept, List.of(), List.of()));
+        return MappingPrompt.catalogSection(MappingPrompt.build(List.of(), kept, List.of()));
     }
 }

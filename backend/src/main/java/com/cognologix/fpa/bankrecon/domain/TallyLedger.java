@@ -36,6 +36,15 @@ public class TallyLedger {
     @Builder.Default
     private boolean active = true;
 
+    /** 2 to 10 letters and digits, stored uppercase. Null when the ledger has no code. */
+    @Column(name = "ledger_code", length = 10)
+    private String ledgerCode;
+
+    /** True when this ledger was created in the app and has not been seen in a Tally XML import. */
+    @Column(name = "added_in_app", nullable = false)
+    @Builder.Default
+    private boolean addedInApp = false;
+
     @Column(name = "created_at", nullable = false)
     @Builder.Default
     private Instant createdAt = Instant.now();

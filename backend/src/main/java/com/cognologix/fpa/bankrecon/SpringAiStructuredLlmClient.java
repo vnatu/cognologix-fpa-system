@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -40,6 +41,7 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
         String catalog = MappingPrompt.catalogSection(prompt);
         String catalogHash = catalog.isEmpty() ? "none" : LlmTrace.shortSha256(catalog);
         int estimated = MappingPrompt.estimateTokens(prompt);
+        boolean thinking = BankReconAiConfig.thinkingEnabled(generalConfigService);
         LlmTrace.info(log, apiKey, LlmTrace.beforeLine(
                 callId,
                 "chat",
@@ -51,7 +53,7 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
                 catalogHash,
                 estimated,
                 Integer.toString(maxTokens),
-                Boolean.toString(BankReconAiConfig.THINKING_DISABLED),
+                Boolean.toString(thinking),
                 apiKey));
         if (estimated > MappingPrompt.SAFE_PROMPT_TOKENS) {
             LlmTrace.warn(log, apiKey,
@@ -65,7 +67,7 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
                     endpoint.baseUrl(),
                     endpoint.model(),
                     maxTokens,
-                    BankReconAiConfig.THINKING_DISABLED,
+                    thinking,
                     LlmCallContext.catalogMemory(),
                     apiKey);
             LlmTrace.trace(true, apiKey, LlmTrace.prefixLines(callId, request));
@@ -75,16 +77,23 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
         LlmHttpCapture.clear();
         long started = System.nanoTime();
         try {
-            var request = ChatClient.builder(chatModel).build().prompt().user(prompt);
+            var request = ChatClient.builder(chatModel).build().prompt()
+                    .system(MappingPrompt.systemMessage(prompt))
+                    .user(MappingPrompt.userMessage(prompt));
+            OpenAiChatOptions.Builder openAi = OpenAiChatOptions.builder()
+                    .model(endpoint.model())
+                    .temperature(0.0)
+                    .maxTokens(maxTokens);
+            if (!thinking) {
+                openAi.extraBody(Map.of(
+                        "chat_template_kwargs", Map.of("enable_thinking", Boolean.FALSE)));
+            }
             ChatResponse response = (ollama
                     ? request.options(OllamaChatOptions.builder()
                             .model(endpoint.model())
                             .temperature(0.0)
                             .numPredict(maxTokens))
-                    : request.options(OpenAiChatOptions.builder()
-                            .model(endpoint.model())
-                            .temperature(0.0)
-                            .maxTokens(maxTokens)))
+                    : request.options(openAi))
                     .call()
                     .chatResponse();
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
@@ -119,14 +128,16 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
                 LlmTrace.trace(true, apiKey, LlmTrace.prefixLines(callId, LlmTrace.responseText(traced)));
             }
             MappingResponseParser.Parsed parsed = MappingResponseParser.parse(text);
-            boolean truncated = "length".equalsIgnoreCase(finishReason) || parsed.incomplete();
+            boolean truncated = "length".equalsIgnoreCase(finishReason);
             return new LlmBatchResult(
                     parsed.mappings(),
                     truncated,
                     text == null ? "" : text,
                     parsed.returned(),
                     parsed.mappings().size(),
-                    true);
+                    true,
+                    finishReason,
+                    null);
         } catch (Exception e) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
             LlmHttpCapture.Snapshot http = LlmHttpCapture.take();
@@ -139,7 +150,7 @@ class SpringAiStructuredLlmClient implements StructuredLlmClient {
                 }
             }
             logFailure(callId, apiKey, elapsedMs, status, body, e);
-            return LlmBatchResult.failed();
+            return LlmBatchResult.failed(e.getMessage());
         } finally {
             LlmHttpCapture.clear();
         }

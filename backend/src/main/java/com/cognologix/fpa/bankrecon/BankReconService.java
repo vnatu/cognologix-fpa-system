@@ -30,7 +30,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -53,8 +52,14 @@ import jakarta.persistence.criteria.Subquery;
 public class BankReconService {
 
     private static final Logger log = LoggerFactory.getLogger(BankReconService.class);
-    static final String CFG_BATCH = "ollama_batch_size";
+    static final String CFG_BATCH = "llm_batch_size";
+    static final String CFG_TOKENS_BASE = "llm_max_tokens_base";
+    static final String CFG_TOKENS_PER_ROW = "llm_max_tokens_per_row";
+    static final String CFG_TOKENS_BASE_THINKING = "llm_max_tokens_base_thinking";
+    static final String CFG_TOKENS_PER_ROW_THINKING = "llm_max_tokens_per_row_thinking";
     static final String CFG_COMPANY = "ollama_company_name";
+    static final String TRUNCATED_MESSAGE = "LLM response truncated";
+    static final String NONE_ACCEPTED_MESSAGE = "LLM returned rows but none were accepted";
     static final String HDFC_IMPORT_TYPE = "HDFC_BANK_STATEMENT";
     private static final Set<String> HDFC_IMPORT_TYPES = Set.of(HDFC_IMPORT_TYPE);
     private static final double FUZZY_THRESHOLD = 0.6;
@@ -243,12 +248,64 @@ public class BankReconService {
         return labels.isEmpty() ? "(none)" : labels.toString();
     }
 
+    /**
+     * @return true when one ledger code matched and the row must not go to learned mappings or the LLM
+     */
+    private boolean applyLedgerCode(ReconTransaction tx, Map<String, TallyLedger> codes) {
+        List<LedgerCodeScan.Word> words = LedgerCodeScan.words(tx.getDescription());
+        Map<UUID, TallyLedger> matched = new LinkedHashMap<>();
+        LedgerCodeScan.Word first = null;
+        for (LedgerCodeScan.Word word : words) {
+            TallyLedger ledger = codes.get(word.text().toUpperCase(Locale.ROOT));
+            if (ledger == null) {
+                continue;
+            }
+            if (first == null) {
+                first = word;
+            }
+            matched.putIfAbsent(ledger.getId(), ledger);
+        }
+        if (matched.size() == 1 && first != null) {
+            TallyLedger ledger = matched.values().iterator().next();
+            tx.setMappedLedger(ledger.getLedgerName());
+            tx.setMappingSource(MappingSource.CODE);
+            tx.setNote(first.text() + " at position " + first.position());
+            tx.setLlmNameResolution(null);
+            tx.setReviewTag(null);
+            log.debug("Code decision=matched description={} word={} position={} ledger={}",
+                    tx.getDescription(), first.text(), first.position(), ledger.getLedgerName());
+            return true;
+        }
+        if (matched.size() > 1) {
+            String names = matched.values().stream()
+                    .map(TallyLedger::getLedgerName)
+                    .sorted()
+                    .collect(Collectors.joining(", "));
+            tx.setMappedLedger(null);
+            tx.setMappingSource(null);
+            tx.setNote("conflict: " + names);
+            log.debug("Code decision=conflict description={} ledgers={}", tx.getDescription(), names);
+            return false;
+        }
+        log.debug("Code decision=none description={}", tx.getDescription());
+        return false;
+    }
+
     public void runMappingPipeline(List<ReconTransaction> transactions) {
         boolean opened = LlmCallContext.openIfAbsent(runNumberOf(transactions));
         try {
             List<ReconTransaction> unmapped = new ArrayList<>();
+            Map<String, TallyLedger> codes = new HashMap<>();
+            for (TallyLedger ledger : ledgerRepository.findByLedgerCodeIsNotNull()) {
+                if (ledger.getLedgerCode() != null) {
+                    codes.put(ledger.getLedgerCode(), ledger);
+                }
+            }
             for (ReconTransaction tx : transactions) {
                 if (tx.isExcluded() || tx.getVoucherType() == VoucherType.CONTRA) {
+                    continue;
+                }
+                if (applyLedgerCode(tx, codes)) {
                     continue;
                 }
                 Optional<LearnedMapping> learned = learnedMappingRepository
@@ -265,13 +322,25 @@ public class BankReconService {
                 }
             }
             int batchSize = BankReconAiConfig.parseInt(
-                    generalConfigService.getConfigValue(CFG_BATCH).orElse("10"), 10);
+                    generalConfigService.getConfigValue(CFG_BATCH).orElse("20"), 20);
             if (batchSize < 1) {
-                batchSize = 10;
+                batchSize = 20;
             }
             for (int i = 0; i < unmapped.size(); i += batchSize) {
-                List<ReconTransaction> batch = unmapped.subList(i, Math.min(i + batchSize, unmapped.size()));
-                mapBatchWithLlm(batch);
+                List<ReconTransaction> batch = new ArrayList<>(
+                        unmapped.subList(i, Math.min(i + batchSize, unmapped.size())));
+                try {
+                    mapBatchWithLlm(batch);
+                } catch (RuntimeException ex) {
+                    for (ReconTransaction tx : batch) {
+                        tx.setMappedLedger(null);
+                        tx.setMappingSource(null);
+                        tx.setLlmNameResolution(null);
+                        tx.setReviewTag(null);
+                    }
+                    noteRun(batch, ex.getMessage() == null ? "LLM call failed" : ex.getMessage());
+                }
+                transactionRepository.saveAll(batch);
             }
         } finally {
             if (opened) {
@@ -314,26 +383,61 @@ public class BankReconService {
 
     private void mapCall(List<ReconTransaction> batch, String prompt) {
         int rows = promptRowCount(batch);
-        int maxTokens = MappingPrompt.completionTokenBudget(rows);
+        int maxTokens = completionBudget(rows);
         LlmBatchResult result = structuredLlmClient.mapBatch(prompt, maxTokens);
-        applyLlmMappings(batch, result);
-        if (!result.truncated()) {
+        if (!result.replied()) {
+            noteRun(batch, result.errorMessage() == null || result.errorMessage().isBlank()
+                    ? "LLM call failed" : result.errorMessage());
+            return;
+        }
+        ApplyOutcome outcome = applyLlmMappings(batch, result);
+        if (result.returned() > 0 && outcome.accepted() == 0 && outcome.rejected() > 0) {
+            noteRun(batch, NONE_ACCEPTED_MESSAGE);
+        }
+        if (!"length".equalsIgnoreCase(result.finishReason())) {
             return;
         }
         List<ReconTransaction> leftover = unparsedTransactions(batch, parsedPromptIds(result.mappings()));
-        if (leftover.isEmpty() || leftover.size() >= rows) {
-            if (!leftover.isEmpty()) {
-                log.warn("callId={} LLM mapping truncated with no complete rows; leaving {} transactions unmapped",
-                        LlmCallContext.activeCallId(), leftover.size());
-            }
+        if (leftover.isEmpty()) {
             return;
         }
         log.info("callId={} LLM mapping truncated; re-sending {} remaining transactions",
                 LlmCallContext.activeCallId(), leftover.size());
-        mapWithinTokenBudget(leftover);
+        String retryPrompt = buildPrompt(leftover);
+        LlmBatchResult retry = structuredLlmClient.mapBatch(retryPrompt, maxTokens * 2);
+        if (!retry.replied() || "length".equalsIgnoreCase(retry.finishReason())) {
+            if (retry.replied()) {
+                applyLlmMappings(leftover, retry);
+            }
+            noteRun(batch, TRUNCATED_MESSAGE);
+            return;
+        }
+        ApplyOutcome retryOutcome = applyLlmMappings(leftover, retry);
+        if (retry.returned() > 0 && retryOutcome.accepted() == 0 && retryOutcome.rejected() > 0) {
+            noteRun(leftover, NONE_ACCEPTED_MESSAGE);
+        }
     }
 
-    private void applyLlmMappings(List<ReconTransaction> batch, LlmBatchResult result) {
+    private int completionBudget(int rows) {
+        boolean thinking = BankReconAiConfig.thinkingEnabled(generalConfigService);
+        String baseKey = thinking ? CFG_TOKENS_BASE_THINKING : CFG_TOKENS_BASE;
+        String perRowKey = thinking ? CFG_TOKENS_PER_ROW_THINKING : CFG_TOKENS_PER_ROW;
+        int baseDefault = thinking ? 1000 : MappingPrompt.COMPLETION_TOKEN_MARGIN;
+        int perRowDefault = thinking ? 400 : MappingPrompt.TOKENS_PER_MAPPING_ROW;
+        int base = BankReconAiConfig.parseInt(
+                generalConfigService.getConfigValue(baseKey).orElse(Integer.toString(baseDefault)), baseDefault);
+        int perRow = BankReconAiConfig.parseInt(
+                generalConfigService.getConfigValue(perRowKey).orElse(Integer.toString(perRowDefault)), perRowDefault);
+        if (base < 1) {
+            base = baseDefault;
+        }
+        if (perRow < 1) {
+            perRow = perRowDefault;
+        }
+        return MappingPrompt.completionTokenBudget(rows, base, perRow);
+    }
+
+    private ApplyOutcome applyLlmMappings(List<ReconTransaction> batch, LlmBatchResult result) {
         List<LedgerMappingResult> mappings = result.mappings();
         Map<String, String> byId = new LinkedHashMap<>();
         int duplicates = 0;
@@ -345,12 +449,12 @@ public class BankReconService {
             }
             if (byId.containsKey(id)) {
                 duplicates++;
-                addRejection(rejections, id, id, mapping.ledgerName(), "duplicate transaction id");
+                addRejection(rejections, id, mapping.ledgerName(), "duplicate transaction id");
             } else {
                 byId.put(id, mapping.ledgerName() == null ? "" : mapping.ledgerName());
             }
         }
-        Map<VoucherType, Set<String>> allowedByType = new EnumMap<>(VoucherType.class);
+        Set<String> catalog = catalogNames();
         Set<String> promptIds = new HashSet<>();
         int accepted = 0;
         int rejected = duplicates;
@@ -362,8 +466,9 @@ public class BankReconService {
             }
             String id = Integer.toString(promptId++);
             promptIds.add(id);
-            Set<String> allowed = allowedByType.computeIfAbsent(tx.getVoucherType(), this::allowedLedgers);
             String ledger = byId.get(id);
+            tx.setLlmNameResolution(null);
+            tx.setReviewTag(null);
             if (ledger == null) {
                 tx.setMappedLedger(null);
                 tx.setMappingSource(null);
@@ -377,20 +482,32 @@ public class BankReconService {
             }
             if (ledger.isBlank()) {
                 rejected++;
-                addRejection(rejections, tx.getId().toString(), id, ledger, "blank ledger");
+                addRejection(rejections, id, ledger, "blank ledger");
                 tx.setMappedLedger(null);
                 tx.setMappingSource(null);
                 continue;
             }
-            if (allowed.contains(ledger)) {
-                accepted++;
-                tx.setMappedLedger(ledger);
-                tx.setMappingSource(MappingSource.LLM);
-            } else {
-                rejected++;
-                addRejection(rejections, tx.getId().toString(), id, ledger, "not in catalog");
-                tx.setMappedLedger(null);
-                tx.setMappingSource(null);
+            LedgerNameResolver.Resolution resolution = LedgerNameResolver.resolve(ledger, catalog);
+            switch (resolution.kind()) {
+                case EXACT, RESOLVED -> {
+                    accepted++;
+                    tx.setMappedLedger(resolution.catalogName());
+                    tx.setMappingSource(MappingSource.LLM);
+                    tx.setLlmNameResolution(resolution.kind().name());
+                }
+                case AMBIGUOUS -> {
+                    rejected++;
+                    addRejection(rejections, id, ledger, "ambiguous");
+                    tx.setMappedLedger(null);
+                    tx.setMappingSource(null);
+                    tx.setReviewTag("AMBIGUOUS");
+                }
+                case REJECTED -> {
+                    rejected++;
+                    addRejection(rejections, id, ledger, "not in catalog");
+                    tx.setMappedLedger(null);
+                    tx.setMappingSource(null);
+                }
             }
         }
         for (Map.Entry<String, String> entry : byId.entrySet()) {
@@ -401,7 +518,7 @@ public class BankReconService {
                 unmapped++;
             } else {
                 rejected++;
-                addRejection(rejections, entry.getKey(), entry.getKey(), entry.getValue(), "unknown transaction id");
+                addRejection(rejections, entry.getKey(), entry.getValue(), "unknown transaction id");
             }
         }
         String callId = LlmCallContext.activeCallId();
@@ -419,22 +536,48 @@ public class BankReconService {
             LlmTrace.warn(log, apiKey, "callId=" + callId
                     + " nothing parsed rawReply=" + LlmTrace.rawReplySample(result.rawText()));
         }
+        return new ApplyOutcome(accepted, rejected);
+    }
+
+    private record ApplyOutcome(int accepted, int rejected) {}
+
+    private void noteRun(List<ReconTransaction> batch, String message) {
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        UUID runId = null;
+        for (ReconTransaction tx : batch) {
+            if (tx.getRunId() != null) {
+                runId = tx.getRunId();
+                break;
+            }
+        }
+        if (runId == null) {
+            return;
+        }
+        ReconRun run = runRepository.findById(runId).orElse(null);
+        if (run == null) {
+            return;
+        }
+        String existing = run.getProcessingError();
+        if (existing == null || existing.isBlank()) {
+            run.setProcessingError(message);
+        } else if (!existing.contains(message)) {
+            run.setProcessingError(existing + "\n" + message);
+        }
+        runRepository.save(run);
     }
 
     private static boolean isUnmappedLedger(String ledger) {
         return ledger != null && ledger.trim().equalsIgnoreCase("UNMAPPED");
     }
 
-    private static void addRejection(
-            List<String> rejections, String transactionId, String promptId, String ledger, String reason) {
+    private static void addRejection(List<String> rejections, String id, String returnedName, String reason) {
         if (rejections.size() >= 5) {
             return;
         }
-        String shown = ledger == null ? "" : ledger.replace('\r', ' ').replace('\n', ' ');
-        rejections.add("rejected transactionId=" + transactionId
-                + " promptId=" + promptId
-                + " ledger=" + shown
-                + " reason=" + reason);
+        String shown = returnedName == null ? "" : returnedName.replace('\r', ' ').replace('\n', ' ');
+        rejections.add("rejected id=" + id + " returnedName=" + shown + " reason=" + reason);
     }
 
     private String runNumberOf(List<ReconTransaction> batch) {
@@ -514,10 +657,17 @@ public class BankReconService {
             String trimmed = ledgerName.isBlank() ? null : ledgerName;
             ledgerChanged = !Objects.equals(trimmed, tx.getMappedLedger());
             tx.setMappedLedger(trimmed);
-            if (trimmed != null) {
+            boolean keepCode = !ledgerChanged && tx.getMappingSource() == MappingSource.CODE && trimmed != null;
+            if (trimmed != null && !keepCode) {
                 tx.setMappingSource(MappingSource.MANUAL);
+                if (ledgerChanged) {
+                    tx.setNote(null);
+                }
                 upsertLearnedMapping(
                         tx.getNormalisedDescription(), tx.getVoucherType(), trimmed, tx.getAmount(), updatedBy);
+            } else if (trimmed == null) {
+                tx.setMappingSource(null);
+                tx.setNote(null);
             }
         } else if (ledgerChanged) {
             tx.setMappingSource(MappingSource.MANUAL);
@@ -647,6 +797,7 @@ public class BankReconService {
                 ledger.setLedgerName(item.name());
                 ledger.setGroupName(groupName);
                 ledger.setAccountingNature(nature);
+                ledger.setAddedInApp(false);
                 ledgerRepository.save(ledger);
                 updated++;
             } else {
@@ -739,26 +890,33 @@ public class BankReconService {
                 .accountingNature(group.getAccountingNature())
                 .bankAccount("Bank Accounts".equals(group.getGroupName()))
                 .active(true)
+                .addedInApp(true)
                 .createdAt(Instant.now())
                 .build());
         return toLedger(ledger);
     }
 
     public PageResponse<LedgerResponse> listLedgers(String search, int page, int size) {
-        return listLedgers(search, null, page, size, null, null);
+        return listLedgers(search, null, page, size, null, null, null, null);
     }
 
     public PageResponse<LedgerResponse> listLedgers(String search, VoucherType voucherType, int page, int size) {
-        return listLedgers(search, voucherType, page, size, null, null);
+        return listLedgers(search, voucherType, page, size, null, null, null, null);
     }
 
     public PageResponse<LedgerResponse> listLedgers(
             String search, VoucherType voucherType, int page, int size, String excludeLedger, Boolean hasHint) {
+        return listLedgers(search, voucherType, page, size, excludeLedger, hasHint, null, null);
+    }
+
+    public PageResponse<LedgerResponse> listLedgers(
+            String search, VoucherType voucherType, int page, int size, String excludeLedger, Boolean hasHint,
+            Boolean hasCode, Boolean addedInApp) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("ledgerName"));
         String query = search != null && !search.isBlank() ? search.trim() : null;
         String exclude = excludeLedger != null && !excludeLedger.isBlank() ? excludeLedger.trim() : null;
         Page<TallyLedger> result = ledgerRepository.findAll(
-                ledgerSpec(query, voucherType, exclude, hasHint), pageable);
+                ledgerSpec(query, voucherType, exclude, hasHint, hasCode, addedInApp), pageable);
         Set<UUID> hinted = new HashSet<>(ledgerHintRepository.findLedgerIds());
         List<LedgerResponse> content = result.getContent().stream()
                 .map(ledger -> toLedger(ledger, hinted.contains(ledger.getId())))
@@ -766,8 +924,29 @@ public class BankReconService {
         return new PageResponse<>(content, result.getTotalElements(), page, size);
     }
 
+    public ExportFile exportLedgers(String search, VoucherType voucherType, String excludeLedger, Boolean hasHint) {
+        return exportLedgers(search, voucherType, excludeLedger, hasHint, null, null);
+    }
+
+    public ExportFile exportLedgers(
+            String search, VoucherType voucherType, String excludeLedger, Boolean hasHint,
+            Boolean hasCode, Boolean addedInApp) {
+        String query = search != null && !search.isBlank() ? search.trim() : null;
+        String exclude = excludeLedger != null && !excludeLedger.isBlank() ? excludeLedger.trim() : null;
+        List<TallyLedger> ledgers = ledgerRepository.findAll(
+                ledgerSpec(query, voucherType, exclude, hasHint, hasCode, addedInApp),
+                Sort.by(Sort.Order.asc("groupName"), Sort.Order.asc("ledgerName")));
+        Map<UUID, TallyLedgerHint> hints = ledgers.isEmpty()
+                ? Map.of()
+                : ledgerHintRepository.findByLedgerIdIn(ledgers.stream().map(TallyLedger::getId).toList()).stream()
+                        .collect(Collectors.toMap(TallyLedgerHint::getLedgerId, hint -> hint, (a, b) -> a));
+        String filename = "ledger-master-" + LocalDate.now() + ".xlsx";
+        return new ExportFile(LedgerMasterExcel.write(ledgers, hints), filename);
+    }
+
     private static Specification<TallyLedger> ledgerSpec(
-            String search, VoucherType voucherType, String excludeLedger, Boolean hasHint) {
+            String search, VoucherType voucherType, String excludeLedger, Boolean hasHint,
+            Boolean hasCode, Boolean addedInApp) {
         return (root, query, cb) -> {
             List<Predicate> preds = new ArrayList<>();
             if (search != null) {
@@ -782,6 +961,16 @@ public class BankReconService {
             }
             if (excludeLedger != null) {
                 preds.add(cb.notEqual(root.get("ledgerName"), excludeLedger));
+            }
+            if (hasCode != null) {
+                preds.add(Boolean.TRUE.equals(hasCode)
+                        ? cb.isNotNull(root.get("ledgerCode"))
+                        : cb.isNull(root.get("ledgerCode")));
+            }
+            if (addedInApp != null) {
+                preds.add(Boolean.TRUE.equals(addedInApp)
+                        ? cb.isTrue(root.get("addedInApp"))
+                        : cb.isFalse(root.get("addedInApp")));
             }
             if (hasHint != null && query != null) {
                 Subquery<Integer> hintRows = query.subquery(Integer.class);
@@ -852,7 +1041,10 @@ public class BankReconService {
 
     @Transactional
     public LedgerHintResponse saveLedgerHint(UUID ledgerId, LedgerHintRequest request, String updatedBy) {
-        requireLedger(ledgerId);
+        TallyLedger ledger = requireLedger(ledgerId);
+        if (request != null && request.ledgerCode() != null) {
+            assignCode(ledger, request.ledgerCode());
+        }
         String purpose = hintField(request == null ? null : request.purpose(), 500, "Purpose");
         String keywords = hintField(request == null ? null : request.keywords(), 500, "Keywords");
         String typicalAmount = hintField(request == null ? null : request.typicalAmount(), 255, "Typical amount");
@@ -870,6 +1062,120 @@ public class BankReconService {
         hint.setUpdatedBy(updatedBy);
         hint.setUpdatedAt(Instant.now());
         return toLedgerHint(ledgerHintRepository.save(hint));
+    }
+
+    private void assignCode(TallyLedger ledger, String raw) {
+        String code = LedgerCodeRules.canonical(raw);
+        if (code == null) {
+            ledger.setLedgerCode(null);
+            ledgerRepository.save(ledger);
+            return;
+        }
+        String problem = LedgerCodeRules.rejection(code);
+        if (problem != null) {
+            throw new IllegalArgumentException(problem);
+        }
+        ledgerRepository.findByLedgerCode(code).ifPresent(other -> {
+            if (ledger.getId() == null || !other.getId().equals(ledger.getId())) {
+                throw new IllegalArgumentException(
+                        "Code " + code + " is already used by " + other.getLedgerName());
+            }
+        });
+        ledger.setLedgerCode(code);
+        ledgerRepository.save(ledger);
+    }
+
+    @Transactional
+    public LedgerCodeImportPreview importLedgerCodes(MultipartFile file, boolean confirm, String actor) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("A workbook is required");
+        }
+        List<LedgerCodeImport.ParsedRow> parsed;
+        try {
+            parsed = LedgerCodeImport.read(file.getInputStream());
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException("Unable to read the workbook");
+        }
+        List<TallyLedger> ledgers = ledgerRepository.findAll();
+        Set<String> groups = ledgerGroupRepository.findAll().stream()
+                .map(TallyLedgerGroup::getGroupName)
+                .collect(Collectors.toSet());
+        Map<UUID, TallyLedgerHint> hints = ledgerHintRepository.findAll().stream()
+                .collect(Collectors.toMap(TallyLedgerHint::getLedgerId, hint -> hint, (a, b) -> a));
+        LedgerCodeImport.Planned plan = LedgerCodeImport.plan(parsed, ledgers, groups, hints);
+        boolean saved = false;
+        if (confirm && plan.errors().isEmpty()) {
+            applyLedgerCodeImport(plan);
+            audit("tally_ledger", null, "IMPORT", null,
+                    "updated=" + plan.toUpdate().size() + " added=" + plan.toAdd().size(), actor);
+            saved = true;
+        }
+        return new LedgerCodeImportPreview(
+                plan.toUpdate().stream().map(BankReconService::toCodeLine).toList(),
+                plan.toAdd().stream().map(BankReconService::toCodeLine).toList(),
+                plan.unchanged().stream().map(BankReconService::toCodeLine).toList(),
+                plan.errors().stream()
+                        .map(issue -> new LedgerCodeImportIssue(issue.rowNumber(), issue.ledgerName(), issue.message()))
+                        .toList(),
+                saved);
+    }
+
+    private void applyLedgerCodeImport(LedgerCodeImport.Planned plan) {
+        Map<Integer, LedgerCodeImport.ParsedRow> byRow = plan.rows().stream()
+                .collect(Collectors.toMap(LedgerCodeImport.ParsedRow::rowNumber, row -> row, (a, b) -> a));
+        for (LedgerCodeImport.Line line : plan.toUpdate()) {
+            TallyLedger ledger = ledgerRepository.findByLedgerName(line.ledgerName())
+                    .orElseThrow(() -> new IllegalArgumentException("Ledger not found: " + line.ledgerName()));
+            assignCode(ledger, line.ledgerCode());
+            writeHintCells(ledger, byRow.get(line.rowNumber()));
+        }
+        for (LedgerCodeImport.Line line : plan.toAdd()) {
+            LedgerCodeImport.ParsedRow row = byRow.get(line.rowNumber());
+            TallyLedgerGroup group = ledgerGroupRepository.findByGroupName(row.groupName())
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown group: " + row.groupName()));
+            TallyLedger ledger = TallyLedger.builder()
+                    .ledgerName(line.ledgerName())
+                    .groupName(group.getGroupName())
+                    .accountingNature(group.getAccountingNature())
+                    .bankAccount("Bank Accounts".equals(group.getGroupName()))
+                    .active(true)
+                    .addedInApp(true)
+                    .createdAt(Instant.now())
+                    .build();
+            assignCode(ledger, line.ledgerCode());
+            writeHintCells(ledger, row);
+        }
+    }
+
+    private void writeHintCells(TallyLedger ledger, LedgerCodeImport.ParsedRow row) {
+        if (row == null || ledger.getId() == null) {
+            return;
+        }
+        TallyLedgerHint existing = ledgerHintRepository.findByLedgerId(ledger.getId()).orElse(null);
+        if (!LedgerCodeImport.hintChanges(existing, row)) {
+            return;
+        }
+        TallyLedgerHint hint = existing != null
+                ? existing
+                : TallyLedgerHint.builder().ledgerId(ledger.getId()).build();
+        if (!row.purpose().isEmpty()) {
+            hint.setPurpose(row.purpose());
+        }
+        if (!row.keywords().isEmpty()) {
+            hint.setKeywords(row.keywords());
+        }
+        if (!row.typicalAmount().isEmpty()) {
+            hint.setTypicalAmount(row.typicalAmount());
+        }
+        if (!row.disambiguationNote().isEmpty()) {
+            hint.setDisambiguationNote(row.disambiguationNote());
+        }
+        hint.setUpdatedAt(Instant.now());
+        ledgerHintRepository.save(hint);
+    }
+
+    private static LedgerCodeImportLine toCodeLine(LedgerCodeImport.Line line) {
+        return new LedgerCodeImportLine(line.rowNumber(), line.ledgerName(), line.ledgerCode(), line.groupName());
     }
 
     public PageResponse<MappingResponse> listMappings(String search, int page, int size) {
@@ -967,14 +1273,19 @@ public class BankReconService {
                 active.chatModel(),
                 active.embeddingUrl(),
                 active.embeddingModel(),
-                BankReconAiConfig.parseInt(generalConfigService.getConfigValue(CFG_BATCH).orElse("10"), 10),
+                BankReconAiConfig.parseInt(generalConfigService.getConfigValue(CFG_BATCH).orElse("20"), 20),
                 BankReconAiConfig.parseInt(
                         generalConfigService.getConfigValue(BankReconAiConfig.CFG_TIMEOUT).orElse("120"), 120),
                 generalConfigService.getConfigValue(CFG_COMPANY).orElse("COGNOLOGIX"),
                 ollama ? BankReconAiConfig.PROVIDER_OLLAMA : BankReconAiConfig.PROVIDER_OMLX,
                 active.apiKey(),
                 ollamaSettings,
-                omlxSettings);
+                omlxSettings,
+                BankReconAiConfig.thinkingEnabled(generalConfigService),
+                tokenSetting(CFG_TOKENS_BASE, 500),
+                tokenSetting(CFG_TOKENS_PER_ROW, 40),
+                tokenSetting(CFG_TOKENS_BASE_THINKING, 1000),
+                tokenSetting(CFG_TOKENS_PER_ROW_THINKING, 400));
     }
 
     private LlmProviderSettings readOllamaSettings() {
@@ -1051,7 +1362,27 @@ public class BankReconService {
         if (request.companyName() != null) {
             generalConfigService.setConfigValue(CFG_COMPANY, request.companyName().trim());
         }
+        if (request.thinkingEnabled() != null) {
+            generalConfigService.setConfigValue(
+                    BankReconAiConfig.CFG_THINKING, Boolean.toString(request.thinkingEnabled()));
+        }
+        writeToken(CFG_TOKENS_BASE, request.maxTokensBase());
+        writeToken(CFG_TOKENS_PER_ROW, request.maxTokensPerRow());
+        writeToken(CFG_TOKENS_BASE_THINKING, request.maxTokensBaseThinking());
+        writeToken(CFG_TOKENS_PER_ROW_THINKING, request.maxTokensPerRowThinking());
         return getOllamaConfig();
+    }
+
+    private int tokenSetting(String key, int fallback) {
+        int value = BankReconAiConfig.parseInt(
+                generalConfigService.getConfigValue(key).orElse(Integer.toString(fallback)), fallback);
+        return value < 1 ? fallback : value;
+    }
+
+    private void writeToken(String key, Integer value) {
+        if (value != null && value > 0) {
+            generalConfigService.setConfigValue(key, String.valueOf(value));
+        }
     }
 
     public OllamaTestResponse testOllamaConnection(String target, OllamaConfigRequest draft) {
@@ -1110,7 +1441,12 @@ public class BankReconService {
                 provider,
                 apiKey,
                 saved.ollamaSettings(),
-                saved.omlxSettings());
+                saved.omlxSettings(),
+                saved.thinkingEnabled(),
+                saved.maxTokensBase(),
+                saved.maxTokensPerRow(),
+                saved.maxTokensBaseThinking(),
+                saved.maxTokensPerRowThinking());
     }
 
     private static String firstText(String preferred, String fallback) {
@@ -1320,8 +1656,7 @@ public class BankReconService {
                         .thenComparing(hint -> hint.getId() == null ? "" : hint.getId().toString()))
                 .map(hint -> new MappingPrompt.HintLine(hint.getVoucherType().name(), hint.getHintText()))
                 .toList();
-        List<MappingPrompt.LedgerLine> payment = catalogLines(VoucherType.PAYMENT);
-        List<MappingPrompt.LedgerLine> receipt = catalogLines(VoucherType.RECEIPT);
+        List<MappingPrompt.LedgerLine> catalog = catalogLines();
         List<LearnedMapping> learned = learnedMappingRepository.findAll();
         List<MappingPrompt.TransactionLine> transactions = new ArrayList<>();
         int promptId = 1;
@@ -1342,17 +1677,16 @@ public class BankReconService {
                     tx.getVoucherType().name(),
                     examples));
         }
-        return MappingPrompt.build(hints, payment, receipt, transactions);
+        return MappingPrompt.build(hints, catalog, transactions);
     }
 
-    private List<MappingPrompt.LedgerLine> catalogLines(VoucherType type) {
+    private List<MappingPrompt.LedgerLine> catalogLines() {
         Set<String> mappedNames = accountMappingRepository.findAll().stream()
                 .map(ReconAccountMapping::getLedgerName)
                 .collect(Collectors.toSet());
         Map<UUID, TallyLedgerHint> hintsByLedger = ledgerHintRepository.findAll().stream()
                 .collect(Collectors.toMap(TallyLedgerHint::getLedgerId, hint -> hint, (a, b) -> a));
         return ledgerRepository.findByActiveTrueOrderByLedgerNameAsc().stream()
-                .filter(ledger -> catalogNature(type, ledger))
                 .filter(ledger -> !MappingPrompt.excludedFromCatalog(
                         ledger.getGroupName(), ledger.getLedgerName(), mappedNames))
                 .sorted(Comparator.comparing(TallyLedger::getGroupName, Comparator.nullsFirst(String::compareTo))
@@ -1368,16 +1702,6 @@ public class BankReconService {
                             hint == null ? null : hint.getDisambiguationNote());
                 })
                 .toList();
-    }
-
-    private static boolean catalogNature(VoucherType type, TallyLedger ledger) {
-        return switch (type) {
-            case PAYMENT -> "Liability".equals(ledger.getAccountingNature())
-                    || "Expense".equals(ledger.getAccountingNature());
-            case RECEIPT -> "Asset".equals(ledger.getAccountingNature())
-                    || "Income".equals(ledger.getAccountingNature());
-            case CONTRA -> false;
-        };
     }
 
     private List<LearnedMapping> examplesFor(ReconTransaction tx, List<LearnedMapping> learned) {
@@ -1423,8 +1747,8 @@ public class BankReconService {
         }
     }
 
-    private Set<String> allowedLedgers(VoucherType type) {
-        return catalogLines(type).stream()
+    private Set<String> catalogNames() {
+        return catalogLines().stream()
                 .map(MappingPrompt.LedgerLine::ledgerName)
                 .collect(Collectors.toCollection(HashSet::new));
     }
@@ -1547,6 +1871,9 @@ public class BankReconService {
     }
 
     private RunResponse toRunResponse(ReconRun run, List<ReconTransaction> txs, List<ReconExport> exports) {
+        Set<String> addedInApp = ledgerRepository.findByAddedInAppTrue().stream()
+                .map(TallyLedger::getLedgerName)
+                .collect(Collectors.toSet());
         return new RunResponse(
                 run.getId(), run.getRunNumber(), run.getStatementNumber(), run.getAccountNumber(),
                 run.getBankLedgerName(),
@@ -1556,17 +1883,28 @@ public class BankReconService {
                 run.getOriginalFilename(),
                 run.getTotalTransactions(), run.getMappedCount(), run.getUnmappedCount(),
                 run.getExcludedCount(), run.getExportCount(), run.getStatus(), run.getCreatedAt(),
-                run.getCreatedBy(), txs.stream().map(this::toTxResponse).toList(),
+                run.getCreatedBy(), txs.stream().map(tx -> toTxResponse(tx, addedInApp)).toList(),
                 exports.stream().map(e -> new ExportResponse(e.getId(), e.getExportNumber(), e.getFilename(),
-                        e.getTransactionCount(), e.getGeneratedAt(), e.getGeneratedBy())).toList());
+                        e.getTransactionCount(), e.getGeneratedAt(), e.getGeneratedBy())).toList(),
+                run.getProcessingError());
     }
 
     private TransactionResponse toTxResponse(ReconTransaction tx) {
+        boolean notInTally = tx.getMappedLedger() != null
+                && ledgerRepository.findByLedgerName(tx.getMappedLedger())
+                .map(TallyLedger::isAddedInApp)
+                .orElse(false);
+        return toTxResponse(tx, notInTally ? Set.of(tx.getMappedLedger()) : Set.of());
+    }
+
+    private TransactionResponse toTxResponse(ReconTransaction tx, Set<String> addedInApp) {
         return new TransactionResponse(
                 tx.getId(), tx.getTransactionDate(), tx.getDescription(), tx.getNormalisedDescription(),
                 tx.getAmount(), tx.getDebitCredit(), tx.getReferenceNo(), tx.getValueDate(),
                 tx.getTransactionBranch(), tx.getRunningBalance(), tx.getVoucherType(),
-                tx.getMappedLedger(), tx.getMappingSource(), tx.isExcluded(), tx.isReviewed(), tx.getSortOrder());
+                tx.getMappedLedger(), tx.getMappingSource(), tx.isExcluded(), tx.isReviewed(), tx.getSortOrder(),
+                tx.getLlmNameResolution(), tx.getReviewTag(), tx.getNote(),
+                tx.getMappedLedger() != null && addedInApp.contains(tx.getMappedLedger()));
     }
 
     private LedgerResponse toLedger(TallyLedger ledger) {
@@ -1575,7 +1913,8 @@ public class BankReconService {
 
     private LedgerResponse toLedger(TallyLedger ledger, boolean hasHint) {
         return new LedgerResponse(ledger.getId(), ledger.getLedgerName(), ledger.getGroupName(),
-                ledger.getAccountingNature(), ledger.isBankAccount(), ledger.isActive(), hasHint);
+                ledger.getAccountingNature(), ledger.isBankAccount(), ledger.isActive(), hasHint,
+                ledger.getLedgerCode(), ledger.isAddedInApp());
     }
 
     private MappingResponse toMapping(LearnedMapping m) {

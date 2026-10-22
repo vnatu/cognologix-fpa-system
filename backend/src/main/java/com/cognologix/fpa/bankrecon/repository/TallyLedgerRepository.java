@@ -16,6 +16,12 @@ public interface TallyLedgerRepository extends JpaRepository<TallyLedger, UUID>,
 
     Optional<TallyLedger> findByLedgerName(String ledgerName);
 
+    Optional<TallyLedger> findByLedgerCode(String ledgerCode);
+
+    List<TallyLedger> findByLedgerCodeIsNotNull();
+
+    List<TallyLedger> findByAddedInAppTrue();
+
     @Query(value = """
             SELECT * FROM tally_ledger
             WHERE regexp_replace(ledger_name, E'[\\r\\n]', '', 'g') = :name

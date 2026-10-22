@@ -151,10 +151,30 @@ public class BankReconController {
             @RequestParam(required = false) String voucherType,
             @RequestParam(required = false) String excludeLedger,
             @RequestParam(required = false) Boolean hasHint,
+            @RequestParam(required = false) Boolean hasCode,
+            @RequestParam(required = false) Boolean addedInApp,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "200") int size) {
         VoucherType type = parseVoucherType(voucherType);
-        return bankReconService.listLedgers(search, type, page, size, excludeLedger, hasHint);
+        return bankReconService.listLedgers(search, type, page, size, excludeLedger, hasHint, hasCode, addedInApp);
+    }
+
+    @GetMapping("/ledgers/export")
+    @Operation(summary = "Download the ledger master as Excel for the same filters as the list")
+    public ResponseEntity<byte[]> exportLedgers(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String voucherType,
+            @RequestParam(required = false) String excludeLedger,
+            @RequestParam(required = false) Boolean hasHint,
+            @RequestParam(required = false) Boolean hasCode,
+            @RequestParam(required = false) Boolean addedInApp) {
+        BankReconService.ExportFile file = bankReconService.exportLedgers(
+                search, parseVoucherType(voucherType), excludeLedger, hasHint, hasCode, addedInApp);
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + file.filename() + "\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(file.bytes());
     }
 
     @GetMapping("/ledgers/{id}/hint")
@@ -204,6 +224,16 @@ public class BankReconController {
     @PostMapping(value = "/ledgers/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ImportCountResponse importLedgers(@RequestPart("file") MultipartFile file) {
         return bankReconService.importLedgerMaster(file);
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/ledgers/codes/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Preview or apply ledger codes from Excel. Nothing is saved until confirm=true and there are no errors.")
+    public LedgerCodeImportPreview importLedgerCodes(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(defaultValue = "false") boolean confirm,
+            Authentication auth) {
+        return bankReconService.importLedgerCodes(file, confirm, actor(auth));
     }
 
     @AdminOnly

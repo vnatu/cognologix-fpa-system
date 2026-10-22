@@ -4,8 +4,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Static prefix (instructions, hints, ledger catalog) then the per-run transactions,
- * so an unchanged catalog is a byte-identical cached prefix.
+ * System message is instructions, output format, matching rules, the catalog, then hints.
+ * Hints are last so editing one does not change the catalog bytes. The user message is
+ * only the transactions.
  */
 final class MappingPrompt {
 
@@ -13,6 +14,15 @@ final class MappingPrompt {
     static final int EXAMPLE_LIMIT = 3;
     static final int TOKENS_PER_MAPPING_ROW = 40;
     static final int COMPLETION_TOKEN_MARGIN = 500;
+
+    static final String MATCHING_RULES = """
+            Matching rules:
+            1. Choose the ledger whose name contains the payee's FULL name as it appears in the narration. A shared surname or first name alone is not enough.
+            2. Ignore numbers and codes after a name. "Sky Enterprises 2" refers to the ledger "Sky Enterprises".
+            3. Write the ledger name exactly as it appears in the catalog, character for character. Never shorten or reword it ("Private Limited", not "Pvt Ltd").
+            4. If no ledger in the catalog contains the payee's name, answer UNMAPPED. Never choose a different person's ledger.
+            5. If several ledgers contain the payee's name and the narration does not say which one applies, answer UNMAPPED.
+            """;
 
     private MappingPrompt() {}
 
@@ -41,8 +51,12 @@ final class MappingPrompt {
      * "Credit Card EMI" is not a bank-side group.
      */
     static int completionTokenBudget(int transactionCount) {
+        return completionTokenBudget(transactionCount, COMPLETION_TOKEN_MARGIN, TOKENS_PER_MAPPING_ROW);
+    }
+
+    static int completionTokenBudget(int transactionCount, int base, int perRow) {
         int rows = Math.max(transactionCount, 0);
-        return rows * TOKENS_PER_MAPPING_ROW + COMPLETION_TOKEN_MARGIN;
+        return rows * perRow + base;
     }
 
     static boolean isBankSideGroup(String groupName) {
@@ -65,46 +79,73 @@ final class MappingPrompt {
 
     static String build(
             List<HintLine> hints,
-            List<LedgerLine> paymentLedgers,
-            List<LedgerLine> receiptLedgers,
+            List<LedgerLine> catalog,
             List<TransactionLine> transactions) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("SYSTEM\n");
-        sb.append("Return only a JSON array of objects with transactionId and ledgerName.\n");
-        sb.append("Use UNMAPPED when unsure.\n");
-        sb.append("Each ledgerName must exactly match a ledger in that transaction's voucher-type catalog.\n\n");
-        sb.append("TRANSACTION HINTS\n");
+        StringBuilder system = new StringBuilder();
+        system.append("Map each transaction to one ledger from the catalog.\n\n");
+        system.append("Output format:\n");
+        system.append("A JSON array of {\"transactionId\": <int>, \"ledgerName\": \"<exact catalog name or UNMAPPED>\"} with nothing before or after it.\n\n");
+        system.append(MATCHING_RULES);
+        if (!MATCHING_RULES.endsWith("\n")) {
+            system.append('\n');
+        }
+        system.append('\n');
+        system.append("LEDGER CATALOG\n");
+        appendCatalog(system, catalog);
+        system.append("TRANSACTION HINTS\n");
         if (hints == null || hints.isEmpty()) {
-            sb.append("(none)\n");
+            system.append("(none)\n");
         } else {
             for (HintLine hint : hints) {
-                sb.append("- [").append(hint.voucherType()).append("] ").append(hint.text()).append('\n');
+                system.append("- [").append(hint.voucherType()).append("] ").append(hint.text()).append('\n');
             }
         }
-        sb.append("\nLEDGER CATALOG\n");
-        appendCatalog(sb, "PAYMENT", paymentLedgers);
-        appendCatalog(sb, "RECEIPT", receiptLedgers);
-        sb.append("TRANSACTIONS\n");
+        StringBuilder user = new StringBuilder();
+        user.append("TRANSACTIONS\n");
         if (transactions != null) {
             for (TransactionLine tx : transactions) {
-                sb.append("- id=").append(tx.id())
+                user.append("- id=").append(tx.id())
                         .append(" narration=\"").append(sanitize(tx.narration())).append('"')
                         .append(" amount=").append(tx.amount() == null ? "" : tx.amount())
                         .append(" type=").append(tx.type()).append('\n');
                 List<ExampleLine> examples = tx.examples();
                 if (examples == null || examples.isEmpty()) {
-                    sb.append("  examples: []\n");
+                    user.append("  examples: []\n");
                 } else {
-                    sb.append("  examples:\n");
+                    user.append("  examples:\n");
                     for (ExampleLine ex : examples) {
-                        sb.append("  - narration=\"").append(sanitize(ex.narration())).append('"')
+                        user.append("  - narration=\"").append(sanitize(ex.narration())).append('"')
                                 .append(" amount=").append(ex.amount() == null ? "" : ex.amount())
                                 .append(" ledger=").append(ex.ledger()).append('\n');
                     }
                 }
             }
         }
-        return sb.toString();
+        return "SYSTEM\n" + system + "USER\n" + user;
+    }
+
+    static String systemMessage(String prompt) {
+        if (prompt == null) {
+            return "";
+        }
+        String body = prompt.startsWith("SYSTEM\n") ? prompt.substring("SYSTEM\n".length()) : prompt;
+        int user = body.indexOf("\nUSER\n");
+        if (user >= 0) {
+            body = body.substring(0, user);
+        }
+        return body.strip();
+    }
+
+    static String userMessage(String prompt) {
+        if (prompt == null) {
+            return "";
+        }
+        int user = prompt.indexOf("\nUSER\n");
+        if (user >= 0) {
+            return prompt.substring(user + "\nUSER\n".length()).strip();
+        }
+        int transactions = prompt.indexOf("TRANSACTIONS\n");
+        return transactions < 0 ? "" : prompt.substring(transactions).strip();
     }
 
     static String staticPrefix(String prompt) {
@@ -113,16 +154,30 @@ final class MappingPrompt {
     }
 
     static String catalogSection(String prompt) {
+        if (prompt == null) {
+            return "";
+        }
         int start = prompt.indexOf("LEDGER CATALOG\n");
-        int end = prompt.indexOf("\nTRANSACTIONS\n");
         if (start < 0) {
             return "";
         }
         int from = start + "LEDGER CATALOG\n".length();
-        if (end < 0 || end < from) {
+        int end = catalogBodyEnd(prompt, from);
+        if (end < 0) {
             return prompt.substring(from);
         }
         return prompt.substring(from, end);
+    }
+
+    static int catalogBodyEnd(String prompt, int from) {
+        int best = -1;
+        for (String marker : List.of("\nTRANSACTION HINTS\n", "\nTRANSACTIONS\n", "\nUSER\n")) {
+            int index = prompt.indexOf(marker, from);
+            if (index >= 0 && (best < 0 || index < best)) {
+                best = index;
+            }
+        }
+        return best;
     }
 
     static int estimateTokens(String text) {
@@ -141,8 +196,7 @@ final class MappingPrompt {
         return sb.toString();
     }
 
-    private static void appendCatalog(StringBuilder sb, String voucherType, List<LedgerLine> lines) {
-        sb.append(voucherType).append('\n');
+    private static void appendCatalog(StringBuilder sb, List<LedgerLine> lines) {
         String currentGroup = null;
         if (lines != null) {
             for (LedgerLine line : lines) {
