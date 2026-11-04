@@ -85,4 +85,17 @@ public class ReconRun {
 
     @Column(name = "processing_error", columnDefinition = "TEXT")
     private String processingError;
+
+    @Column(name = "statement_source", nullable = false, length = 20)
+    @Builder.Default
+    private String statementSource = "HDFC_BANK";
+
+    @Column(name = "warnings", columnDefinition = "TEXT")
+    private String warnings;
+
+    @Column(name = "import_summary", columnDefinition = "TEXT")
+    private String importSummary;
+
+    @Column(name = "statement_date")
+    private LocalDate statementDate;
 }

@@ -1,5 +1,6 @@
 package com.cognologix.fpa.revenue.dto;
 
+import com.cognologix.fpa.revenue.domain.MonthSource;
 import com.cognologix.fpa.revenue.domain.RevenueCurrency;
 import com.cognologix.fpa.revenue.domain.RevenueImportType;
 import com.cognologix.fpa.revenue.domain.RevenueUploadStatus;
@@ -25,6 +26,60 @@ public final class RevenueDtos {
             List<String> missingColumns,
             List<String> unrecognizedCustomerCodes,
             List<String> duplicateNumbers
+    ) {}
+
+    /**
+     * Flags collected on the review step. Saving without the required flags is rejected.
+     * There is no option to keep a cross-period duplicate in both uploads.
+     */
+    public record ImportSaveOptions(
+            boolean confirmVersionShrink,
+            boolean confirmOtherMonths,
+            boolean skipCrossPeriodDuplicates
+    ) {
+        public static ImportSaveOptions none() {
+            return new ImportSaveOptions(false, false, false);
+        }
+    }
+
+    public record EffectiveMonthSummary(
+            int month,
+            int year,
+            int invoiceCount,
+            BigDecimal amount,
+            boolean activeUpload
+    ) {}
+
+    /** An incoming document number already stored on an ACTIVE upload for a different tag period. */
+    public record CrossPeriodDuplicate(
+            String documentNumber,
+            UUID uploadId,
+            String originalFilename,
+            int periodMonth,
+            int periodYear,
+            int versionNumber
+    ) {}
+
+    public record RevenueImportPreview(
+            int previousVersionCount,
+            int thisVersionCount,
+            int thisVersionCountIfSkipped,
+            int tagFallbackBlankCount,
+            int tagFallbackBlankCountIfSkipped,
+            List<String> servicePeriodWarnings,
+            List<EffectiveMonthSummary> months,
+            List<EffectiveMonthSummary> monthsExcludingCrossPeriodDuplicates,
+            List<EffectiveMonthSummary> otherMonths,
+            List<EffectiveMonthSummary> otherMonthsExcludingCrossPeriodDuplicates,
+            boolean otherMonthConfirmationRequired,
+            boolean otherMonthConfirmationRequiredIfSkipped,
+            boolean versionShrinkConfirmationRequired,
+            boolean versionShrinkConfirmationRequiredIfSkipped,
+            List<CrossPeriodDuplicate> crossPeriodDuplicates,
+            List<String> withinFileDuplicateNumbers,
+            List<String> unmappedColumns,
+            List<String> missingColumns,
+            List<String> unrecognizedCustomerCodes
     ) {}
 
     public record UploadSummary(
@@ -76,7 +131,10 @@ public final class RevenueDtos {
             RevenueCurrency currency,
             String projectCode,
             BigDecimal amountInr,
-            BigDecimal amountUsd
+            BigDecimal amountUsd,
+            Integer serviceMonth,
+            Integer serviceYear,
+            MonthSource monthSource
     ) {}
 
     public record InvoiceListPage(

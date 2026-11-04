@@ -72,6 +72,18 @@ public class RevenueController {
     }
 
     @AdminOnly
+    @PostMapping(value = "/imports/{periodMonth}/{periodYear}/invoices/preview",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Preview a Zoho Books invoice file without saving")
+    public RevenueImportPreview previewInvoices(
+            @PathVariable int periodMonth,
+            @PathVariable int periodYear,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam("mapping_id") UUID mappingId) {
+        return revenueService.previewInvoices(periodMonth, periodYear, file, mappingId);
+    }
+
+    @AdminOnly
     @PostMapping(value = "/imports/{periodMonth}/{periodYear}/invoices",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload Zoho Books invoices for a period")
@@ -80,9 +92,26 @@ public class RevenueController {
             @PathVariable int periodYear,
             @RequestPart("file") MultipartFile file,
             @RequestParam("mapping_id") UUID mappingId,
+            @RequestParam(name = "confirm_version_shrink", defaultValue = "false") boolean confirmVersionShrink,
+            @RequestParam(name = "confirm_other_months", defaultValue = "false") boolean confirmOtherMonths,
+            @RequestParam(name = "skip_cross_period_duplicates", defaultValue = "false") boolean skipCrossPeriodDuplicates,
             Authentication auth) {
         String uploadedBy = auth != null ? auth.getName() : "system";
-        return revenueService.uploadInvoices(periodMonth, periodYear, file, mappingId, uploadedBy);
+        return revenueService.uploadInvoices(
+                periodMonth, periodYear, file, mappingId, uploadedBy,
+                new ImportSaveOptions(confirmVersionShrink, confirmOtherMonths, skipCrossPeriodDuplicates));
+    }
+
+    @AdminOnly
+    @PostMapping(value = "/imports/{periodMonth}/{periodYear}/credit-notes/preview",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Preview a Zoho Books credit-note file without saving")
+    public RevenueImportPreview previewCreditNotes(
+            @PathVariable int periodMonth,
+            @PathVariable int periodYear,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam("mapping_id") UUID mappingId) {
+        return revenueService.previewCreditNotes(periodMonth, periodYear, file, mappingId);
     }
 
     @AdminOnly
@@ -94,9 +123,14 @@ public class RevenueController {
             @PathVariable int periodYear,
             @RequestPart("file") MultipartFile file,
             @RequestParam("mapping_id") UUID mappingId,
+            @RequestParam(name = "confirm_version_shrink", defaultValue = "false") boolean confirmVersionShrink,
+            @RequestParam(name = "confirm_other_months", defaultValue = "false") boolean confirmOtherMonths,
+            @RequestParam(name = "skip_cross_period_duplicates", defaultValue = "false") boolean skipCrossPeriodDuplicates,
             Authentication auth) {
         String uploadedBy = auth != null ? auth.getName() : "system";
-        return revenueService.uploadCreditNotes(periodMonth, periodYear, file, mappingId, uploadedBy);
+        return revenueService.uploadCreditNotes(
+                periodMonth, periodYear, file, mappingId, uploadedBy,
+                new ImportSaveOptions(confirmVersionShrink, confirmOtherMonths, skipCrossPeriodDuplicates));
     }
 
     @GetMapping("/imports/{periodMonth}/{periodYear}/uploads")
@@ -115,12 +149,14 @@ public class RevenueController {
             @RequestParam(required = false) String customerId,
             @RequestParam(required = false) Integer periodMonth,
             @RequestParam(required = false) Integer periodYear,
+            @RequestParam(required = false) Integer serviceMonth,
+            @RequestParam(required = false) Integer serviceYear,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) RevenueImportType importType,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return revenueService.getInvoiceList(
-                customerId, periodMonth, periodYear, status, importType, page, size);
+                customerId, periodMonth, periodYear, serviceMonth, serviceYear, status, importType, page, size);
     }
 
     @GetMapping("/invoices/export")
@@ -129,9 +165,12 @@ public class RevenueController {
             @RequestParam(required = false) String customerId,
             @RequestParam(required = false) Integer periodMonth,
             @RequestParam(required = false) Integer periodYear,
+            @RequestParam(required = false) Integer serviceMonth,
+            @RequestParam(required = false) Integer serviceYear,
             @RequestParam(required = false) String status) {
         return excelAttachment(
-                revenueService.exportInvoices(customerId, periodMonth, periodYear, status),
+                revenueService.exportInvoices(
+                        customerId, periodMonth, periodYear, serviceMonth, serviceYear, status),
                 "invoices_export.xlsx");
     }
 
@@ -141,9 +180,12 @@ public class RevenueController {
             @RequestParam(required = false) String customerId,
             @RequestParam(required = false) Integer periodMonth,
             @RequestParam(required = false) Integer periodYear,
+            @RequestParam(required = false) Integer serviceMonth,
+            @RequestParam(required = false) Integer serviceYear,
             @RequestParam(required = false) String status) {
         return excelAttachment(
-                revenueService.exportCreditNotes(customerId, periodMonth, periodYear, status),
+                revenueService.exportCreditNotes(
+                        customerId, periodMonth, periodYear, serviceMonth, serviceYear, status),
                 "credit_notes_export.xlsx");
     }
 

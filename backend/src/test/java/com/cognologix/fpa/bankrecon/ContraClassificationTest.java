@@ -65,7 +65,7 @@ class ContraClassificationTest {
 
         service = new BankReconService(
                 null, null, null, ledgers, null, learned, hints, null, null, accounts, ledgerHints,
-                null, config, null, llm, embedder);
+                null, config, null, llm, embedder, null);
     }
 
     @Test

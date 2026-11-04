@@ -33,6 +33,11 @@ import java.util.stream.Collectors;
 public class RevenueService {
 
     private static final String USD_INR = "USD_INR";
+    /**
+     * A replacement file must be confirmed when it has fewer than this fraction of the
+     * active version's invoices. 0.5 means under 50%.
+     */
+    public static final double VERSION_SHRINK_CONFIRM_THRESHOLD = 0.5;
     private static final Set<String> REVENUE_IMPORT_TYPE_NAMES = Set.of(
             RevenueImportType.ZOHO_BOOKS_INVOICES.name(),
             RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES.name());
@@ -70,23 +75,52 @@ public class RevenueService {
 
     // ── Uploads ──────────────────────────────────────────────────────────────
 
+    public RevenueImportPreview previewInvoices(
+            int periodMonth, int periodYear, MultipartFile file, UUID mappingId) {
+        validatePeriod(periodMonth, periodYear);
+        return toPreview(analyze(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear, file, mappingId));
+    }
+
+    public RevenueImportPreview previewCreditNotes(
+            int periodMonth, int periodYear, MultipartFile file, UUID mappingId) {
+        validatePeriod(periodMonth, periodYear);
+        return toPreview(analyze(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear, file, mappingId));
+    }
+
     @Transactional
     public UploadResult uploadInvoices(
             int periodMonth, int periodYear, MultipartFile file, UUID mappingId, String uploadedBy) {
+        return uploadInvoices(periodMonth, periodYear, file, mappingId, uploadedBy, ImportSaveOptions.none());
+    }
+
+    @Transactional
+    public UploadResult uploadInvoices(
+            int periodMonth, int periodYear, MultipartFile file, UUID mappingId, String uploadedBy,
+            ImportSaveOptions options) {
         validatePeriod(periodMonth, periodYear);
-        return upload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear, file, mappingId, uploadedBy);
+        return upload(
+                RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear, file, mappingId, uploadedBy, options);
     }
 
     @Transactional
     public UploadResult uploadCreditNotes(
             int periodMonth, int periodYear, MultipartFile file, UUID mappingId, String uploadedBy) {
+        return uploadCreditNotes(periodMonth, periodYear, file, mappingId, uploadedBy, ImportSaveOptions.none());
+    }
+
+    @Transactional
+    public UploadResult uploadCreditNotes(
+            int periodMonth, int periodYear, MultipartFile file, UUID mappingId, String uploadedBy,
+            ImportSaveOptions options) {
         validatePeriod(periodMonth, periodYear);
-        return upload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear, file, mappingId, uploadedBy);
+        return upload(
+                RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear, file, mappingId, uploadedBy, options);
     }
 
     /**
      * Re-upload contract (ADR-033 / ADR-039): if an ACTIVE upload already exists for this
-     * import_type + period, mark it SUPERSEDED and create version_number + 1.
+     * import_type + period tag, mark it SUPERSEDED and create version_number + 1.
+     * The upload tag itself is unchanged. Invoice rows may carry a different effective month.
      */
     private UploadResult upload(
             RevenueImportType importType,
@@ -94,24 +128,12 @@ public class RevenueService {
             int periodYear,
             MultipartFile file,
             UUID mappingId,
-            String uploadedBy) {
+            String uploadedBy,
+            ImportSaveOptions options) {
 
-        MappingTemplateApi mapping = peoplePayrollService.findMappingApiById(mappingId)
-                .orElseThrow(() -> new RevenueNotFoundException("Mapping template not found: " + mappingId));
-        if (!importType.name().equals(mapping.importType())) {
-            throw new RevenueBadRequestException(
-                    "Mapping import type " + mapping.importType() + " does not match upload type " + importType);
-        }
-
-        Map<String, String> excelToAttr = mapping.lines().stream()
-                .collect(Collectors.toMap(
-                        MappingTemplateApi.MappingLineApi::excelColumnName,
-                        MappingTemplateApi.MappingLineApi::systemAttribute,
-                        (a, b) -> a,
-                        LinkedHashMap::new));
-
-        RevenueExcelParser.ParsedWorkbook parsed = revenueExcelParser.parse(file, excelToAttr);
-        List<Map<String, String>> rows = parsed.rows();
+        ImportSaveOptions flags = options != null ? options : ImportSaveOptions.none();
+        AnalyzedImport analyzed = analyze(importType, periodMonth, periodYear, file, mappingId);
+        List<IncomingRow> toSave = rowsToSave(analyzed, flags);
 
         Optional<RevenueUpload> activeOpt = revenueUploadRepository
                 .findByImportTypeAndPeriodMonthAndPeriodYearAndStatus(
@@ -130,10 +152,6 @@ public class RevenueService {
                     .orElse(1);
         }
 
-        List<String> unrecognized = new ArrayList<>();
-        List<String> duplicates = new ArrayList<>();
-        Set<String> seenNumbers = new HashSet<>();
-
         RevenueUpload upload = RevenueUpload.builder()
                 .importType(importType)
                 .periodMonth(periodMonth)
@@ -142,36 +160,25 @@ public class RevenueService {
                 .status(RevenueUploadStatus.ACTIVE)
                 .uploadedBy(uploadedBy != null ? uploadedBy : "system")
                 .originalFilename(file.getOriginalFilename() != null ? file.getOriginalFilename() : "upload.xlsx")
-                .rowCount(rows.size())
-                .unmappedColumns(joinCsv(parsed.unmappedColumns()))
-                .missingColumns(joinCsv(parsed.missingColumns()))
+                .rowCount(toSave.size())
+                .unmappedColumns(joinCsv(analyzed.parsed().unmappedColumns()))
+                .missingColumns(joinCsv(analyzed.parsed().missingColumns()))
                 .build();
         upload = revenueUploadRepository.save(upload);
 
+        List<String> unrecognized = new ArrayList<>();
         if (importType == RevenueImportType.ZOHO_BOOKS_INVOICES) {
-            for (Map<String, String> row : rows) {
-                String invoiceNumber = RevenueExcelParser.required(row, RevenueSystemAttribute.INVOICE_NUMBER);
-                if (!seenNumbers.add(invoiceNumber) && !duplicates.contains(invoiceNumber)) {
-                    duplicates.add(invoiceNumber);
-                    continue;
-                }
-                RevenueInvoice invoice = buildInvoice(upload, periodMonth, periodYear, row, unrecognized);
-                revenueInvoiceRepository.save(invoice);
+            for (IncomingRow incoming : toSave) {
+                revenueInvoiceRepository.save(buildInvoice(upload, incoming, unrecognized));
             }
         } else {
-            for (Map<String, String> row : rows) {
-                String creditNoteNumber = RevenueExcelParser.required(row, RevenueSystemAttribute.CREDIT_NOTE_NUMBER);
-                if (!seenNumbers.add(creditNoteNumber) && !duplicates.contains(creditNoteNumber)) {
-                    duplicates.add(creditNoteNumber);
-                    continue;
-                }
-                RevenueCreditNote note = buildCreditNote(upload, periodMonth, periodYear, row, unrecognized);
-                revenueCreditNoteRepository.save(note);
+            for (IncomingRow incoming : toSave) {
+                revenueCreditNoteRepository.save(buildCreditNote(upload, incoming, unrecognized));
             }
         }
 
         upload.setUnrecognizedCustomerCodes(joinCsv(unrecognized));
-        upload.setRowCount(rows.size() - duplicates.size());
+        upload.setRowCount(toSave.size());
         revenueUploadRepository.save(upload);
 
         return new UploadResult(
@@ -181,15 +188,15 @@ public class RevenueService {
                 periodYear,
                 upload.getVersionNumber(),
                 upload.getRowCount(),
-                parsed.unmappedColumns(),
-                parsed.missingColumns(),
+                analyzed.parsed().unmappedColumns(),
+                analyzed.parsed().missingColumns(),
                 List.copyOf(unrecognized),
-                List.copyOf(duplicates));
+                List.copyOf(analyzed.withinFileDuplicates()));
     }
 
     private RevenueInvoice buildInvoice(
-            RevenueUpload upload, int periodMonth, int periodYear,
-            Map<String, String> row, List<String> unrecognized) {
+            RevenueUpload upload, IncomingRow incoming, List<String> unrecognized) {
+        Map<String, String> row = incoming.values();
 
         String customerCode = RevenueExcelParser.required(row, RevenueSystemAttribute.CUSTOMER_CODE);
         if (!customerService.isKnownCustomer(customerCode) && !unrecognized.contains(customerCode)) {
@@ -204,8 +211,11 @@ public class RevenueService {
 
         return RevenueInvoice.builder()
                 .revenueUpload(upload)
-                .periodMonth(periodMonth)
-                .periodYear(periodYear)
+                .periodMonth(incoming.effectiveMonth())
+                .periodYear(incoming.effectiveYear())
+                .serviceMonth(incoming.serviceMonth())
+                .serviceYear(incoming.serviceYear())
+                .monthSource(incoming.monthSource())
                 .invoiceNumber(RevenueExcelParser.required(row, RevenueSystemAttribute.INVOICE_NUMBER))
                 .customerId(customerCode)
                 .invoiceDate(invoiceDate)
@@ -222,8 +232,8 @@ public class RevenueService {
     }
 
     private RevenueCreditNote buildCreditNote(
-            RevenueUpload upload, int periodMonth, int periodYear,
-            Map<String, String> row, List<String> unrecognized) {
+            RevenueUpload upload, IncomingRow incoming, List<String> unrecognized) {
+        Map<String, String> row = incoming.values();
 
         String customerCode = RevenueExcelParser.required(row, RevenueSystemAttribute.CUSTOMER_CODE);
         if (!customerService.isKnownCustomer(customerCode) && !unrecognized.contains(customerCode)) {
@@ -241,8 +251,11 @@ public class RevenueService {
 
         return RevenueCreditNote.builder()
                 .revenueUpload(upload)
-                .periodMonth(periodMonth)
-                .periodYear(periodYear)
+                .periodMonth(incoming.effectiveMonth())
+                .periodYear(incoming.effectiveYear())
+                .serviceMonth(incoming.serviceMonth())
+                .serviceYear(incoming.serviceYear())
+                .monthSource(incoming.monthSource())
                 .creditNoteNumber(RevenueExcelParser.required(row, RevenueSystemAttribute.CREDIT_NOTE_NUMBER))
                 .customerId(customerCode)
                 .creditNoteDate(creditNoteDate)
@@ -282,6 +295,340 @@ public class RevenueService {
     }
 
     private record FxConversion(BigDecimal amountInr, UUID fxRateId) {}
+
+    private AnalyzedImport analyze(
+            RevenueImportType importType,
+            int tagMonth,
+            int tagYear,
+            MultipartFile file,
+            UUID mappingId) {
+
+        MappingTemplateApi mapping = peoplePayrollService.findMappingApiById(mappingId)
+                .orElseThrow(() -> new RevenueNotFoundException("Mapping template not found: " + mappingId));
+        if (!importType.name().equals(mapping.importType())) {
+            throw new RevenueBadRequestException(
+                    "Mapping import type " + mapping.importType() + " does not match upload type " + importType);
+        }
+
+        Map<String, String> excelToAttr = mapping.lines().stream()
+                .collect(Collectors.toMap(
+                        MappingTemplateApi.MappingLineApi::excelColumnName,
+                        MappingTemplateApi.MappingLineApi::systemAttribute,
+                        (a, b) -> a,
+                        LinkedHashMap::new));
+        boolean serviceMonthMapped = excelToAttr.containsValue(RevenueSystemAttribute.SERVICE_MONTH);
+        boolean serviceYearMapped = excelToAttr.containsValue(RevenueSystemAttribute.SERVICE_YEAR);
+        String numberAttribute = importType == RevenueImportType.ZOHO_BOOKS_INVOICES
+                ? RevenueSystemAttribute.INVOICE_NUMBER
+                : RevenueSystemAttribute.CREDIT_NOTE_NUMBER;
+        boolean creditNote = importType == RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES;
+
+        RevenueExcelParser.ParsedWorkbook parsed = revenueExcelParser.parse(file, excelToAttr);
+        List<String> unrecognized = new ArrayList<>();
+        List<String> withinFileDuplicates = new ArrayList<>();
+        Set<String> seenNumbers = new HashSet<>();
+        List<IncomingRow> rows = new ArrayList<>();
+
+        for (Map<String, String> row : parsed.rows()) {
+            String documentNumber = RevenueExcelParser.required(row, numberAttribute);
+            if (!seenNumbers.add(documentNumber)) {
+                if (!withinFileDuplicates.contains(documentNumber)) {
+                    withinFileDuplicates.add(documentNumber);
+                }
+                continue;
+            }
+            String customerCode = RevenueExcelParser.required(row, RevenueSystemAttribute.CUSTOMER_CODE);
+            if (!customerService.isKnownCustomer(customerCode) && !unrecognized.contains(customerCode)) {
+                unrecognized.add(customerCode);
+            }
+            if (creditNote) {
+                RevenueExcelParser.requiredDate(row, RevenueSystemAttribute.CREDIT_NOTE_DATE);
+            } else {
+                RevenueExcelParser.requiredDate(row, RevenueSystemAttribute.INVOICE_DATE);
+            }
+            RevenueExcelParser.required(row, RevenueSystemAttribute.STATUS);
+            BigDecimal amount = RevenueExcelParser.requiredDecimal(row, RevenueSystemAttribute.AMOUNT);
+            if (creditNote) {
+                amount = amount.abs();
+            }
+            ResolvedServicePeriod period = resolveServicePeriod(
+                    row, documentNumber, tagMonth, tagYear, serviceMonthMapped, serviceYearMapped);
+            rows.add(new IncomingRow(
+                    row,
+                    documentNumber,
+                    period.effectiveMonth(),
+                    period.effectiveYear(),
+                    period.serviceMonth(),
+                    period.serviceYear(),
+                    period.monthSource(),
+                    amount,
+                    period.blankServiceMonth(),
+                    period.warnings()));
+        }
+
+        int previousVersionCount = revenueUploadRepository
+                .findByImportTypeAndPeriodMonthAndPeriodYearAndStatus(
+                        importType, tagMonth, tagYear, RevenueUploadStatus.ACTIVE)
+                .map(RevenueUpload::getRowCount)
+                .orElse(0);
+
+        List<CrossPeriodDuplicate> crossPeriodDuplicates = findCrossPeriodDuplicates(importType, tagMonth, tagYear, rows);
+        return new AnalyzedImport(
+                importType,
+                tagMonth,
+                tagYear,
+                parsed,
+                rows,
+                withinFileDuplicates,
+                unrecognized,
+                previousVersionCount,
+                crossPeriodDuplicates);
+    }
+
+    private ResolvedServicePeriod resolveServicePeriod(
+            Map<String, String> row,
+            String documentNumber,
+            int tagMonth,
+            int tagYear,
+            boolean serviceMonthMapped,
+            boolean serviceYearMapped) {
+
+        ServicePeriodParser.MonthParse monthParse = readMonth(row, serviceMonthMapped);
+        ServicePeriodParser.YearParse yearParse = readYear(row, serviceYearMapped);
+        List<String> warnings = new ArrayList<>();
+        boolean blankServiceMonth = serviceMonthMapped && monthParse.blank();
+        if (blankServiceMonth) {
+            warnings.add(documentNumber + ": service month is blank; counted in the upload tag");
+        } else if (serviceMonthMapped && monthParse.unreadable()) {
+            warnings.add(documentNumber + ": service month \""
+                    + rawCell(row, RevenueSystemAttribute.SERVICE_MONTH)
+                    + "\" is not a month; counted in the upload tag");
+        }
+        if (serviceYearMapped && yearParse.blank() && monthParse.month() != null) {
+            warnings.add(documentNumber + ": service year is blank; counted in the upload tag");
+        } else if (serviceYearMapped && yearParse.unreadable()) {
+            warnings.add(documentNumber + ": service year \""
+                    + rawCell(row, RevenueSystemAttribute.SERVICE_YEAR)
+                    + "\" is not a year; counted in the upload tag");
+        }
+
+        boolean bothValid = monthParse.month() != null && yearParse.year() != null;
+        if (bothValid) {
+            return new ResolvedServicePeriod(
+                    monthParse.month(),
+                    yearParse.year(),
+                    monthParse.month(),
+                    yearParse.year(),
+                    MonthSource.SERVICE,
+                    false,
+                    warnings);
+        }
+        return new ResolvedServicePeriod(
+                tagMonth,
+                tagYear,
+                monthParse.month(),
+                yearParse.year(),
+                MonthSource.TAG,
+                blankServiceMonth,
+                warnings);
+    }
+
+    private static ServicePeriodParser.MonthParse readMonth(Map<String, String> row, boolean mapped) {
+        if (!mapped) {
+            return ServicePeriodParser.parseMonth(null);
+        }
+        return ServicePeriodParser.parseMonth(row.get(RevenueSystemAttribute.SERVICE_MONTH));
+    }
+
+    private static ServicePeriodParser.YearParse readYear(Map<String, String> row, boolean mapped) {
+        if (!mapped) {
+            return ServicePeriodParser.parseYear(null);
+        }
+        return ServicePeriodParser.parseYear(row.get(RevenueSystemAttribute.SERVICE_YEAR));
+    }
+
+    private static String rawCell(Map<String, String> row, String attribute) {
+        String value = row.get(attribute);
+        return value == null ? "" : value.trim();
+    }
+
+    private List<CrossPeriodDuplicate> findCrossPeriodDuplicates(
+            RevenueImportType importType, int tagMonth, int tagYear, List<IncomingRow> rows) {
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        List<String> numbers = rows.stream().map(IncomingRow::documentNumber).toList();
+        if (importType == RevenueImportType.ZOHO_BOOKS_INVOICES) {
+            return revenueInvoiceRepository
+                    .findOnOtherActivePeriods(importType, RevenueUploadStatus.ACTIVE, tagMonth, tagYear, numbers)
+                    .stream()
+                    .map(inv -> toCrossPeriodDuplicate(inv.getInvoiceNumber(), inv.getRevenueUpload()))
+                    .toList();
+        }
+        return revenueCreditNoteRepository
+                .findOnOtherActivePeriods(importType, RevenueUploadStatus.ACTIVE, tagMonth, tagYear, numbers)
+                .stream()
+                .map(note -> toCrossPeriodDuplicate(note.getCreditNoteNumber(), note.getRevenueUpload()))
+                .toList();
+    }
+
+    private static CrossPeriodDuplicate toCrossPeriodDuplicate(String documentNumber, RevenueUpload heldBy) {
+        return new CrossPeriodDuplicate(
+                documentNumber,
+                heldBy.getId(),
+                heldBy.getOriginalFilename(),
+                heldBy.getPeriodMonth(),
+                heldBy.getPeriodYear(),
+                heldBy.getVersionNumber());
+    }
+
+    private List<IncomingRow> rowsToSave(AnalyzedImport analyzed, ImportSaveOptions options) {
+        Set<String> blocked = analyzed.crossPeriodDuplicates().stream()
+                .map(CrossPeriodDuplicate::documentNumber)
+                .collect(Collectors.toSet());
+        if (!blocked.isEmpty() && !options.skipCrossPeriodDuplicates()) {
+            throw new RevenueBadRequestException(
+                    "These numbers are already on an active upload for another period. "
+                            + "Skip them in this upload, or cancel: " + String.join(", ", blocked));
+        }
+        List<IncomingRow> toSave = blocked.isEmpty() || !options.skipCrossPeriodDuplicates()
+                ? analyzed.rows()
+                : analyzed.rows().stream()
+                        .filter(row -> !blocked.contains(row.documentNumber()))
+                        .toList();
+        boolean otherMonth = toSave.stream().anyMatch(row ->
+                row.effectiveMonth() != analyzed.tagMonth() || row.effectiveYear() != analyzed.tagYear());
+        if (otherMonth && !options.confirmOtherMonths()) {
+            throw new RevenueBadRequestException(
+                    "Confirm invoices that land in a month other than the upload tag before saving");
+        }
+        if (requiresVersionConfirmation(analyzed.previousVersionCount(), toSave.size())
+                && !options.confirmVersionShrink()) {
+            throw new RevenueBadRequestException(
+                    "previous version: " + analyzed.previousVersionCount()
+                            + " invoices, this version: " + toSave.size()
+                            + ". This version is under 50% of the previous one. Confirm to replace it.");
+        }
+        return toSave;
+    }
+
+    private RevenueImportPreview toPreview(AnalyzedImport analyzed) {
+        Set<String> blocked = analyzed.crossPeriodDuplicates().stream()
+                .map(CrossPeriodDuplicate::documentNumber)
+                .collect(Collectors.toSet());
+        List<IncomingRow> kept = analyzed.rows().stream()
+                .filter(row -> !blocked.contains(row.documentNumber()))
+                .toList();
+        List<EffectiveMonthSummary> months = monthSummaries(analyzed, analyzed.rows());
+        List<EffectiveMonthSummary> monthsIfSkipped = monthSummaries(analyzed, kept);
+        List<EffectiveMonthSummary> otherMonths = otherMonths(analyzed, months);
+        List<EffectiveMonthSummary> otherMonthsIfSkipped = otherMonths(analyzed, monthsIfSkipped);
+        int blank = (int) analyzed.rows().stream().filter(IncomingRow::blankServiceMonth).count();
+        int blankIfSkipped = (int) kept.stream().filter(IncomingRow::blankServiceMonth).count();
+        List<String> warnings = analyzed.rows().stream()
+                .flatMap(row -> row.warnings().stream())
+                .toList();
+        return new RevenueImportPreview(
+                analyzed.previousVersionCount(),
+                analyzed.rows().size(),
+                kept.size(),
+                blank,
+                blankIfSkipped,
+                warnings,
+                months,
+                monthsIfSkipped,
+                otherMonths,
+                otherMonthsIfSkipped,
+                !otherMonths.isEmpty(),
+                !otherMonthsIfSkipped.isEmpty(),
+                requiresVersionConfirmation(analyzed.previousVersionCount(), analyzed.rows().size()),
+                requiresVersionConfirmation(analyzed.previousVersionCount(), kept.size()),
+                analyzed.crossPeriodDuplicates(),
+                analyzed.withinFileDuplicates(),
+                analyzed.parsed().unmappedColumns(),
+                analyzed.parsed().missingColumns(),
+                analyzed.unrecognized());
+    }
+
+    private List<EffectiveMonthSummary> monthSummaries(AnalyzedImport analyzed, List<IncomingRow> rows) {
+        Map<String, MonthBucket> buckets = new TreeMap<>();
+        for (IncomingRow row : rows) {
+            String key = row.effectiveYear() + "-" + String.format("%02d", row.effectiveMonth());
+            MonthBucket bucket = buckets.computeIfAbsent(
+                    key, k -> new MonthBucket(row.effectiveMonth(), row.effectiveYear()));
+            bucket.count++;
+            bucket.amount = bucket.amount.add(row.amount());
+        }
+        return buckets.values().stream()
+                .map(bucket -> new EffectiveMonthSummary(
+                        bucket.month,
+                        bucket.year,
+                        bucket.count,
+                        bucket.amount,
+                        findActiveUpload(analyzed.importType(), bucket.month, bucket.year).isPresent()))
+                .toList();
+    }
+
+    private static List<EffectiveMonthSummary> otherMonths(
+            AnalyzedImport analyzed, List<EffectiveMonthSummary> months) {
+        return months.stream()
+                .filter(month -> month.month() != analyzed.tagMonth() || month.year() != analyzed.tagYear())
+                .toList();
+    }
+
+    static boolean requiresVersionConfirmation(int previousCount, int thisCount) {
+        if (previousCount <= 0) {
+            return false;
+        }
+        return thisCount < previousCount * VERSION_SHRINK_CONFIRM_THRESHOLD;
+    }
+
+    private record IncomingRow(
+            Map<String, String> values,
+            String documentNumber,
+            int effectiveMonth,
+            int effectiveYear,
+            Integer serviceMonth,
+            Integer serviceYear,
+            MonthSource monthSource,
+            BigDecimal amount,
+            boolean blankServiceMonth,
+            List<String> warnings
+    ) {}
+
+    private record ResolvedServicePeriod(
+            int effectiveMonth,
+            int effectiveYear,
+            Integer serviceMonth,
+            Integer serviceYear,
+            MonthSource monthSource,
+            boolean blankServiceMonth,
+            List<String> warnings
+    ) {}
+
+    private record AnalyzedImport(
+            RevenueImportType importType,
+            int tagMonth,
+            int tagYear,
+            RevenueExcelParser.ParsedWorkbook parsed,
+            List<IncomingRow> rows,
+            List<String> withinFileDuplicates,
+            List<String> unrecognized,
+            int previousVersionCount,
+            List<CrossPeriodDuplicate> crossPeriodDuplicates
+    ) {}
+
+    private static final class MonthBucket {
+        final int month;
+        final int year;
+        int count;
+        BigDecimal amount = BigDecimal.ZERO;
+
+        MonthBucket(int month, int year) {
+            this.month = month;
+            this.year = year;
+        }
+    }
 
     // ── Period upload history ────────────────────────────────────────────────
 
@@ -324,25 +671,17 @@ public class RevenueService {
         BigDecimal creditTotal = BigDecimal.ZERO;
         BigDecimal creditTotalInr = BigDecimal.ZERO;
 
-        Optional<RevenueUpload> invoiceUpload = findActiveUpload(
-                RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear);
-        if (invoiceUpload.isPresent()) {
-            for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(invoiceUpload.get().getId())) {
-                if (code.equals(inv.getCustomerId())) {
-                    invoiceTotal = invoiceTotal.add(inv.getAmount());
-                    invoiceTotalInr = invoiceTotalInr.add(nullToZero(inv.getAmountInr()));
-                }
+        for (RevenueInvoice inv : invoicesForEffectivePeriod(periodMonth, periodYear)) {
+            if (code.equals(inv.getCustomerId())) {
+                invoiceTotal = invoiceTotal.add(inv.getAmount());
+                invoiceTotalInr = invoiceTotalInr.add(nullToZero(inv.getAmountInr()));
             }
         }
 
-        Optional<RevenueUpload> creditUpload = findActiveUpload(
-                RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear);
-        if (creditUpload.isPresent()) {
-            for (RevenueCreditNote note : revenueCreditNoteRepository.findByRevenueUploadId(creditUpload.get().getId())) {
-                if (code.equals(note.getCustomerId())) {
-                    creditTotal = creditTotal.add(note.getAmount());
-                    creditTotalInr = creditTotalInr.add(nullToZero(note.getAmountInr()));
-                }
+        for (RevenueCreditNote note : creditNotesForEffectivePeriod(periodMonth, periodYear)) {
+            if (code.equals(note.getCustomerId())) {
+                creditTotal = creditTotal.add(note.getAmount());
+                creditTotalInr = creditTotalInr.add(nullToZero(note.getAmountInr()));
             }
         }
 
@@ -359,44 +698,41 @@ public class RevenueService {
     }
 
     /**
-     * Net revenue per client for a period.
+     * Net revenue per client for an effective month.
      *
-     * @return {@code null} when no active Zoho Books invoice/credit-note upload exists for the
-     *         period (Budgeting falls back to {@code actual_revenue_manual}); otherwise the
-     *         per-client list (may be empty if uploads exist but contain no rows).
+     * <p>Rows are taken from ACTIVE uploads only, matched on the invoice's own period
+     * (service month when that was valid, otherwise the upload tag). An upload tagged for
+     * a different month still contributes when its rows land here.
+     *
+     * @return {@code null} when no invoice or credit-note row on an ACTIVE upload has this
+     *         effective period (Budgeting falls back to {@code actual_revenue_manual});
+     *         otherwise the per-client list.
      */
     public List<MonthlyRevenueSummary> getAllClientsMonthlyRevenue(int periodMonth, int periodYear) {
         validatePeriod(periodMonth, periodYear);
-        boolean hasUpload =
-                findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear).isPresent()
-                || findActiveUpload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear).isPresent();
-        if (!hasUpload) {
+        List<RevenueInvoice> invoices = invoicesForEffectivePeriod(periodMonth, periodYear);
+        List<RevenueCreditNote> notes = creditNotesForEffectivePeriod(periodMonth, periodYear);
+        if (invoices.isEmpty() && notes.isEmpty()) {
             return null;
         }
 
         Map<String, BigDecimal[]> totals = new LinkedHashMap<>();
 
-        findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear)
-                .ifPresent(upload -> {
-                    for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(upload.getId())) {
-                        BigDecimal[] t = totals.computeIfAbsent(
-                                inv.getCustomerId(),
-                                k -> new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO});
-                        t[0] = t[0].add(inv.getAmount());
-                        t[1] = t[1].add(nullToZero(inv.getAmountInr()));
-                    }
-                });
+        for (RevenueInvoice inv : invoices) {
+            BigDecimal[] t = totals.computeIfAbsent(
+                    inv.getCustomerId(),
+                    k -> new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO});
+            t[0] = t[0].add(inv.getAmount());
+            t[1] = t[1].add(nullToZero(inv.getAmountInr()));
+        }
 
-        findActiveUpload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear)
-                .ifPresent(upload -> {
-                    for (RevenueCreditNote note : revenueCreditNoteRepository.findByRevenueUploadId(upload.getId())) {
-                        BigDecimal[] t = totals.computeIfAbsent(
-                                note.getCustomerId(),
-                                k -> new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO});
-                        t[2] = t[2].add(note.getAmount());
-                        t[3] = t[3].add(nullToZero(note.getAmountInr()));
-                    }
-                });
+        for (RevenueCreditNote note : notes) {
+            BigDecimal[] t = totals.computeIfAbsent(
+                    note.getCustomerId(),
+                    k -> new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO});
+            t[2] = t[2].add(note.getAmount());
+            t[3] = t[3].add(nullToZero(note.getAmountInr()));
+        }
 
         return totals.entrySet().stream()
                 .map(e -> {
@@ -422,12 +758,15 @@ public class RevenueService {
             String customerId,
             Integer periodMonth,
             Integer periodYear,
+            Integer serviceMonth,
+            Integer serviceYear,
             String status,
             RevenueImportType importType,
             int page,
             int size) {
 
-        List<InvoiceListItem> all = listAllInvoiceItems(customerId, periodMonth, periodYear, status, importType);
+        List<InvoiceListItem> all = listAllInvoiceItems(
+                customerId, periodMonth, periodYear, serviceMonth, serviceYear, status, importType);
 
         int from = Math.min(page * size, all.size());
         int to = Math.min(from + size, all.size());
@@ -439,17 +778,21 @@ public class RevenueService {
             String customerId,
             Integer periodMonth,
             Integer periodYear,
+            Integer serviceMonth,
+            Integer serviceYear,
             String status,
             RevenueImportType importType) {
 
         List<UUID> invoiceUploadIds = new ArrayList<>();
         List<UUID> creditUploadIds = new ArrayList<>();
 
+        // Period filters match the row's effective month, so load every ACTIVE upload
+        // and let the row filter select the month. A service month with no tagged upload still appears.
         if (importType == null || importType == RevenueImportType.ZOHO_BOOKS_INVOICES) {
-            invoiceUploadIds.addAll(findActiveUploadIds(RevenueImportType.ZOHO_BOOKS_INVOICES, periodMonth, periodYear));
+            invoiceUploadIds.addAll(findActiveUploadIds(RevenueImportType.ZOHO_BOOKS_INVOICES, null, null));
         }
         if (importType == null || importType == RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES) {
-            creditUploadIds.addAll(findActiveUploadIds(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, periodMonth, periodYear));
+            creditUploadIds.addAll(findActiveUploadIds(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, null, null));
         }
 
         List<InvoiceListItem> all = new ArrayList<>();
@@ -457,7 +800,8 @@ public class RevenueService {
             for (UUID uploadId : invoiceUploadIds) {
                 for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(uploadId)) {
                     if (matchesFilter(inv.getCustomerId(), inv.getPeriodMonth(), inv.getPeriodYear(),
-                            inv.getStatus(), customerId, periodMonth, periodYear, status)) {
+                            inv.getStatus(), inv.getServiceMonth(), inv.getServiceYear(),
+                            customerId, periodMonth, periodYear, serviceMonth, serviceYear, status)) {
                         all.add(toInvoiceItem(inv));
                     }
                 }
@@ -467,7 +811,8 @@ public class RevenueService {
             for (UUID uploadId : creditUploadIds) {
                 for (RevenueCreditNote note : revenueCreditNoteRepository.findByRevenueUploadId(uploadId)) {
                     if (matchesFilter(note.getCustomerId(), note.getPeriodMonth(), note.getPeriodYear(),
-                            note.getStatus(), customerId, periodMonth, periodYear, status)) {
+                            note.getStatus(), note.getServiceMonth(), note.getServiceYear(),
+                            customerId, periodMonth, periodYear, serviceMonth, serviceYear, status)) {
                         all.add(toCreditItem(note));
                     }
                 }
@@ -485,9 +830,12 @@ public class RevenueService {
             String customerId,
             Integer periodMonth,
             Integer periodYear,
+            Integer serviceMonth,
+            Integer serviceYear,
             String status) {
         List<InvoiceListItem> items = listAllInvoiceItems(
-                customerId, periodMonth, periodYear, status, RevenueImportType.ZOHO_BOOKS_INVOICES);
+                customerId, periodMonth, periodYear, serviceMonth, serviceYear, status,
+                RevenueImportType.ZOHO_BOOKS_INVOICES);
         return revenueExcelExporter.exportInvoices(items);
     }
 
@@ -495,15 +843,20 @@ public class RevenueService {
             String customerId,
             Integer periodMonth,
             Integer periodYear,
+            Integer serviceMonth,
+            Integer serviceYear,
             String status) {
         List<InvoiceListItem> items = listAllInvoiceItems(
-                customerId, periodMonth, periodYear, status, RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES);
+                customerId, periodMonth, periodYear, serviceMonth, serviceYear, status,
+                RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES);
         return revenueExcelExporter.exportCreditNotes(items);
     }
 
     private boolean matchesFilter(
             String rowCustomer, int rowMonth, int rowYear, String rowStatus,
-            String customerId, Integer periodMonth, Integer periodYear, String status) {
+            Integer rowServiceMonth, Integer rowServiceYear,
+            String customerId, Integer periodMonth, Integer periodYear,
+            Integer serviceMonth, Integer serviceYear, String status) {
         if (customerId != null && !customerId.isBlank() && !customerId.trim().equals(rowCustomer)) {
             return false;
         }
@@ -511,6 +864,12 @@ public class RevenueService {
             return false;
         }
         if (periodYear != null && !periodYear.equals(rowYear)) {
+            return false;
+        }
+        if (serviceMonth != null && !serviceMonth.equals(rowServiceMonth)) {
+            return false;
+        }
+        if (serviceYear != null && !serviceYear.equals(rowServiceYear)) {
             return false;
         }
         if (status != null && !status.isBlank()
@@ -536,7 +895,10 @@ public class RevenueService {
                 inv.getCurrency(),
                 inv.getProjectCode(),
                 inv.getAmountInr(),
-                inv.getAmountUsd());
+                inv.getAmountUsd(),
+                inv.getServiceMonth(),
+                inv.getServiceYear(),
+                inv.getMonthSource());
     }
 
     private InvoiceListItem toCreditItem(RevenueCreditNote note) {
@@ -555,7 +917,10 @@ public class RevenueService {
                 note.getCurrency(),
                 null,
                 note.getAmountInr(),
-                note.getAmountUsd());
+                note.getAmountUsd(),
+                note.getServiceMonth(),
+                note.getServiceYear(),
+                note.getMonthSource());
     }
 
     // ── Dashboard ────────────────────────────────────────────────────────────
@@ -568,7 +933,7 @@ public class RevenueService {
      * <ul>
      *   <li>{@code MONTHLY} — single month (path {@code periodMonth}/{@code periodYear})</li>
      *   <li>{@code QUARTERLY} — sum of 3 Indian-FY months for {@code quarter} (1=Apr–Jun … 4=Jan–Mar)</li>
-     *   <li>{@code ANNUAL} — sum of FY months that have invoice/credit-note uploads</li>
+     *   <li>{@code ANNUAL} — sum of FY months that have invoice or credit-note rows on ACTIVE uploads</li>
      * </ul>
      */
     public DashboardResponse getDashboard(
@@ -582,19 +947,23 @@ public class RevenueService {
         int resolvedQuarter = resolveQuarter(granularity, quarter, periodMonth);
 
         List<int[]> scopeMonths = monthsInScope(granularity, periodMonth, periodYear, resolvedQuarter);
-        List<int[]> monthsWithData = scopeMonths.stream()
+        List<int[]> monthsWithRows = scopeMonths.stream()
+                .filter(my -> hasEffectiveRevenueRows(my[0], my[1]))
+                .toList();
+        List<int[]> monthsWithUploads = scopeMonths.stream()
                 .filter(my -> hasActiveUpload(my[0], my[1]))
                 .toList();
 
-        // ANNUAL aggregates only months with data; MONTHLY/QUARTERLY iterate the full scope
-        List<int[]> aggregateMonths = "ANNUAL".equals(granularity) ? monthsWithData : scopeMonths;
+        // Revenue vs Plan follows each row's effective month. Status and DSO stay on the upload tag.
+        List<int[]> revenueMonths = "ANNUAL".equals(granularity) ? monthsWithRows : scopeMonths;
+        List<int[]> statusMonths = "ANNUAL".equals(granularity) ? monthsWithUploads : scopeMonths;
 
         Map<String, VsPlanAccum> vsPlanMap = new LinkedHashMap<>();
         Map<String, InvoiceStatusBucketAccum> statusMap = new LinkedHashMap<>();
         Map<String, DsoAccum> dsoMap = new LinkedHashMap<>();
         LocalDate today = LocalDate.now();
 
-        for (int[] my : aggregateMonths) {
+        for (int[] my : revenueMonths) {
             int month = my[0];
             int year = my[1];
 
@@ -635,21 +1004,15 @@ public class RevenueService {
                 acc.actual = acc.actual.add(actual.netRevenue());
                 acc.actualInr = acc.actualInr.add(actual.netRevenueInr());
             }
+            addUsdFromEffectivePeriod(vsPlanMap, month, year);
+        }
 
+        for (int[] my : statusMonths) {
+            int month = my[0];
+            int year = my[1];
             findActiveUpload(RevenueImportType.ZOHO_BOOKS_INVOICES, month, year)
                     .ifPresent(upload -> {
                         for (RevenueInvoice inv : revenueInvoiceRepository.findByRevenueUploadId(upload.getId())) {
-                            if (inv.getAmountUsd() != null) {
-                                VsPlanAccum vs = vsPlanMap.computeIfAbsent(inv.getCustomerId(), k -> {
-                                    VsPlanAccum a = new VsPlanAccum();
-                                    a.customerName = customerService.resolveBuCustomer(inv.getCustomerId())
-                                            .map(CustomerService.BuCustomerRef::customerName)
-                                            .orElse(inv.getCustomerId());
-                                    return a;
-                                });
-                                vs.actualUsd = vs.actualUsd.add(inv.getAmountUsd());
-                                vs.hasUsd = true;
-                            }
                             String st = inv.getStatus() != null ? inv.getStatus() : "Unknown";
                             InvoiceStatusBucketAccum acc = statusMap.computeIfAbsent(
                                     st, k -> new InvoiceStatusBucketAccum());
@@ -671,23 +1034,6 @@ public class RevenueService {
                             if (dso.oldestInvoiceDate == null
                                     || inv.getInvoiceDate().isBefore(dso.oldestInvoiceDate)) {
                                 dso.oldestInvoiceDate = inv.getInvoiceDate();
-                            }
-                        }
-                    });
-
-            findActiveUpload(RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES, month, year)
-                    .ifPresent(upload -> {
-                        for (RevenueCreditNote note : revenueCreditNoteRepository.findByRevenueUploadId(upload.getId())) {
-                            if (note.getAmountUsd() != null) {
-                                VsPlanAccum vs = vsPlanMap.computeIfAbsent(note.getCustomerId(), k -> {
-                                    VsPlanAccum a = new VsPlanAccum();
-                                    a.customerName = customerService.resolveBuCustomer(note.getCustomerId())
-                                            .map(CustomerService.BuCustomerRef::customerName)
-                                            .orElse(note.getCustomerId());
-                                    return a;
-                                });
-                                vs.actualUsd = vs.actualUsd.subtract(note.getAmountUsd());
-                                vs.hasUsd = true;
                             }
                         }
                     });
@@ -730,7 +1076,7 @@ public class RevenueService {
                 .sorted(Comparator.comparing(DsoRow::customerId))
                 .toList();
 
-        List<MonthCovered> monthsCovered = monthsWithData.stream()
+        List<MonthCovered> monthsCovered = monthsWithRows.stream()
                 .map(my -> new MonthCovered(my[0], my[1], monthLabel(my[0], my[1])))
                 .toList();
 
@@ -759,23 +1105,76 @@ public class RevenueService {
                 dsoRows);
     }
 
-    /** Active invoice/credit-note periods for the dashboard month selector. */
+    /**
+     * Months that have invoice or credit-note rows on ACTIVE uploads.
+     * A month is listed even when no upload is tagged with it.
+     */
     public List<PeriodWithData> listPeriodsWithData() {
-        return revenueUploadRepository.findAll().stream()
-                .filter(u -> u.getStatus() == RevenueUploadStatus.ACTIVE)
-                .filter(u -> u.getImportType() == RevenueImportType.ZOHO_BOOKS_INVOICES
-                        || u.getImportType() == RevenueImportType.ZOHO_BOOKS_CREDIT_NOTES)
-                .map(u -> new int[]{u.getPeriodMonth(), u.getPeriodYear()})
-                .collect(Collectors.toMap(
-                        my -> my[1] * 100 + my[0],
-                        my -> my,
-                        (a, b) -> a))
-                .values().stream()
+        Map<Integer, int[]> periods = new LinkedHashMap<>();
+        addEffectivePeriods(periods, revenueInvoiceRepository.findEffectivePeriodsOnActiveUploads(RevenueUploadStatus.ACTIVE));
+        addEffectivePeriods(periods, revenueCreditNoteRepository.findEffectivePeriodsOnActiveUploads(RevenueUploadStatus.ACTIVE));
+        return periods.values().stream()
                 .sorted(Comparator
                         .comparingInt((int[] my) -> fiscalSortKey(my[0], my[1]))
                         .reversed())
                 .map(my -> new PeriodWithData(my[0], my[1], monthLabel(my[0], my[1])))
                 .toList();
+    }
+
+    private static void addEffectivePeriods(Map<Integer, int[]> periods, List<Object[]> rows) {
+        for (Object[] row : rows) {
+            int month = ((Number) row[0]).intValue();
+            int year = ((Number) row[1]).intValue();
+            periods.putIfAbsent(year * 100 + month, new int[]{month, year});
+        }
+    }
+
+    private void addUsdFromEffectivePeriod(Map<String, VsPlanAccum> vsPlanMap, int month, int year) {
+        for (RevenueInvoice inv : invoicesForEffectivePeriod(month, year)) {
+            if (inv.getAmountUsd() == null) {
+                continue;
+            }
+            VsPlanAccum vs = vsPlanMap.computeIfAbsent(inv.getCustomerId(), k -> {
+                VsPlanAccum a = new VsPlanAccum();
+                a.customerName = customerService.resolveBuCustomer(inv.getCustomerId())
+                        .map(CustomerService.BuCustomerRef::customerName)
+                        .orElse(inv.getCustomerId());
+                return a;
+            });
+            vs.actualUsd = vs.actualUsd.add(inv.getAmountUsd());
+            vs.hasUsd = true;
+        }
+        for (RevenueCreditNote note : creditNotesForEffectivePeriod(month, year)) {
+            if (note.getAmountUsd() == null) {
+                continue;
+            }
+            VsPlanAccum vs = vsPlanMap.computeIfAbsent(note.getCustomerId(), k -> {
+                VsPlanAccum a = new VsPlanAccum();
+                a.customerName = customerService.resolveBuCustomer(note.getCustomerId())
+                        .map(CustomerService.BuCustomerRef::customerName)
+                        .orElse(note.getCustomerId());
+                return a;
+            });
+            vs.actualUsd = vs.actualUsd.subtract(note.getAmountUsd());
+            vs.hasUsd = true;
+        }
+    }
+
+    private List<RevenueInvoice> invoicesForEffectivePeriod(int periodMonth, int periodYear) {
+        return revenueInvoiceRepository.findOnActiveUploadsByEffectivePeriod(
+                periodMonth, periodYear, RevenueUploadStatus.ACTIVE);
+    }
+
+    private List<RevenueCreditNote> creditNotesForEffectivePeriod(int periodMonth, int periodYear) {
+        return revenueCreditNoteRepository.findOnActiveUploadsByEffectivePeriod(
+                periodMonth, periodYear, RevenueUploadStatus.ACTIVE);
+    }
+
+    private boolean hasEffectiveRevenueRows(int periodMonth, int periodYear) {
+        return revenueInvoiceRepository.countOnActiveUploadsByEffectivePeriod(
+                        periodMonth, periodYear, RevenueUploadStatus.ACTIVE) > 0
+                || revenueCreditNoteRepository.countOnActiveUploadsByEffectivePeriod(
+                        periodMonth, periodYear, RevenueUploadStatus.ACTIVE) > 0;
     }
 
     private boolean hasActiveUpload(int periodMonth, int periodYear) {

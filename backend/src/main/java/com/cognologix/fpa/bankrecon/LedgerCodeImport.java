@@ -75,7 +75,7 @@ final class LedgerCodeImport {
                         && purpose.isEmpty() && keywords.isEmpty() && typical.isEmpty() && note.isEmpty()) {
                     continue;
                 }
-                rows.add(new ParsedRow(r + 1, collapse(name), code.trim(), group.trim(),
+                rows.add(new ParsedRow(r + 1, trimEdges(name), code.trim(), group.trim(),
                         purpose, keywords, typical, note));
             }
             return rows;
@@ -92,10 +92,12 @@ final class LedgerCodeImport {
             java.util.Set<String> knownGroups,
             Map<UUID, TallyLedgerHint> hints) {
         Map<String, TallyLedger> exact = new LinkedHashMap<>();
+        Map<String, List<TallyLedger>> spaced = new LinkedHashMap<>();
         Map<String, List<TallyLedger>> loose = new LinkedHashMap<>();
         Map<String, TallyLedger> byCode = new LinkedHashMap<>();
         for (TallyLedger ledger : ledgers) {
             exact.put(ledger.getLedgerName(), ledger);
+            spaced.computeIfAbsent(spacingKey(ledger.getLedgerName()), key -> new ArrayList<>()).add(ledger);
             loose.computeIfAbsent(looseName(ledger.getLedgerName()), key -> new ArrayList<>()).add(ledger);
             if (ledger.getLedgerCode() != null) {
                 byCode.put(ledger.getLedgerCode(), ledger);
@@ -131,12 +133,16 @@ final class LedgerCodeImport {
             }
             TallyLedger match = row.ledgerName().isEmpty() ? null : exact.get(row.ledgerName());
             if (match == null && !row.ledgerName().isEmpty()) {
-                List<TallyLedger> possible = loose.getOrDefault(looseName(row.ledgerName()), List.of());
-                if (!possible.isEmpty()) {
-                    problems.add("possible match: " + possible.stream()
-                            .map(TallyLedger::getLedgerName)
-                            .reduce((a, b) -> a + ", " + b)
-                            .orElse(""));
+                List<TallyLedger> spacedHits = spaced.getOrDefault(spacingKey(row.ledgerName()), List.of());
+                if (spacedHits.size() == 1) {
+                    match = spacedHits.getFirst();
+                } else if (spacedHits.size() > 1) {
+                    problems.add("ambiguous: matches " + spacedHits.size() + " ledgers: " + quoteNames(spacedHits));
+                } else {
+                    List<TallyLedger> possible = loose.getOrDefault(looseName(row.ledgerName()), List.of());
+                    if (!possible.isEmpty()) {
+                        problems.add("possible match: " + quoteNames(possible));
+                    }
                 }
             }
             if (code != null && codeProblem == null) {
@@ -145,7 +151,8 @@ final class LedgerCodeImport {
                     problems.add("Code " + code + " is already used by " + owner.getLedgerName());
                 }
             }
-            boolean isNew = match == null && problems.stream().noneMatch(p -> p.startsWith("possible match:"));
+            boolean isNew = match == null && problems.stream().noneMatch(p ->
+                    p.startsWith("possible match:") || p.startsWith("ambiguous:"));
             if (isNew && problems.stream().noneMatch(p -> p.startsWith("Ledger name"))) {
                 if (row.groupName().isEmpty()) {
                     problems.add("Group is required for a new ledger");
@@ -159,7 +166,8 @@ final class LedgerCodeImport {
                 }
                 continue;
             }
-            Line line = new Line(row.rowNumber(), row.ledgerName(), code, row.groupName());
+            String storedName = match == null ? row.ledgerName() : match.getLedgerName();
+            Line line = new Line(row.rowNumber(), storedName, code, row.groupName());
             if (match == null) {
                 toAdd.add(line);
             } else if (same(match, hints.get(match.getId()), code, row)) {
@@ -171,11 +179,59 @@ final class LedgerCodeImport {
         return new Planned(toUpdate, toAdd, unchanged, errors, rows);
     }
 
+    /** Trim, then runs of whitespace or non-breaking spaces become one space. Case is kept. */
+    static String spacingKey(String name) {
+        if (name == null || name.isEmpty()) {
+            return "";
+        }
+        StringBuilder key = new StringBuilder();
+        boolean pendingSpace = false;
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (isSpace(c)) {
+                pendingSpace = key.length() > 0;
+                continue;
+            }
+            if (pendingSpace) {
+                key.append(' ');
+                pendingSpace = false;
+            }
+            key.append(c);
+        }
+        return key.toString();
+    }
+
     static String looseName(String name) {
         if (name == null) {
             return "";
         }
         return name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim().replaceAll(" +", " ");
+    }
+
+    private static String quoteNames(List<TallyLedger> ledgers) {
+        return ledgers.stream()
+                .map(ledger -> "\"" + ledger.getLedgerName() + "\"")
+                .reduce((left, right) -> left + ", " + right)
+                .orElse("");
+    }
+
+    private static String trimEdges(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        int start = 0;
+        int end = value.length();
+        while (start < end && isSpace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && isSpace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
+    }
+
+    private static boolean isSpace(char c) {
+        return Character.isWhitespace(c) || c == '\u00A0' || c == '\u2007' || c == '\u202F';
     }
 
     private static boolean same(TallyLedger ledger, TallyLedgerHint hint, String code, ParsedRow row) {
@@ -197,10 +253,6 @@ final class LedgerCodeImport {
             return false;
         }
         return !incoming.equals(current == null ? "" : current);
-    }
-
-    private static String collapse(String value) {
-        return value.trim().replaceAll("\\s+", " ");
     }
 
     private static String cell(DataFormatter formatter, Row row, Integer index) {
