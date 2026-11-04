@@ -41,7 +41,16 @@ public final class BankReconDtos {
             String llmNameResolution,
             String reviewTag,
             String note,
-            boolean notInTally
+            boolean notInTally,
+            String cardLast4,
+            String statementLedger,
+            String nameOnCard,
+            String merchantCategory,
+            String importFlag,
+            boolean cardPayment,
+            String postingWarning,
+            String matchedCode,
+            String mappingReason
     ) {}
 
     public record RunResponse(
@@ -66,7 +75,11 @@ public final class BankReconDtos {
             String createdBy,
             List<TransactionResponse> transactions,
             List<ExportResponse> exports,
-            String processingError
+            String processingError,
+            String statementSource,
+            String warnings,
+            String importSummary,
+            LocalDate statementDate
     ) {}
 
     public record ExportResponse(

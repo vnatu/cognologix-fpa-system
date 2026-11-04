@@ -63,6 +63,14 @@ public class ReconTransaction {
     @Column(name = "mapping_source", length = 10)
     private MappingSource mappingSource;
 
+    /** Ledger code token that decided this row. Set only when mapping_source is CODE. */
+    @Column(name = "matched_code", length = 10)
+    private String matchedCode;
+
+    /** Why an unmapped row stayed unmapped after the LLM stage. */
+    @Column(name = "mapping_reason", length = 32)
+    private String mappingReason;
+
     @Column(name = "is_excluded", nullable = false)
     @Builder.Default
     private boolean excluded = false;
@@ -86,4 +94,40 @@ public class ReconTransaction {
     /** Matched code word and its position, or a note that two codes conflicted. */
     @Column(name = "note", columnDefinition = "TEXT")
     private String note;
+
+    @Column(name = "card_last4", length = 4)
+    private String cardLast4;
+
+    /** Card ledger from Account Mapping. Export uses this as the statement side. */
+    @Column(name = "statement_ledger", length = 500)
+    private String statementLedger;
+
+    @Column(name = "name_on_card", length = 500)
+    private String nameOnCard;
+
+    @Column(name = "merchant_name", length = 500)
+    private String merchantName;
+
+    @Column(name = "merchant_category", length = 255)
+    private String merchantCategory;
+
+    @Column(name = "transaction_type", length = 100)
+    private String transactionType;
+
+    @Column(name = "tax_amount", precision = 14, scale = 2)
+    private BigDecimal taxAmount;
+
+    @Column(name = "cost_center", length = 100)
+    private String costCenter;
+
+    @Column(name = "employee_id", length = 100)
+    private String employeeId;
+
+    /** Check currency, Already imported, or a code conflict. */
+    @Column(name = "import_flag", length = 255)
+    private String importFlag;
+
+    @Column(name = "card_payment", nullable = false)
+    @Builder.Default
+    private boolean cardPayment = false;
 }

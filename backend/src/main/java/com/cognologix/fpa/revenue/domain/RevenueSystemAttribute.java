@@ -18,6 +18,10 @@ public final class RevenueSystemAttribute {
     public static final String DUE_DATE = "DueDate";
     public static final String CURRENCY = "Currency";
     public static final String PROJECT_CODE = "ProjectCode";
+    /** Optional Zoho custom field. Blank or unreadable falls back to the upload tag. */
+    public static final String SERVICE_MONTH = "ServiceMonth";
+    /** Optional Zoho custom field. Both month and year must be valid to count as SERVICE. */
+    public static final String SERVICE_YEAR = "ServiceYear";
     /** Raw USD dollars as invoiced — optional, no FX / lakhs conversion (ADR-061). */
     public static final String AMOUNT_USD = "AmountUsd";
 

@@ -54,21 +54,9 @@ final class TallyPrimeExcelExporter {
         int r = 1;
         for (ReconTransaction tx : rows) {
             String voucherNo = prefix + "-" + run.getRunNumber() + "-" + String.format("%03d", seq++);
-            String debit;
-            String credit;
-            if (tx.getVoucherType() == VoucherType.PAYMENT) {
-                debit = tx.getMappedLedger();
-                credit = bankLedger;
-            } else if (tx.getVoucherType() == VoucherType.RECEIPT) {
-                debit = bankLedger;
-                credit = tx.getMappedLedger();
-            } else if (tx.getDebitCredit() == DebitCredit.D) {
-                debit = tx.getMappedLedger();
-                credit = bankLedger;
-            } else {
-                debit = bankLedger;
-                credit = tx.getMappedLedger();
-            }
+            Sides sides = sides(tx, bankLedger);
+            String debit = sides.debit();
+            String credit = sides.credit();
             Row row = sheet.createRow(r++);
             row.createCell(0).setCellValue(formatDate(tx));
             row.createCell(1).setCellValue(tx.getVoucherType().name());
@@ -81,6 +69,25 @@ final class TallyPrimeExcelExporter {
         for (int i = 0; i < HEADERS.length; i++) {
             sheet.autoSizeColumn(i);
         }
+    }
+
+    record Sides(String debit, String credit) {}
+
+    static Sides sides(ReconTransaction tx, String runBankLedger) {
+        String statementLedger = tx.getStatementLedger();
+        String bankLedger = statementLedger != null && !statementLedger.isBlank()
+                ? statementLedger
+                : runBankLedger;
+        if (tx.getVoucherType() == VoucherType.PAYMENT) {
+            return new Sides(tx.getMappedLedger(), bankLedger);
+        }
+        if (tx.getVoucherType() == VoucherType.RECEIPT) {
+            return new Sides(bankLedger, tx.getMappedLedger());
+        }
+        if (tx.getDebitCredit() == DebitCredit.D) {
+            return new Sides(tx.getMappedLedger(), bankLedger);
+        }
+        return new Sides(bankLedger, tx.getMappedLedger());
     }
 
     private static String formatDate(ReconTransaction tx) {

@@ -22,18 +22,22 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.TreeMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -58,6 +62,8 @@ public class BankReconService {
     static final String CFG_TOKENS_BASE_THINKING = "llm_max_tokens_base_thinking";
     static final String CFG_TOKENS_PER_ROW_THINKING = "llm_max_tokens_per_row_thinking";
     static final String CFG_COMPANY = "ollama_company_name";
+    static final String CFG_CODE_MIN_LENGTH = "bank_recon_code_min_length";
+    static final String CFG_CODE_IGNORE = "bank_recon_code_ignore";
     static final String TRUNCATED_MESSAGE = "LLM response truncated";
     static final String NONE_ACCEPTED_MESSAGE = "LLM returned rows but none were accepted";
     static final String HDFC_IMPORT_TYPE = "HDFC_BANK_STATEMENT";
@@ -81,7 +87,9 @@ public class BankReconService {
     private final PeoplePayrollService peoplePayrollService;
     private final StructuredLlmClient structuredLlmClient;
     private final NarrationEmbedder narrationEmbedder;
+    private final ReconCardReferenceRepository cardReferenceRepository;
     private final HdfcStatementParser statementParser = new HdfcStatementParser();
+    private final HsbcCardExcelParser hsbcCardParser = new HsbcCardExcelParser();
     private final TallyPrimeExcelExporter excelExporter = new TallyPrimeExcelExporter();
     private final TallyLedgerXmlParser xmlParser = new TallyLedgerXmlParser();
 
@@ -127,6 +135,23 @@ public class BankReconService {
 
     @Transactional
     public RunResponse uploadStatement(MultipartFile file, UUID mappingId, String uploadedBy) {
+        return uploadStatement(file, mappingId, uploadedBy, null);
+    }
+
+    @Transactional
+    public RunResponse uploadStatement(
+            MultipartFile file, UUID mappingId, String uploadedBy, String sourceType) {
+        if (sourceType != null && sourceType.trim().equalsIgnoreCase(HsbcCardVoucherRules.STATEMENT_SOURCE)) {
+            return uploadHsbcCard(file, uploadedBy);
+        }
+        if (sourceType != null && !sourceType.isBlank()
+                && !sourceType.trim().equalsIgnoreCase("HDFC_BANK")) {
+            throw new IllegalArgumentException("Statement source must be HDFC_BANK or HSBC_CARD_XLSX");
+        }
+        return uploadHdfcStatement(file, mappingId, uploadedBy);
+    }
+
+    private RunResponse uploadHdfcStatement(MultipartFile file, UUID mappingId, String uploadedBy) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Statement file is required");
         }
@@ -147,6 +172,7 @@ public class BankReconService {
                 .closingBalance(parsed.closingBalance())
                 .originalFilename(file.getOriginalFilename())
                 .status(ReconRunStatus.OPEN)
+                .statementSource("HDFC_BANK")
                 .createdBy(uploadedBy)
                 .createdAt(Instant.now())
                 .build();
@@ -178,6 +204,206 @@ public class BankReconService {
         refreshRunCounts(run, transactions);
         runRepository.save(run);
         return toRunResponse(run, transactions, List.of());
+    }
+
+    private RunResponse uploadHsbcCard(MultipartFile file, String uploadedBy) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Statement file is required");
+        }
+        String filename = file.getOriginalFilename() == null ? "" : file.getOriginalFilename();
+        if (!filename.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
+            throw new IllegalArgumentException("HSBC card statements must be a .xlsx file");
+        }
+        String debitTypes = configOrDefault(
+                HsbcCardVoucherRules.CFG_DEBIT_TYPES, HsbcCardVoucherRules.DEFAULT_DEBIT_TYPES);
+        String pattern = configOrDefault(
+                HsbcCardVoucherRules.CFG_PAYMENT_PATTERN, HsbcCardVoucherRules.DEFAULT_PAYMENT_PATTERN);
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (IOException ex) {
+            throw new IllegalArgumentException("Could not read the HSBC card workbook", ex);
+        }
+        HsbcCardExcelParser.ParsedFile parsed = hsbcCardParser.parse(bytes, debitTypes, pattern);
+        if (!parsed.transactionTypes().isEmpty()) {
+            log.info("HSBC card upload transaction types: {}", String.join(", ", parsed.transactionTypes()));
+        }
+        Set<String> references = parsed.rows().stream()
+                .map(HsbcCardExcelParser.ParsedRow::bankReference)
+                .filter(reference -> reference != null && !reference.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> existing = references.isEmpty() || cardReferenceRepository == null
+                ? Set.of()
+                : cardReferenceRepository.findByBankReferenceIn(references).stream()
+                        .map(ReconCardReference::getBankReference)
+                        .collect(Collectors.toSet());
+        List<HsbcCardExcelParser.ParsedRow> rows =
+                HsbcCardExcelParser.markAlreadyImported(parsed.rows(), existing);
+        String hdfcLedger = HsbcCardVoucherRules.defaultHdfcLedger(activeHdfcLedgerNames());
+        Map<String, String> cardLedgers = new LinkedHashMap<>();
+        LinkedHashSet<String> unmappedCards = new LinkedHashSet<>();
+        LinkedHashSet<String> cards = new LinkedHashSet<>();
+        BigDecimal debitTotal = BigDecimal.ZERO;
+        BigDecimal creditTotal = BigDecimal.ZERO;
+        int reviewRows = 0;
+        int alreadyImported = 0;
+        boolean oneLedger = true;
+        String sharedLedger = null;
+        List<ReconTransaction> transactions = new ArrayList<>();
+        List<String> newReferences = new ArrayList<>();
+        int order = 0;
+        for (HsbcCardExcelParser.ParsedRow row : rows) {
+            String cardLedger = null;
+            if (row.cardLast4() != null) {
+                cards.add(row.cardLast4());
+                cardLedger = cardLedgers.computeIfAbsent(row.cardLast4(), this::cardLedger);
+                if (cardLedger == null) {
+                    unmappedCards.add(row.cardLast4());
+                } else if (sharedLedger == null) {
+                    sharedLedger = cardLedger;
+                } else if (!sharedLedger.equals(cardLedger)) {
+                    oneLedger = false;
+                }
+            }
+            boolean importedBefore = HsbcCardVoucherRules.ALREADY_IMPORTED.equals(row.importFlag());
+            if (importedBefore) {
+                alreadyImported++;
+            }
+            if (row.importFlag() != null) {
+                reviewRows++;
+            }
+            if (row.debitCredit() == DebitCredit.C) {
+                creditTotal = creditTotal.add(row.amount());
+            } else {
+                debitTotal = debitTotal.add(row.amount());
+            }
+            ReconTransaction tx = ReconTransaction.builder()
+                    .transactionDate(row.transactionDate().atStartOfDay(ZoneOffset.UTC).toInstant())
+                    .description(row.narration())
+                    .normalisedDescription(HsbcCardVoucherRules.learnedKey(row.merchantName()))
+                    .amount(row.amount())
+                    .debitCredit(row.debitCredit())
+                    .referenceNo(row.bankReference())
+                    .valueDate(row.transactionDate())
+                    .voucherType(row.voucherType())
+                    .cardLast4(row.cardLast4())
+                    .statementLedger(cardLedger)
+                    .nameOnCard(row.nameOnCard())
+                    .merchantName(row.merchantName())
+                    .merchantCategory(row.merchantCategory())
+                    .transactionType(row.transactionType())
+                    .taxAmount(row.taxAmount())
+                    .costCenter(row.costCenter())
+                    .employeeId(row.employeeId())
+                    .importFlag(row.importFlag())
+                    .cardPayment(row.cardPayment())
+                    .excluded(importedBefore)
+                    .sortOrder(order++)
+                    .build();
+            if (row.cardPayment() && hdfcLedger != null) {
+                tx.setMappedLedger(hdfcLedger);
+                tx.setNote("Defaulted from the HDFC account mapping");
+            }
+            transactions.add(tx);
+            if (!importedBefore && row.bankReference() != null) {
+                newReferences.add(row.bankReference());
+            }
+        }
+        LocalDate periodStart = rows.stream()
+                .map(HsbcCardExcelParser.ParsedRow::transactionDate)
+                .min(Comparator.naturalOrder())
+                .orElse(null);
+        LocalDate periodEnd = rows.stream()
+                .map(HsbcCardExcelParser.ParsedRow::transactionDate)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        List<String> warnings = new ArrayList<>(
+                HsbcCardVoucherRules.unmappedCardWarnings(unmappedCards, Set.of()));
+        if (hdfcLedger == null && transactions.stream().anyMatch(ReconTransaction::isCardPayment)) {
+            warnings.add("No HDFC bank ledger is mapped. Set the bank ledger on each card payment.");
+        }
+        String summary = hsbcSummary(
+                transactions.size(), debitTotal, creditTotal, cards.size(), unmappedCards.size(),
+                parsed.transactionTypes(), parsed.inFileDuplicates(), alreadyImported, reviewRows);
+        ReconRun run = ReconRun.builder()
+                .runNumber(nextRunNumber())
+                .bankLedgerName(oneLedger ? sharedLedger : null)
+                .statementPeriodStart(periodStart)
+                .statementPeriodEnd(periodEnd)
+                .statementDate(parsed.statementDate())
+                .originalFilename(filename)
+                .status(ReconRunStatus.OPEN)
+                .statementSource(HsbcCardVoucherRules.STATEMENT_SOURCE)
+                .warnings(warnings.isEmpty() ? null : String.join("\n", warnings))
+                .importSummary(summary)
+                .createdBy(uploadedBy)
+                .createdAt(Instant.now())
+                .build();
+        run = runRepository.save(run);
+        for (ReconTransaction tx : transactions) {
+            tx.setRunId(run.getId());
+        }
+        transactionRepository.saveAll(transactions);
+        if (cardReferenceRepository != null) {
+            List<ReconCardReference> stored = new ArrayList<>();
+            for (String reference : newReferences) {
+                stored.add(ReconCardReference.builder()
+                        .bankReference(reference)
+                        .runId(run.getId())
+                        .build());
+            }
+            cardReferenceRepository.saveAll(stored);
+        }
+        runMappingPipeline(transactions);
+        transactionRepository.saveAll(transactions);
+        refreshRunCounts(run, transactions);
+        runRepository.save(run);
+        return toRunResponse(run, transactions, List.of());
+    }
+
+    private static String hsbcSummary(
+            int rows, BigDecimal debitTotal, BigDecimal creditTotal, int cards, int unmappedCards,
+            List<String> types, int inFileDuplicates, int alreadyImported, int reviewRows) {
+        String typeList = types == null || types.isEmpty() ? "none" : String.join(", ", types);
+        return "Rows: " + rows
+                + "\nDebit total: " + debitTotal.setScale(2, RoundingMode.HALF_UP).toPlainString()
+                + "\nCredit total: " + creditTotal.setScale(2, RoundingMode.HALF_UP).toPlainString()
+                + "\nCards: " + cards
+                + "\nUnmapped cards: " + unmappedCards
+                + "\nTransaction types: " + typeList
+                + "\nDuplicates in file: " + inFileDuplicates
+                + "\nAlready imported: " + alreadyImported
+                + "\nRows needing review: " + reviewRows;
+    }
+
+    private String configOrDefault(String key, String fallback) {
+        if (generalConfigService == null) {
+            return fallback;
+        }
+        return generalConfigService.getConfigValue(key)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .orElse(fallback);
+    }
+
+    private List<String> activeHdfcLedgerNames() {
+        if (accountMappingRepository == null) {
+            return List.of();
+        }
+        return accountMappingRepository.findAll().stream()
+                .filter(mapping -> mapping.getStatementType() == StatementType.HDFC_BANK && mapping.isActive())
+                .map(ReconAccountMapping::getLedgerName)
+                .toList();
+    }
+
+    private String cardLedger(String last4) {
+        if (accountMappingRepository == null) {
+            return null;
+        }
+        return accountMappingRepository
+                .findByStatementTypeAndIdentifierAndActiveTrue(StatementType.HSBC_CC, last4)
+                .map(ReconAccountMapping::getLedgerName)
+                .orElse(null);
     }
 
     public VoucherType classifyTransaction(ReconTransaction tx, List<ContraRule> contraRules) {
@@ -248,72 +474,46 @@ public class BankReconService {
         return labels.isEmpty() ? "(none)" : labels.toString();
     }
 
-    /**
-     * @return true when one ledger code matched and the row must not go to learned mappings or the LLM
-     */
-    private boolean applyLedgerCode(ReconTransaction tx, Map<String, TallyLedger> codes) {
-        List<LedgerCodeScan.Word> words = LedgerCodeScan.words(tx.getDescription());
-        Map<UUID, TallyLedger> matched = new LinkedHashMap<>();
-        LedgerCodeScan.Word first = null;
-        for (LedgerCodeScan.Word word : words) {
-            TallyLedger ledger = codes.get(word.text().toUpperCase(Locale.ROOT));
-            if (ledger == null) {
-                continue;
-            }
-            if (first == null) {
-                first = word;
-            }
-            matched.putIfAbsent(ledger.getId(), ledger);
-        }
-        if (matched.size() == 1 && first != null) {
-            TallyLedger ledger = matched.values().iterator().next();
-            tx.setMappedLedger(ledger.getLedgerName());
-            tx.setMappingSource(MappingSource.CODE);
-            tx.setNote(first.text() + " at position " + first.position());
-            tx.setLlmNameResolution(null);
-            tx.setReviewTag(null);
-            log.debug("Code decision=matched description={} word={} position={} ledger={}",
-                    tx.getDescription(), first.text(), first.position(), ledger.getLedgerName());
-            return true;
-        }
-        if (matched.size() > 1) {
-            String names = matched.values().stream()
-                    .map(TallyLedger::getLedgerName)
-                    .sorted()
-                    .collect(Collectors.joining(", "));
-            tx.setMappedLedger(null);
-            tx.setMappingSource(null);
-            tx.setNote("conflict: " + names);
-            log.debug("Code decision=conflict description={} ledgers={}", tx.getDescription(), names);
-            return false;
-        }
-        log.debug("Code decision=none description={}", tx.getDescription());
-        return false;
+    public void runMappingPipeline(List<ReconTransaction> transactions) {
+        runMappingPipeline(transactions, false);
     }
 
-    public void runMappingPipeline(List<ReconTransaction> transactions) {
+    /**
+     * @param includeManual when false, a reviewer mapping is left as it is
+     */
+    public void runMappingPipeline(List<ReconTransaction> transactions, boolean includeManual) {
         boolean opened = LlmCallContext.openIfAbsent(runNumberOf(transactions));
         try {
             List<ReconTransaction> unmapped = new ArrayList<>();
-            Map<String, TallyLedger> codes = new HashMap<>();
-            for (TallyLedger ledger : ledgerRepository.findByLedgerCodeIsNotNull()) {
-                if (ledger.getLedgerCode() != null) {
-                    codes.put(ledger.getLedgerCode(), ledger);
-                }
-            }
+            List<ReconTransaction> considered = new ArrayList<>();
+            List<TallyLedger> coded = ledgerRepository == null
+                    ? List.of()
+                    : ledgerRepository.findByLedgerCodeIsNotNull();
+            int minLength = codeMinLength();
+            Set<String> ignore = codeIgnore();
             for (ReconTransaction tx : transactions) {
                 if (tx.isExcluded() || tx.getVoucherType() == VoucherType.CONTRA) {
                     continue;
                 }
-                if (applyLedgerCode(tx, codes)) {
+                if (!includeManual && tx.getMappingSource() == MappingSource.MANUAL) {
+                    continue;
+                }
+                RowMapping.reset(tx);
+                considered.add(tx);
+                LedgerCodeMatch.Outcome code = LedgerCodeMatch.match(
+                        tx.getDescription(), coded, minLength, ignore);
+                if (code.kind() == LedgerCodeMatch.Kind.CONFLICT) {
+                    tx.setImportFlag("code conflict: " + code.conflictCodes());
+                }
+                if (code.kind() == LedgerCodeMatch.Kind.MATCH) {
+                    RowMapping.code(tx, code.ledger().getLedgerName(), code.matchedCode(), code.note());
                     continue;
                 }
                 Optional<LearnedMapping> learned = learnedMappingRepository
                         .findByNormalisedNarrationAndVoucherType(tx.getNormalisedDescription(), tx.getVoucherType());
                 if (learned.isPresent()) {
                     LearnedMapping mapping = learned.get();
-                    tx.setMappedLedger(mapping.getLedgerName());
-                    tx.setMappingSource(MappingSource.LEARNED);
+                    RowMapping.learned(tx, mapping.getLedgerName());
                     mapping.setUseCount(mapping.getUseCount() + 1);
                     mapping.setLastUsedAt(Instant.now());
                     learnedMappingRepository.save(mapping);
@@ -333,19 +533,79 @@ public class BankReconService {
                     mapBatchWithLlm(batch);
                 } catch (RuntimeException ex) {
                     for (ReconTransaction tx : batch) {
-                        tx.setMappedLedger(null);
-                        tx.setMappingSource(null);
-                        tx.setLlmNameResolution(null);
-                        tx.setReviewTag(null);
+                        RowMapping.none(tx, RowMapping.LLM_UNAVAILABLE);
                     }
                     noteRun(batch, ex.getMessage() == null ? "LLM call failed" : ex.getMessage());
                 }
-                transactionRepository.saveAll(batch);
+                if (transactionRepository != null) {
+                    transactionRepository.saveAll(batch);
+                }
             }
+            logMappingStages(considered);
         } finally {
             if (opened) {
                 LlmCallContext.close();
             }
+        }
+    }
+
+    private int codeMinLength() {
+        if (generalConfigService == null) {
+            return 2;
+        }
+        int parsed = BankReconAiConfig.parseInt(
+                generalConfigService.getConfigValue(CFG_CODE_MIN_LENGTH).orElse("2"), 2);
+        return parsed < 1 ? 2 : parsed;
+    }
+
+    private Set<String> codeIgnore() {
+        if (generalConfigService == null) {
+            return Set.of();
+        }
+        String raw = generalConfigService.getConfigValue(CFG_CODE_IGNORE).orElse("");
+        Set<String> ignored = new LinkedHashSet<>();
+        for (String part : raw.split(",")) {
+            String code = part.trim().toUpperCase(Locale.ROOT);
+            if (!code.isEmpty()) {
+                ignored.add(code);
+            }
+        }
+        return ignored;
+    }
+
+    private void logMappingStages(List<ReconTransaction> considered) {
+        int code = 0;
+        int learned = 0;
+        int llm = 0;
+        int none = 0;
+        Map<String, Integer> codes = new TreeMap<>();
+        for (ReconTransaction tx : considered) {
+            MappingSource source = tx.getMappingSource() == null ? MappingSource.NONE : tx.getMappingSource();
+            switch (source) {
+                case CODE -> {
+                    code++;
+                    if (tx.getMatchedCode() != null && !tx.getMatchedCode().isBlank()) {
+                        codes.merge(tx.getMatchedCode(), 1, Integer::sum);
+                    }
+                }
+                case LEARNED -> learned++;
+                case LLM -> llm++;
+                case NONE -> none++;
+                case MANUAL -> {
+                    // A reviewer mapping is not a stage result.
+                }
+            }
+        }
+        log.info("Mapping stages CODE={} LEARNED={} LLM={} NONE={}", code, learned, llm, none);
+        if (!codes.isEmpty()) {
+            StringBuilder counts = new StringBuilder();
+            for (Map.Entry<String, Integer> entry : codes.entrySet()) {
+                if (!counts.isEmpty()) {
+                    counts.append(", ");
+                }
+                counts.append(entry.getKey()).append('=').append(entry.getValue());
+            }
+            log.info("Matched codes: {}", counts);
         }
     }
 
@@ -386,6 +646,11 @@ public class BankReconService {
         int maxTokens = completionBudget(rows);
         LlmBatchResult result = structuredLlmClient.mapBatch(prompt, maxTokens);
         if (!result.replied()) {
+            for (ReconTransaction tx : batch) {
+                if (tx.getVoucherType() != VoucherType.CONTRA) {
+                    RowMapping.none(tx, RowMapping.LLM_UNAVAILABLE);
+                }
+            }
             noteRun(batch, result.errorMessage() == null || result.errorMessage().isBlank()
                     ? "LLM call failed" : result.errorMessage());
             return;
@@ -408,6 +673,11 @@ public class BankReconService {
         if (!retry.replied() || "length".equalsIgnoreCase(retry.finishReason())) {
             if (retry.replied()) {
                 applyLlmMappings(leftover, retry);
+            }
+            for (ReconTransaction tx : leftover) {
+                if (tx.getMappingSource() != MappingSource.LLM) {
+                    RowMapping.none(tx, RowMapping.LLM_UNAVAILABLE);
+                }
             }
             noteRun(batch, TRUNCATED_MESSAGE);
             return;
@@ -470,43 +740,36 @@ public class BankReconService {
             tx.setLlmNameResolution(null);
             tx.setReviewTag(null);
             if (ledger == null) {
-                tx.setMappedLedger(null);
-                tx.setMappingSource(null);
+                RowMapping.none(tx, RowMapping.LLM_UNMAPPED);
                 continue;
             }
             if (isUnmappedLedger(ledger)) {
                 unmapped++;
-                tx.setMappedLedger(null);
-                tx.setMappingSource(null);
+                RowMapping.none(tx, RowMapping.LLM_UNMAPPED);
                 continue;
             }
             if (ledger.isBlank()) {
                 rejected++;
                 addRejection(rejections, id, ledger, "blank ledger");
-                tx.setMappedLedger(null);
-                tx.setMappingSource(null);
+                RowMapping.none(tx, RowMapping.LLM_INVALID);
                 continue;
             }
             LedgerNameResolver.Resolution resolution = LedgerNameResolver.resolve(ledger, catalog);
             switch (resolution.kind()) {
                 case EXACT, RESOLVED -> {
                     accepted++;
-                    tx.setMappedLedger(resolution.catalogName());
-                    tx.setMappingSource(MappingSource.LLM);
-                    tx.setLlmNameResolution(resolution.kind().name());
+                    RowMapping.llm(tx, resolution.catalogName(), resolution.kind().name());
                 }
                 case AMBIGUOUS -> {
                     rejected++;
                     addRejection(rejections, id, ledger, "ambiguous");
-                    tx.setMappedLedger(null);
-                    tx.setMappingSource(null);
+                    RowMapping.none(tx, RowMapping.LLM_INVALID);
                     tx.setReviewTag("AMBIGUOUS");
                 }
                 case REJECTED -> {
                     rejected++;
                     addRejection(rejections, id, ledger, "not in catalog");
-                    tx.setMappedLedger(null);
-                    tx.setMappingSource(null);
+                    RowMapping.none(tx, RowMapping.LLM_INVALID);
                 }
             }
         }
@@ -659,15 +922,11 @@ public class BankReconService {
             tx.setMappedLedger(trimmed);
             boolean keepCode = !ledgerChanged && tx.getMappingSource() == MappingSource.CODE && trimmed != null;
             if (trimmed != null && !keepCode) {
-                tx.setMappingSource(MappingSource.MANUAL);
-                if (ledgerChanged) {
-                    tx.setNote(null);
-                }
+                RowMapping.manual(tx, trimmed);
                 upsertLearnedMapping(
                         tx.getNormalisedDescription(), tx.getVoucherType(), trimmed, tx.getAmount(), updatedBy);
             } else if (trimmed == null) {
-                tx.setMappingSource(null);
-                tx.setNote(null);
+                RowMapping.none(tx, null);
             }
         } else if (ledgerChanged) {
             tx.setMappingSource(MappingSource.MANUAL);
@@ -697,8 +956,17 @@ public class BankReconService {
         if (selected.isEmpty()) {
             throw new IllegalArgumentException("No mapped, included transactions to export");
         }
+        boolean unmappedCard = selected.stream().anyMatch(tx ->
+                tx.getCardLast4() != null
+                        && (tx.getStatementLedger() == null || tx.getStatementLedger().isBlank()));
+        if (unmappedCard) {
+            throw new IllegalStateException(
+                    "A card on this statement has no ledger. Add it in Configuration → Account Mapping.");
+        }
         String bankLedger = run.getBankLedgerName();
-        if (bankLedger == null || bankLedger.isBlank()) {
+        boolean eachRowHasStatementLedger = selected.stream().allMatch(tx ->
+                tx.getStatementLedger() != null && !tx.getStatementLedger().isBlank());
+        if ((bankLedger == null || bankLedger.isBlank()) && !eachRowHasStatementLedger) {
             throw new IllegalStateException(
                     "This run has no bank ledger. Map the statement account in Configuration → Account Mapping.");
         }
@@ -1675,7 +1943,8 @@ public class BankReconService {
                     tx.getDescription(),
                     plainAmount(tx.getAmount()),
                     tx.getVoucherType().name(),
-                    examples));
+                    examples,
+                    tx.getMerchantCategory()));
         }
         return MappingPrompt.build(hints, catalog, transactions);
     }
@@ -1886,7 +2155,11 @@ public class BankReconService {
                 run.getCreatedBy(), txs.stream().map(tx -> toTxResponse(tx, addedInApp)).toList(),
                 exports.stream().map(e -> new ExportResponse(e.getId(), e.getExportNumber(), e.getFilename(),
                         e.getTransactionCount(), e.getGeneratedAt(), e.getGeneratedBy())).toList(),
-                run.getProcessingError());
+                run.getProcessingError(),
+                run.getStatementSource(),
+                run.getWarnings(),
+                run.getImportSummary(),
+                run.getStatementDate());
     }
 
     private TransactionResponse toTxResponse(ReconTransaction tx) {
@@ -1904,7 +2177,11 @@ public class BankReconService {
                 tx.getTransactionBranch(), tx.getRunningBalance(), tx.getVoucherType(),
                 tx.getMappedLedger(), tx.getMappingSource(), tx.isExcluded(), tx.isReviewed(), tx.getSortOrder(),
                 tx.getLlmNameResolution(), tx.getReviewTag(), tx.getNote(),
-                tx.getMappedLedger() != null && addedInApp.contains(tx.getMappedLedger()));
+                tx.getMappedLedger() != null && addedInApp.contains(tx.getMappedLedger()),
+                tx.getCardLast4(), tx.getStatementLedger(), tx.getNameOnCard(), tx.getMerchantCategory(),
+                tx.getImportFlag(), tx.isCardPayment(),
+                tx.isCardPayment() ? HsbcCardVoucherRules.DOUBLE_POST_WARNING : null,
+                tx.getMatchedCode(), tx.getMappingReason());
     }
 
     private LedgerResponse toLedger(TallyLedger ledger) {

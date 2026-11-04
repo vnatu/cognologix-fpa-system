@@ -26,6 +26,8 @@ public class RevenueExcelExporter {
     static final String COL_CUSTOMER_NAME = "Customer Name";
     static final String COL_PERIOD_MONTH = "Period Month";
     static final String COL_PERIOD_YEAR = "Period Year";
+    static final String COL_SERVICE_MONTH = "Service Month";
+    static final String COL_SERVICE_YEAR = "Service Year";
     static final String COL_INVOICE_DATE = "Invoice Date";
     static final String COL_CREDIT_NOTE_DATE = "Credit Note Date";
     static final String COL_STATUS = "Status";
@@ -45,6 +47,8 @@ public class RevenueExcelExporter {
                 COL_CUSTOMER_NAME,
                 COL_PERIOD_MONTH,
                 COL_PERIOD_YEAR,
+                COL_SERVICE_MONTH,
+                COL_SERVICE_YEAR,
                 COL_INVOICE_DATE,
                 COL_STATUS,
                 COL_AMOUNT,
@@ -69,6 +73,8 @@ public class RevenueExcelExporter {
                 setOptionalString(row, col++, customer.name());
                 row.createCell(col++).setCellValue(item.periodMonth());
                 row.createCell(col++).setCellValue(item.periodYear());
+                setOptionalInt(row, col++, item.serviceMonth());
+                setOptionalInt(row, col++, item.serviceYear());
                 setDateCell(row, col++, item.documentDate());
                 setOptionalString(row, col++, item.status());
                 setNumericCell(row, col++, item.amount());
@@ -93,6 +99,8 @@ public class RevenueExcelExporter {
                 COL_CUSTOMER_NAME,
                 COL_PERIOD_MONTH,
                 COL_PERIOD_YEAR,
+                COL_SERVICE_MONTH,
+                COL_SERVICE_YEAR,
                 COL_CREDIT_NOTE_DATE,
                 COL_STATUS,
                 COL_AMOUNT,
@@ -114,6 +122,8 @@ public class RevenueExcelExporter {
                 setOptionalString(row, col++, customer.name());
                 row.createCell(col++).setCellValue(item.periodMonth());
                 row.createCell(col++).setCellValue(item.periodYear());
+                setOptionalInt(row, col++, item.serviceMonth());
+                setOptionalInt(row, col++, item.serviceYear());
                 setDateCell(row, col++, item.documentDate());
                 setOptionalString(row, col++, item.status());
                 setNumericCell(row, col++, item.amount());
@@ -140,6 +150,14 @@ public class RevenueExcelExporter {
         Row headerRow = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) {
             headerRow.createCell(i).setCellValue(headers[i]);
+        }
+    }
+
+    private static void setOptionalInt(Row row, int col, Integer value) {
+        if (value == null) {
+            row.createCell(col).setBlank();
+        } else {
+            row.createCell(col).setCellValue(value);
         }
     }
 

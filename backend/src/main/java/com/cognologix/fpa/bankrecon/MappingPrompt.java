@@ -43,7 +43,13 @@ final class MappingPrompt {
             String narration,
             String amount,
             String type,
-            List<ExampleLine> examples) {}
+            List<ExampleLine> examples,
+            String category) {
+
+        TransactionLine(String id, String narration, String amount, String type, List<ExampleLine> examples) {
+            this(id, narration, amount, type, examples, null);
+        }
+    }
 
     /**
      * Bank-side groups, matched case-insensitively: exact "Bank Accounts", exact "Credit Cards",
@@ -107,7 +113,11 @@ final class MappingPrompt {
                 user.append("- id=").append(tx.id())
                         .append(" narration=\"").append(sanitize(tx.narration())).append('"')
                         .append(" amount=").append(tx.amount() == null ? "" : tx.amount())
-                        .append(" type=").append(tx.type()).append('\n');
+                        .append(" type=").append(tx.type());
+                if (tx.category() != null && !tx.category().isBlank()) {
+                    user.append(" category=\"").append(sanitize(tx.category())).append('"');
+                }
+                user.append('\n');
                 List<ExampleLine> examples = tx.examples();
                 if (examples == null || examples.isEmpty()) {
                     user.append("  examples: []\n");

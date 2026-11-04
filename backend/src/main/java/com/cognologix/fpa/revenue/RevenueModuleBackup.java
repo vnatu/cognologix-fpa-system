@@ -50,13 +50,17 @@ class RevenueModuleBackup {
                         inv.getDueDate() != null ? inv.getDueDate().toString() : "",
                         inv.getAmountInr() != null ? inv.getAmountInr().toPlainString() : "",
                         str(inv.getProjectCode()),
-                        inv.getAmountUsd() != null ? inv.getAmountUsd().toPlainString() : ""));
+                        inv.getAmountUsd() != null ? inv.getAmountUsd().toPlainString() : "",
+                        str(inv.getServiceMonth()),
+                        str(inv.getServiceYear()),
+                        inv.getMonthSource() != null ? inv.getMonthSource().name() : MonthSource.TAG.name()));
             }
         }
         return new BackupSheet(FILE_INVOICES,
                 new String[]{"period_month", "period_year", "invoice_number", "customer_code",
                         "invoice_date", "status", "amount", "currency", "balance", "due_date",
-                        "amount_inr", "project_code", "amount_usd"},
+                        "amount_inr", "project_code", "amount_usd",
+                        "service_month", "service_year", "month_source"},
                 rows);
     }
 
@@ -72,12 +76,16 @@ class RevenueModuleBackup {
                         note.getAmount().toPlainString(),
                         note.getCurrency().name(),
                         note.getAmountInr() != null ? note.getAmountInr().toPlainString() : "",
-                        note.getAmountUsd() != null ? note.getAmountUsd().toPlainString() : ""));
+                        note.getAmountUsd() != null ? note.getAmountUsd().toPlainString() : "",
+                        str(note.getServiceMonth()),
+                        str(note.getServiceYear()),
+                        note.getMonthSource() != null ? note.getMonthSource().name() : MonthSource.TAG.name()));
             }
         }
         return new BackupSheet(FILE_CREDIT_NOTES,
                 new String[]{"period_month", "period_year", "credit_note_number", "customer_code",
-                        "credit_note_date", "status", "amount", "currency", "amount_inr", "amount_usd"},
+                        "credit_note_date", "status", "amount", "currency", "amount_inr", "amount_usd",
+                        "service_month", "service_year", "month_source"},
                 rows);
     }
 
@@ -142,6 +150,9 @@ class RevenueModuleBackup {
                         .amountInr(parseDecimal(cell(row, 10), "amount_inr"))
                         .projectCode(cell(row, 11))
                         .amountUsd(parseDecimal(cell(row, 12), "amount_usd"))
+                        .serviceMonth(parseOptionalInt(cell(row, 13)))
+                        .serviceYear(parseOptionalInt(cell(row, 14)))
+                        .monthSource(parseMonthSource(cell(row, 15)))
                         .build());
                 count++;
             } catch (RuntimeException ignored) {
@@ -170,6 +181,9 @@ class RevenueModuleBackup {
                         .currency(parseCurrency(cell(row, 7)))
                         .amountInr(parseDecimal(cell(row, 8), "amount_inr"))
                         .amountUsd(parseDecimal(cell(row, 9), "amount_usd"))
+                        .serviceMonth(parseOptionalInt(cell(row, 10)))
+                        .serviceYear(parseOptionalInt(cell(row, 11)))
+                        .monthSource(parseMonthSource(cell(row, 12)))
                         .build());
                 count++;
             } catch (RuntimeException ignored) {
@@ -177,6 +191,20 @@ class RevenueModuleBackup {
             }
         }
         return count;
+    }
+
+    private static Integer parseOptionalInt(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return Integer.valueOf(raw.trim());
+    }
+
+    private static MonthSource parseMonthSource(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return MonthSource.TAG;
+        }
+        return MonthSource.valueOf(raw.trim());
     }
 
     private static RevenueCurrency parseCurrency(String raw) {

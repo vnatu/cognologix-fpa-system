@@ -88,8 +88,9 @@ public class BankReconController {
     public RunResponse upload(
             @RequestPart("file") MultipartFile file,
             @RequestParam(value = "mapping_id", required = false) UUID mappingId,
+            @RequestParam(value = "source_type", required = false) String sourceType,
             Authentication auth) {
-        return bankReconService.uploadStatement(file, mappingId, actor(auth));
+        return bankReconService.uploadStatement(file, mappingId, actor(auth), sourceType);
     }
 
     @GetMapping("/runs")

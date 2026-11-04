@@ -25,11 +25,23 @@ public class RevenueCreditNote {
     @JoinColumn(name = "revenue_upload_id", nullable = false)
     private RevenueUpload revenueUpload;
 
+    /** Effective month used by revenue totals. Service period when valid, otherwise the upload tag. */
     @Column(name = "period_month", nullable = false)
     private Integer periodMonth;
 
     @Column(name = "period_year", nullable = false)
     private Integer periodYear;
+
+    @Column(name = "service_month")
+    private Integer serviceMonth;
+
+    @Column(name = "service_year")
+    private Integer serviceYear;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "month_source", nullable = false, length = 10)
+    @Builder.Default
+    private MonthSource monthSource = MonthSource.TAG;
 
     @Column(name = "credit_note_number", nullable = false, length = 100)
     private String creditNoteNumber;

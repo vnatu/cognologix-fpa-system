@@ -4,5 +4,6 @@ public enum MappingSource {
     LEARNED,
     LLM,
     MANUAL,
-    CODE
+    CODE,
+    NONE
 }

@@ -163,7 +163,8 @@ class BankReconServiceIntegrationTest {
         tx.setMappingSource(null);
         bankReconService.mapBatchWithLlm(List.of(tx));
         assertThat(tx.getMappedLedger()).isNull();
-        assertThat(tx.getMappingSource()).isNull();
+        assertThat(tx.getMappingSource()).isEqualTo(MappingSource.NONE);
+        assertThat(tx.getMappingReason()).isEqualTo("LLM_INVALID");
     }
 
     @Test
@@ -881,9 +882,11 @@ class BankReconServiceIntegrationTest {
         RunResponse conflict = bankReconService.uploadStatement(
                 csvWithSinglePayment("NEFT SKYC ACMEC CODECONFLICT99 998877665544"), "tester");
         TransactionResponse conflicted = conflict.transactions().get(0);
-        assertThat(conflicted.mappingSource()).isNotEqualTo(MappingSource.CODE);
+        assertThat(conflicted.mappingSource()).isEqualTo(MappingSource.NONE);
+        assertThat(conflicted.mappingReason()).isEqualTo("LLM_UNMAPPED");
         assertThat(conflicted.mappedLedger()).isNull();
-        assertThat(conflicted.note()).isEqualTo("conflict: Acme Conflict Co, Sky Conflict Co");
+        assertThat(conflicted.matchedCode()).isNull();
+        assertThat(conflicted.importFlag()).isEqualTo("code conflict: ACMEC, SKYC");
         verify(structuredLlmClient).mapBatch(anyString(), anyInt());
     }
 
@@ -909,7 +912,7 @@ class BankReconServiceIntegrationTest {
         LedgerCodeImportPreview preview = bankReconService.importLedgerCodes(errors, true, "tester");
         assertThat(preview.saved()).isFalse();
         assertThat(preview.errors()).extracting(issue -> issue.message()).anySatisfy(message ->
-                assertThat(message).isEqualTo("possible match: " + existing));
+                assertThat(message).isEqualTo("possible match: \"" + existing + "\""));
         assertThat(preview.errors()).extracting(issue -> issue.message())
                 .contains(
                         "Code NEFT is reserved",
@@ -972,6 +975,37 @@ class BankReconServiceIntegrationTest {
                 Integer.class,
                 "updated=1 added=1");
         assertThat(audits).isEqualTo(1);
+    }
+
+    @Test
+    void ledgerCodeImportMatchesCollapsedSpacesAndLeavesTheStoredName() throws Exception {
+        String stored = "Depreciation on  Car";
+        String other = "Depreciation on   Car";
+        ensureLedger(stored, "Indirect Expenses");
+
+        LedgerCodeImportPreview saved = bankReconService.importLedgerCodes(
+                codeWorkbook(new String[][] {{"Depreciation on Car", "DEP8", "", "", "", "", ""}}),
+                true,
+                "tester");
+        assertThat(saved.saved()).isTrue();
+        assertThat(saved.toUpdate()).extracting(line -> line.ledgerName()).containsExactly(stored);
+        LedgerResponse updated = ledger(stored);
+        assertThat(updated.ledgerName()).isEqualTo(stored);
+        assertThat(updated.ledgerCode()).isEqualTo("DEP8");
+
+        ensureLedger(other, "Indirect Expenses");
+        LedgerCodeImportPreview ambiguous = bankReconService.importLedgerCodes(
+                codeWorkbook(new String[][] {{"Depreciation on Car", "DEP9", "", "", "", "", ""}}),
+                true,
+                "tester");
+        assertThat(ambiguous.saved()).isFalse();
+        assertThat(ambiguous.errors()).extracting(issue -> issue.message()).anySatisfy(message -> {
+            assertThat(message).startsWith("ambiguous: matches 2 ledgers: ");
+            assertThat(message).contains("\"" + stored + "\"").contains("\"" + other + "\"");
+        });
+        assertThat(ledger(stored).ledgerName()).isEqualTo(stored);
+        assertThat(ledger(stored).ledgerCode()).isEqualTo("DEP8");
+        assertThat(ledger(other).ledgerName()).isEqualTo(other);
     }
 
     private LedgerResponse ledger(String name) {
