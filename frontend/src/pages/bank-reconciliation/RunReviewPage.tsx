@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Key } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
@@ -29,12 +29,12 @@ const SOURCE_COLOR: Record<string, string> = {
   LLM: 'blue',
   MANUAL: 'orange',
   CODE: 'purple',
+  NONE: 'red',
   UNMAPPED: 'red',
 };
 
 function sourceLabel(tx: TransactionRow): string {
-  if (tx.excluded) return tx.mappingSource ?? 'UNMAPPED';
-  return tx.mappedLedger ? (tx.mappingSource ?? 'MANUAL') : 'UNMAPPED';
+  return tx.mappingSource ?? 'NONE';
 }
 
 function notInTallyLedgers(run: ReconRun, selected: string[]): string[] {
@@ -95,7 +95,20 @@ export default function RunReviewPage() {
       width: 120,
       render: (v: string | null) => (v ? v.slice(0, 10) : '—'),
     },
-    { title: 'Narration', dataIndex: 'description', ellipsis: true },
+    {
+      title: 'Narration',
+      dataIndex: 'description',
+      render: (_: string, tx: TransactionRow) => (
+        <div>
+          <div>{tx.description}</div>
+          {tx.postingWarning && (
+            <Tag color="gold" style={{ marginTop: 4, whiteSpace: 'normal' }}>
+              {tx.postingWarning}
+            </Tag>
+          )}
+        </div>
+      ),
+    },
     {
       title: 'Amount',
       dataIndex: 'amount',
@@ -104,6 +117,45 @@ export default function RunReviewPage() {
       render: (v: number) => Number(v).toLocaleString('en-IN'),
     },
     { title: 'Dr/Cr', dataIndex: 'debitCredit', width: 70 },
+    ...(run?.statementSource === 'HSBC_CARD_XLSX'
+      ? [
+          {
+            title: 'Card',
+            dataIndex: 'cardLast4',
+            width: 80,
+            filters: [...new Set((run.transactions ?? []).map((tx) => tx.cardLast4).filter(Boolean))].map(
+              (last4) => ({ text: last4 as string, value: last4 as string }),
+            ),
+            onFilter: (value: Key | boolean, tx: TransactionRow) => tx.cardLast4 === value,
+            render: (value: string | null) => value ?? '—',
+          },
+          {
+            title: 'Name on card',
+            dataIndex: 'nameOnCard',
+            width: 180,
+            ellipsis: true,
+            render: (value: string | null) => value ?? '—',
+          },
+          {
+            title: 'Category',
+            dataIndex: 'merchantCategory',
+            width: 160,
+            ellipsis: true,
+            render: (value: string | null) => value ?? '—',
+          },
+          {
+            title: 'Flag',
+            dataIndex: 'importFlag',
+            width: 150,
+            filters: [
+              { text: 'Check currency', value: 'Check currency' },
+              { text: 'Already imported', value: 'Already imported' },
+            ],
+            onFilter: (value: Key | boolean, tx: TransactionRow) => tx.importFlag === value,
+            render: (value: string | null) => (value ? <Tag color="orange">{value}</Tag> : null),
+          },
+        ]
+      : []),
     {
       title: 'Voucher Type',
       dataIndex: 'voucherType',
@@ -131,7 +183,7 @@ export default function RunReviewPage() {
         <MappedLedgerSelect
           voucherType={tx.voucherType}
           mappedLedger={tx.mappedLedger}
-          excludeLedger={run?.bankLedgerName ?? undefined}
+          excludeLedger={tx.statementLedger ?? run?.bankLedgerName ?? undefined}
           disabled={!isAdmin || run?.status === 'CLOSED'}
           onChange={(ledgerName) => patch(tx, { ledgerName: ledgerName ?? '' })}
         />
@@ -146,6 +198,11 @@ export default function RunReviewPage() {
         return (
           <Space size={4} wrap>
             {tx.note ? <Tooltip title={tx.note}>{sourceTag}</Tooltip> : sourceTag}
+            {tx.matchedCode && <Tag color="purple">{tx.matchedCode}</Tag>}
+            {tx.mappingReason && <Tag>{tx.mappingReason}</Tag>}
+            {tx.importFlag?.startsWith('code conflict') && (
+              <Tag color="orange" style={{ whiteSpace: 'pre-wrap' }}>{tx.importFlag}</Tag>
+            )}
             {tx.reviewTag === 'AMBIGUOUS' && <Tag color="gold">AMBIGUOUS</Tag>}
             {tx.llmNameResolution === 'EXACT' && <Tag>exact</Tag>}
             {tx.llmNameResolution === 'RESOLVED' && <Tag>resolved</Tag>}
@@ -192,6 +249,24 @@ export default function RunReviewPage() {
       </Text>
       {run.processingError && (
         <Alert type="warning" showIcon style={{ marginTop: 16 }} message={run.processingError} />
+      )}
+      {run.importSummary && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginTop: 16, whiteSpace: 'pre-wrap' }}
+          message="Statement summary"
+          description={run.importSummary}
+        />
+      )}
+      {run.warnings && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: 16, whiteSpace: 'pre-wrap' }}
+          message="Upload warnings"
+          description={run.warnings}
+        />
       )}
       <Space size="large" style={{ display: 'flex', marginTop: 16, marginBottom: 16 }}>
         <Text>Total {run.totalTransactions}</Text>

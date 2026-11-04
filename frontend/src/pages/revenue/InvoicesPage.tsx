@@ -64,6 +64,12 @@ export default function InvoicesPage() {
   const periodYear = searchParams.get('periodYear')
     ? Number(searchParams.get('periodYear'))
     : undefined;
+  const serviceMonth = searchParams.get('serviceMonth')
+    ? Number(searchParams.get('serviceMonth'))
+    : undefined;
+  const serviceYear = searchParams.get('serviceYear')
+    ? Number(searchParams.get('serviceYear'))
+    : undefined;
   const status = searchParams.get('status') ?? undefined;
   const importType = (searchParams.get('importType') as RevenueImportType | null)
     ?? undefined;
@@ -91,6 +97,8 @@ export default function InvoicesPage() {
         customerId,
         periodMonth,
         periodYear,
+        serviceMonth,
+        serviceYear,
         status,
         importType,
         page,
@@ -103,7 +111,7 @@ export default function InvoicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [customerId, periodMonth, periodYear, status, importType, page]);
+  }, [customerId, periodMonth, periodYear, serviceMonth, serviceYear, status, importType, page]);
 
   const loadUploads = useCallback(async () => {
     if (periodMonth == null || periodYear == null) {
@@ -135,7 +143,7 @@ export default function InvoicesPage() {
   const [exporting, setExporting] = useState(false);
 
   const handleExport = async () => {
-    const params = { customerId, periodMonth, periodYear, status };
+    const params = { customerId, periodMonth, periodYear, serviceMonth, serviceYear, status };
     setExporting(true);
     try {
       if (importType === 'ZOHO_BOOKS_CREDIT_NOTES') {
@@ -180,6 +188,14 @@ export default function InvoicesPage() {
         title: 'Period',
         key: 'period',
         render: (_, r) => periodLabel(r.periodMonth, r.periodYear),
+      },
+      {
+        title: 'Service Period',
+        key: 'servicePeriod',
+        render: (_, r) =>
+          r.serviceMonth != null && r.serviceYear != null
+            ? periodLabel(r.serviceMonth, r.serviceYear)
+            : '—',
       },
       {
         title: 'Date',
@@ -320,6 +336,22 @@ export default function InvoicesPage() {
           min={2000}
           max={2100}
           onChange={(v) => updateFilter('periodYear', v ?? undefined)}
+        />
+        <Select
+          allowClear
+          placeholder="Service Month"
+          style={{ width: 160 }}
+          value={serviceMonth}
+          options={MONTH_OPTIONS}
+          onChange={(v) => updateFilter('serviceMonth', v)}
+        />
+        <InputNumber
+          placeholder="Service Year"
+          style={{ width: 130 }}
+          value={serviceYear}
+          min={2000}
+          max={2100}
+          onChange={(v) => updateFilter('serviceYear', v ?? undefined)}
         />
         <Select
           allowClear

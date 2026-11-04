@@ -1,5 +1,5 @@
 export type VoucherType = 'PAYMENT' | 'RECEIPT' | 'CONTRA';
-export type MappingSource = 'LEARNED' | 'LLM' | 'MANUAL' | 'CODE' | null;
+export type MappingSource = 'LEARNED' | 'LLM' | 'MANUAL' | 'CODE' | 'NONE' | null;
 export type RunStatus = 'OPEN' | 'CLOSED';
 
 export interface TransactionRow {
@@ -23,6 +23,15 @@ export interface TransactionRow {
   reviewTag: string | null;
   note: string | null;
   notInTally: boolean;
+  cardLast4: string | null;
+  statementLedger: string | null;
+  nameOnCard: string | null;
+  merchantCategory: string | null;
+  importFlag: string | null;
+  cardPayment: boolean;
+  postingWarning: string | null;
+  matchedCode: string | null;
+  mappingReason: string | null;
 }
 
 export interface ReconExport {
@@ -57,6 +66,10 @@ export interface ReconRun {
   transactions: TransactionRow[];
   exports: ReconExport[];
   processingError: string | null;
+  statementSource: string | null;
+  warnings: string | null;
+  importSummary: string | null;
+  statementDate: string | null;
 }
 
 export interface PageResponse<T> {

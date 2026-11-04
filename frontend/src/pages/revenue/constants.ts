@@ -22,6 +22,8 @@ export const SYSTEM_ATTRIBUTE_LABELS: Record<string, string> = {
   DueDate: 'Due Date',
   Currency: 'Currency',
   ProjectCode: 'Project Code',
+  ServiceMonth: 'Service Month',
+  ServiceYear: 'Service Year',
   CreditNoteNumber: 'Credit Note Number',
   CreditNoteDate: 'Credit Note Date',
 };
@@ -39,6 +41,8 @@ export const ATTRIBUTES_BY_IMPORT_TYPE: Record<RevenueImportType, string[]> = {
     'DueDate',
     'Currency',
     'ProjectCode',
+    'ServiceMonth',
+    'ServiceYear',
   ],
   ZOHO_BOOKS_CREDIT_NOTES: [
     'CreditNoteNumber',
@@ -49,6 +53,8 @@ export const ATTRIBUTES_BY_IMPORT_TYPE: Record<RevenueImportType, string[]> = {
     'Amount',
     'AmountUsd',
     'Currency',
+    'ServiceMonth',
+    'ServiceYear',
   ],
 };
 

@@ -19,11 +19,19 @@ import type {
 } from './types';
 import { HDFC_IMPORT_TYPE } from './constants';
 
-export const uploadStatement = (file: File, mappingId: string): Promise<ReconRun> => {
+export const uploadStatement = (
+  file: File,
+  mappingId?: string,
+  sourceType: 'HDFC_BANK' | 'HSBC_CARD_XLSX' = 'HDFC_BANK',
+): Promise<ReconRun> => {
   const form = new FormData();
   form.append('file', file);
+  const params: Record<string, string> = { source_type: sourceType };
+  if (mappingId) {
+    params.mapping_id = mappingId;
+  }
   return axios
-    .post<ReconRun>('/api/bank-recon/runs/upload', form, { params: { mapping_id: mappingId } })
+    .post<ReconRun>('/api/bank-recon/runs/upload', form, { params })
     .then((r) => r.data);
 };
 

@@ -44,9 +44,12 @@ const { Title, Text } = Typography;
 const current = new Date();
 const YEAR_OPTIONS = Array.from({ length: 6 }, (_, i) => current.getFullYear() - 2 + i);
 
+type StatementSource = 'HDFC_BANK' | 'HSBC_CARD_XLSX';
+
 export default function NewRunPage() {
   const isAdmin = useIsAdmin();
   const navigate = useNavigate();
+  const [source, setSource] = useState<StatementSource>('HDFC_BANK');
   const [step, setStep] = useState(0);
   const [periodMonth, setPeriodMonth] = useState(current.getMonth() + 1);
   const [periodYear, setPeriodYear] = useState(current.getFullYear());
@@ -179,6 +182,30 @@ export default function NewRunPage() {
     }
   };
 
+  const clearFile = () => {
+    setFile(null);
+    setFileList([]);
+  };
+
+  const doHsbcUpload = async () => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const result = await uploadStatement(file, undefined, 'HSBC_CARD_XLSX');
+      setUploadResult(result);
+      notification.success({ message: `Imported ${result.totalTransactions} transactions` });
+      navigate(`/bank-reconciliation/runs/${result.id}`);
+    } catch (err) {
+      const message =
+        axios.isAxiosError(err) && typeof err.response?.data?.message === 'string'
+          ? err.response.data.message
+          : 'Upload failed';
+      notification.error({ message });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const reset = useCallback(() => {
     setStep(0);
     setFile(null);
@@ -206,22 +233,66 @@ export default function NewRunPage() {
         New reconciliation run
       </Title>
       <Text type="secondary">
-        Map HDFC statement columns once, then reuse the template on later uploads.
+        HDFC uses a column mapping. An HSBC card statement is the bank's Excel export.
       </Text>
 
-      <Steps
-        current={step}
-        style={{ margin: '24px 0' }}
-        items={[
-          { title: 'Period & file' },
-          { title: 'Column mapping' },
-          { title: 'Review' },
-          { title: 'Result' },
-        ]}
-      />
+      {source === 'HDFC_BANK' && (
+        <Steps
+          current={step}
+          style={{ margin: '24px 0' }}
+          items={[
+            { title: 'Period & file' },
+            { title: 'Column mapping' },
+            { title: 'Review' },
+            { title: 'Result' },
+          ]}
+        />
+      )}
 
       {step === 0 && (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <div>
+            <Text strong>Statement source</Text>
+            <Select
+              style={{ display: 'block', marginTop: 8, width: 320 }}
+              value={source}
+              options={[
+                { value: 'HDFC_BANK', label: 'HDFC bank statement' },
+                { value: 'HSBC_CARD_XLSX', label: 'HSBC card statement (Excel)' },
+              ]}
+              onChange={(value: StatementSource) => {
+                setSource(value);
+                clearFile();
+                setStep(0);
+              }}
+            />
+          </div>
+          {source === 'HSBC_CARD_XLSX' ? (
+            <>
+              <Dragger
+                accept=".xlsx"
+                maxCount={1}
+                fileList={fileList}
+                disabled={uploading}
+                beforeUpload={(selected) => {
+                  setFile(selected);
+                  setFileList([{ uid: '-1', name: selected.name, status: 'done' }]);
+                  return false;
+                }}
+                onRemove={clearFile}
+              >
+                <p className="ant-upload-drag-icon">
+                  <InboxOutlined />
+                </p>
+                <p className="ant-upload-text">Drop the HSBC card Excel export here</p>
+                <p className="ant-upload-hint">One header row. Admin only.</p>
+              </Dragger>
+              <Button type="primary" loading={uploading} disabled={!file} onClick={doHsbcUpload}>
+                Import statement
+              </Button>
+            </>
+          ) : (
+            <>
           <div>
             <Text strong>Statement period</Text>
             <Space style={{ display: 'flex', marginTop: 8 }} wrap>
@@ -268,6 +339,8 @@ export default function NewRunPage() {
               Headers are parsed for mapping. Admin only.
             </p>
           </Dragger>
+            </>
+          )}
         </Space>
       )}
 

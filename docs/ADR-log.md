@@ -1730,7 +1730,7 @@ A bank narration often contains the vendor's own short code as a whole word. Fin
 
 **Decision**
 1. `tally_ledger.ledger_code` is nullable, 2 to 10 letters and digits, stored uppercase, and unique where it is not null. `added_in_app` defaults to false. A code must not be `FT`, `NEFT`, `RTGS`, `IMPS`, `UPI`, `ATM`, `ACH`, `NACH`, `CBDT`, `TDS`, `GST`, `SALARY`, or `REFUND`. `recon_transaction.mapping_source` accepts `CODE`, and `note` stores the matched word and its position, or the conflict.
-2. After Contra classification and before learned mappings, a non-Contra row is scanned on its raw description. The scan stops at the first run of 9 or more digits. Each word before that point is compared with the codes. One ledger assigns `CODE` and leaves the row out of the LLM batch. Two or more assign nothing, record the conflict, and let the later steps run. A `CODE` row creates no learned mapping. Changing the ledger on the Review screen is a normal correction.
+2. After Contra classification and before learned mappings, a non-Contra row is scanned on its raw description. The scan stops at the first run of 9 or more digits. Each word before that point is compared with the codes. One ledger assigns `CODE` and leaves the row out of the LLM batch. Two or more assign nothing, record the conflict, and let the later steps run. A `CODE` row creates no learned mapping. Changing the ledger on the Review screen is a normal correction. Precedence, `mapping_source`, and code conflicts are superseded by ADR-077.
 3. A Tally XML import never changes or clears a code and never deletes a ledger. When the XML contains a ledger of the same name, `added_in_app` is cleared. Ledgers created with Add Ledger or the code workbook set `added_in_app`.
 4. The ledger export columns are Ledger Name, Group, Accounting Nature, Bank Account, Active, Ledger Code, In Tally XML, Purpose, Keywords, Typical Amount, and Disambiguation Note. This replaces Has Hint and Hint Updated from ADR-072. In Tally XML is Yes when `added_in_app` is false. Every cell stays text.
 5. `POST /api/bank-recon/ledgers/codes/import` previews updates, additions, unchanged rows, and errors. An exact name updates. A name that matches only after ignoring case, spaces, and punctuation is an error (`possible match: <existing name>`) and adds nothing. A new ledger takes its nature and bank flag from an existing group and sets `added_in_app`. A blank cell never clears a code or a hint. Nothing is saved until `confirm=true` and the preview has no errors, in one transaction, with an `IMPORT` row in `recon_audit_log`.
@@ -1739,6 +1739,94 @@ A bank narration often contains the vendor's own short code as a whole word. Fin
 - (+) A code in the narration selects the ledger without an LLM call, and a code that only appears in the bank-appended account tail does not.
 - (+) A ledger typed in the app survives the next Tally import, and its code survives being seen in the XML.
 - (−) The export no longer has Has Hint or Hint Updated. A hint is visible from the purpose and keyword columns.
+
+---
+
+---
+
+## ADR-074: Revenue counts each invoice in its service month
+
+**Status:** Accepted — October 2026
+
+**Context**
+Zoho Books exports can carry Service Month and Service Year. The revenue spec (§3.1 and §10) says those fields are unreliable and that Finance’s upload tag is the period: “ServiceMonth/ServiceYear (optional — ignored if Finance uses manual period).” Finance now wants each invoice counted in its own service month when both values are present, while keeping the upload tag as the fallback and as the version key.
+
+**Spec flag:** Contradicts `Cognologix_Revenue_RequirementsSpec_v1.0.md` §3.1 (service month ignored) and §10 (period attribution is only the manual tag). The upload tag remains the version key and the fallback. Invoice and credit-note rows store an effective period. This ADR is authoritative for period attribution until the requirements doc is revised.
+
+**Decision**
+1. `revenue_invoice` and `revenue_credit_note` gain nullable `service_month` (1–12), `service_year`, and `month_source` (`SERVICE` or `TAG`) in V43. Existing rows are not rewritten: service fields stay null and `month_source` is `TAG`, so their effective period stays the upload tag.
+2. `ServiceMonth` and `ServiceYear` are optional attributes on `ZOHO_BOOKS_INVOICES` and `ZOHO_BOOKS_CREDIT_NOTES`. A month may be a number (`8`, `08`) or a name (`Aug`, `August`). A blank or unreadable value is a preview warning, never an import error.
+3. On import, when both month and year are present and valid, they are written to the row’s `period_month` / `period_year` and `month_source=SERVICE`. Otherwise the upload tag is copied and `month_source=TAG`. The upload’s own tag does not change.
+4. Revenue vs Plan, the revenue dashboard (including its month selector), and Budgeting actual revenue (`getAllClientsMonthlyRevenue`) sum rows of ACTIVE uploads by that effective period. A month appears in the selector when it has rows, even if no upload is tagged with it. No rows for a month returns null so Budgeting still falls back to manual actuals. Invoice status and DSO still read the upload tagged for the selected month.
+5. FX is unchanged. `convertToInr` looks up `USD_INR` by the invoice or credit-note date (`findRateOnDate`), not by `period_month`. The upload tag is not involved.
+6. Re-upload still supersedes the active version for the same import type and tag. The preview states `previous version: N invoices, this version: M`. Saving is rejected until confirmed when M is under 50% of N (`RevenueService.VERSION_SHRINK_CONFIRM_THRESHOLD`).
+7. An incoming number that already exists on an ACTIVE upload for another tag period is listed with that upload. Finance can skip those rows in this upload, or cancel. There is no keep-both option.
+8. The preview shows invoice count and amount per effective month, how many used the tag because the service month was blank, and, when any row lands outside the tag, those months with amounts and whether an active upload already exists for them. Saving those rows requires confirmation.
+9. The invoice list has a Service Period column and filters on `serviceMonth` / `serviceYear`.
+
+**Consequences**
+- (+) An August-tagged file can put September’s invoices into September’s Revenue vs Plan and Budgeting actuals without a September upload.
+- (+) A short replacement file cannot silently supersede a full version, and the same invoice cannot be counted in two active periods.
+- (−) Invoice status and DSO for a month still follow the upload tag, so they can include rows whose revenue is counted in a different month.
+- (−) Requirements spec §3.1 / §10 still describe tag-only attribution until revised.
+
+---
+
+## ADR-075: HSBC corporate card statements come from the Excel export
+
+**Status:** Accepted — November 2026
+
+**Context**
+ADR-065 left HSBC credit-card statements as a later phase, and a scanned-PDF OCR import was designed but not kept. HSBC's own Excel export has a stable header row. Account mapping type `HSBC_CC` (ADR-068) already keys a card by its last four digits. `docs/Cognologix_BankReconciliation_RequirementsSpec_v1.0.md` is still not in the repo. Purchase and refund rows use the mapping pipeline as it stands after ADR-071 (one ledger catalog). A separate receipt-only catalog is not restored.
+
+**Decision**
+1. Upload source `HSBC_CARD_XLSX` reads the first sheet by header name (trimmed, case-insensitive). Every text cell is trimmed, including non-breaking spaces, and a cell that contains only spaces is blank. Unknown columns are ignored. Name on card, first name, last name, and email are not required; a blank or `NIL` value does not fail the row. A missing required column rejects the file and names the column. Required headers are Masked Card Number, Transaction Date, Merchant Name, Amount, Currency, Transaction Type, and Bank Reference. Dates are Excel date cells or day-first `d/M/yyyy`. The voucher date is Transaction Date, or Posting Date when that is blank. Amount is the INR amount. When Currency is not INR, Consolidated Amount is used when that column is present; otherwise the row is flagged `Check currency`.
+2. The card key is the trailing four digits of Masked Card Number after hyphens and spaces are removed (`\d{4}$`), so both `…XXXX-4797` and `…XXX7331` resolve. Digits hidden behind X are not used. The card ledger comes from an active `HSBC_CC` account mapping. A card with no mapping warns on upload and blocks export of those rows. `hsbc_card_debit_types` (default `Purchase`) lists debit transaction types. A type outside that list is a credit and is never treated as a debit. A negative amount is also a credit, stored as a positive amount. The distinct transaction types are logged and shown on the run summary. No statement totals are reconciled.
+3. Narration is merchant and city, plus country when it is not IND, plus foreign currency and amount when a foreign amount is present, cut at 120 characters. The learned-mapping key is the normalised merchant name only. The LLM prompt gets the merchant category on the transaction line and does not receive the name on the card. Name on card, merchant category, bank reference, tax amount, cost center, and employee id are stored on the transaction and are not logged at INFO.
+4. Bank Reference is unique. It is trimmed before it is stored and before duplicate checks. A repeated reference in the same file is counted on the run summary and the later row is not imported. A reference already stored for a run that has not been discarded is marked `Already imported` and excluded; the reviewer can include it. The reference row is deleted with the run, so a discarded run can be imported again, and it is kept when the run is closed.
+5. Purchases are Payment: debit the mapped ledger, credit the card ledger. On a credit, classification is ordered. If the merchant name or transaction type starts with any comma-separated value in `hsbc_card_payment_pattern` (default `CREDIT CARD PAYMENT,PAYMENT - THANK YOU`), the row is Contra: debit the card ledger, credit the HDFC bank ledger from Account Mapping, which the reviewer can change. The row shows "Also appears on the bank statement: post from one side only." Any other credit is a Receipt. The new-run source list offers this Excel source and not a PDF source.
+
+**Consequences**
+- (+) Finance uploads the HSBC spreadsheet with the same review and Tally export as a bank run.
+- (+) A closed run still remembers bank references, so the same export is not posted twice.
+- (−) The Excel headers are fixed in the parser. A renamed HSBC column needs a parser change rather than a column-mapping template.
+- (−) Purchase and refund rows see ADR-071's single catalog.
+
+---
+
+## ADR-076: Ledger code import matches a double space without rewriting the name
+
+**Status:** Accepted — November 2026
+
+**Context**
+ADR-073 treats a ledger name that matches only after ignoring spaces as an error. Tally stores names verbatim, including a double space such as `Depreciation on  Car`, and the voucher import matches that text exactly. The code workbook collapsed spaces before the lookup, so those rows were refused as a possible match and the stored name was not obvious in the message.
+
+**Decision**
+1. Import Codes matches the sheet name to `tally_ledger.ledger_name` exactly first. The stored name is never rewritten by this import.
+2. When nothing matches exactly, both sides are compared with ends trimmed and each run of whitespace or non-breaking space collapsed to one space. One ledger is the match and its code is updated. Two or more is an error, `ambiguous: matches N ledgers`, listing each stored name in quotes. Case and punctuation differences stay a `possible match`, also quoted.
+3. Ledger Master export, code matching, learned mappings, and Tally export keep the stored ledger name. Collapsing spaces is only a comparison key for this import.
+
+**Consequences**
+- (+) A code can be loaded onto a Tally ledger whose name contains a double space.
+- (−) Two stored names that differ only by spacing still cannot take a code from a sheet row that matches neither exactly.
+
+---
+
+## ADR-077: Mapping precedence is code, then learned, then the LLM
+
+**Status:** Accepted — November 2026
+
+**Context**
+ADR-073 scans a narration for a ledger code before learned mappings. On a real HDFC run, learned mappings still won when a code was present, and some rows were stored as `CODE` when the narration had no code. A two-letter code such as `AT` is a whole token in ordinary text. `mapping_source` has to be the stage that chose the ledger.
+
+**Decision**
+1. For each included, non-Contra row that is not `MANUAL`, the pipeline resets the row to `NONE` and then stops at the first stage that chooses a ledger. `CODE` is one whole token from the raw narration, cut at the first run of 9 digits, equal to a `ledger_code` ignoring case. One distinct ledger sets `mapping_source=CODE` and `matched_code`. Zero matches fall through. Several distinct ledgers, including two ledgers whose codes fold to the same token, set `import_flag` to `code conflict: <codes>` and fall through.
+2. `LEARNED` is the existing exact match on the normalised narration and voucher type. It does not run after a code match, and it does not change the learned-mapping row except the existing use count. `LLM` runs only for rows still unmapped and sets `mapping_source=LLM`. If the call is unavailable, times out, or stays truncated, the row stays unmapped with `NONE` and `LLM_UNAVAILABLE`. `UNMAPPED` is `LLM_UNMAPPED`. An invalid or ambiguous name is `LLM_INVALID`.
+3. `mapping_source` is written only by that decision. It is never defaulted to `CODE` and is not copied from a learned mapping. A `MANUAL` row is left unchanged when the pipeline runs again. `bank_recon_code_min_length` defaults to 2. `bank_recon_code_ignore` is a comma-separated list and defaults to empty; ignored codes are not matched. The run log states the count of each stage and each matched code with its count, without narration text. The review screen shows `matched_code` and `mapping_reason`.
+
+**Consequences**
+- (+) A code in the narration beats a learned mapping, and a row cannot stay labelled `CODE` after a pass that did not match a code.
+- (−) A two-letter code still matches an ordinary word until Finance raises the minimum length or adds the code to the ignore list.
 
 ---
 

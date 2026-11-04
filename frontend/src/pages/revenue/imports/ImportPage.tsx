@@ -3,12 +3,14 @@ import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
+  Checkbox,
   Empty,
   Input,
   Modal,
   Select,
   Space,
   Steps,
+  Table,
   Typography,
   Upload,
   notification,
@@ -17,9 +19,12 @@ import { InboxOutlined, SettingOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload/interface';
 import axios from 'axios';
 import { HEADING_FONT } from '@/theme/antdTheme';
+import { formatCurrency } from '@/utils/formatDate';
 import {
   fetchMappingTemplate,
   parseHeaders,
+  previewCreditNotes,
+  previewInvoices,
   saveMappingTemplate,
   uploadCreditNotes,
   uploadInvoices,
@@ -38,7 +43,14 @@ import {
   SYSTEM_ATTRIBUTE_LABELS,
   yearOptions,
 } from '../constants';
-import type { MappingTemplate, RevenueImportType, UploadResult } from '../types';
+import type {
+  EffectiveMonthSummary,
+  ImportSaveOptions,
+  MappingTemplate,
+  RevenueImportPreview,
+  RevenueImportType,
+  UploadResult,
+} from '../types';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -64,7 +76,13 @@ export default function ImportPage({ importType }: Props) {
   const [uploading, setUploading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [preview, setPreview] = useState<RevenueImportPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [skipCrossPeriodDuplicates, setSkipCrossPeriodDuplicates] = useState(false);
+  const [confirmOtherMonths, setConfirmOtherMonths] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [shrinkOpen, setShrinkOpen] = useState(false);
   const [saveNameModalOpen, setSaveNameModalOpen] = useState(false);
   const [templateNameInput, setTemplateNameInput] = useState('');
 
@@ -126,8 +144,16 @@ export default function ImportPage({ importType }: Props) {
     return saved.id;
   };
 
-  const doUpload = async () => {
+  const saveOptions = (overrides?: ImportSaveOptions): ImportSaveOptions => ({
+    confirmVersionShrink: overrides?.confirmVersionShrink ?? false,
+    confirmOtherMonths: overrides?.confirmOtherMonths ?? confirmOtherMonths,
+    skipCrossPeriodDuplicates:
+      overrides?.skipCrossPeriodDuplicates ?? skipCrossPeriodDuplicates,
+  });
+
+  const doUpload = async (overrides?: ImportSaveOptions) => {
     if (!file) return;
+    const options = saveOptions(overrides);
     setUploading(true);
     try {
       const mappingId = await ensureMappingId(
@@ -135,8 +161,8 @@ export default function ImportPage({ importType }: Props) {
       );
       const result =
         importType === 'ZOHO_BOOKS_INVOICES'
-          ? await uploadInvoices(periodMonth, periodYear, mappingId, file)
-          : await uploadCreditNotes(periodMonth, periodYear, mappingId, file);
+          ? await uploadInvoices(periodMonth, periodYear, mappingId, file, options)
+          : await uploadCreditNotes(periodMonth, periodYear, mappingId, file, options);
       setUploadResult(result);
       setStep(3);
       notification.success({
@@ -151,15 +177,88 @@ export default function ImportPage({ importType }: Props) {
     } finally {
       setUploading(false);
       setConfirmOpen(false);
+      setShrinkOpen(false);
+      setDuplicateOpen(false);
     }
   };
 
+  const goToReview = async () => {
+    if (!file) return;
+    setPreviewing(true);
+    try {
+      const mappingId = await ensureMappingId(
+        template?.templateName ?? defaultTemplateName(),
+      );
+      const result =
+        importType === 'ZOHO_BOOKS_INVOICES'
+          ? await previewInvoices(periodMonth, periodYear, mappingId, file)
+          : await previewCreditNotes(periodMonth, periodYear, mappingId, file);
+      setPreview(result);
+      setSkipCrossPeriodDuplicates(false);
+      setConfirmOtherMonths(false);
+      setStep(2);
+    } catch (err) {
+      const message =
+        axios.isAxiosError(err) && typeof err.response?.data?.error === 'string'
+          ? err.response.data.error
+          : 'Failed to preview the file';
+      notification.error({ message });
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const versionCount = preview
+    ? skipCrossPeriodDuplicates
+      ? preview.thisVersionCountIfSkipped
+      : preview.thisVersionCount
+    : rowCount;
+  const blankTagCount = preview
+    ? skipCrossPeriodDuplicates
+      ? preview.tagFallbackBlankCountIfSkipped
+      : preview.tagFallbackBlankCount
+    : 0;
+  const monthRows = preview
+    ? skipCrossPeriodDuplicates
+      ? preview.monthsExcludingCrossPeriodDuplicates
+      : preview.months
+    : [];
+  const otherMonthRows = preview
+    ? skipCrossPeriodDuplicates
+      ? preview.otherMonthsExcludingCrossPeriodDuplicates
+      : preview.otherMonths
+    : [];
+  const shrinkRequired = preview
+    ? skipCrossPeriodDuplicates
+      ? preview.versionShrinkConfirmationRequiredIfSkipped
+      : preview.versionShrinkConfirmationRequired
+    : false;
+
   const handleUploadClick = () => {
+    if (preview && preview.crossPeriodDuplicates.length > 0 && !skipCrossPeriodDuplicates) {
+      setDuplicateOpen(true);
+      return;
+    }
+    if (otherMonthRows.length > 0 && !confirmOtherMonths) {
+      notification.warning({
+        message: 'Confirm the months these invoices will be counted in',
+      });
+      return;
+    }
+    if (shrinkRequired) {
+      setShrinkOpen(true);
+      return;
+    }
     if (hasWarnings) {
       setConfirmOpen(true);
     } else {
       doUpload();
     }
+  };
+
+  const chooseSkipDuplicates = () => {
+    setSkipCrossPeriodDuplicates(true);
+    setDuplicateOpen(false);
   };
 
   const openSaveTemplateModal = () => {
@@ -199,6 +298,9 @@ export default function ImportPage({ importType }: Props) {
     setRowCount(0);
     setMappings({});
     setUploadResult(null);
+    setPreview(null);
+    setSkipCrossPeriodDuplicates(false);
+    setConfirmOtherMonths(false);
   };
 
   const invoicesLink = (() => {
@@ -318,19 +420,102 @@ export default function ImportPage({ importType }: Props) {
           />
           <Space>
             <Button onClick={() => setStep(0)}>Back</Button>
-            <Button type="primary" onClick={() => setStep(2)}>
+            <Button type="primary" loading={previewing} onClick={goToReview}>
               Continue to review
             </Button>
           </Space>
         </Space>
       )}
 
-      {step === 2 && (
+      {step === 2 && preview && (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Alert
             type="info"
-            message={`Ready to import ${rowCount} rows with ${Object.values(mappings).filter(Boolean).length} mapped columns for ${MONTH_OPTIONS.find((m) => m.value === periodMonth)?.label} ${periodYear}.`}
+            message={`previous version: ${preview.previousVersionCount} invoices, this version: ${versionCount}`}
           />
+          <Text>
+            {blankTagCount} used the upload tag because the service month was blank.
+          </Text>
+          <Table<EffectiveMonthSummary>
+            size="small"
+            pagination={false}
+            rowKey={(row) => `${row.year}-${row.month}`}
+            dataSource={monthRows}
+            columns={[
+              {
+                title: 'Effective month',
+                key: 'month',
+                render: (_, row) =>
+                  `${MONTH_OPTIONS.find((m) => m.value === row.month)?.label ?? row.month} ${row.year}`,
+              },
+              { title: 'Invoices', dataIndex: 'invoiceCount', key: 'count', width: 100 },
+              {
+                title: 'Amount',
+                dataIndex: 'amount',
+                key: 'amount',
+                align: 'right',
+                render: (amount: number) => formatCurrency(amount),
+              },
+            ]}
+          />
+          {preview.servicePeriodWarnings.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Service month warnings"
+              description={preview.servicePeriodWarnings.slice(0, 8).join(' · ')}
+            />
+          )}
+          {skipCrossPeriodDuplicates && preview.crossPeriodDuplicates.length > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message={`Skipping ${preview.crossPeriodDuplicates.length} invoices already on another period's active upload.`}
+            />
+          )}
+          {otherMonthRows.length > 0 && (
+            <>
+              <Alert
+                type="warning"
+                showIcon
+                message="Some invoices land in a month other than the upload tag"
+              />
+              <Table<EffectiveMonthSummary>
+                size="small"
+                pagination={false}
+                rowKey={(row) => `other-${row.year}-${row.month}`}
+                dataSource={otherMonthRows}
+                columns={[
+                  {
+                    title: 'Month',
+                    key: 'month',
+                    render: (_, row) =>
+                      `${MONTH_OPTIONS.find((m) => m.value === row.month)?.label ?? row.month} ${row.year}`,
+                  },
+                  { title: 'Invoices', dataIndex: 'invoiceCount', key: 'count', width: 100 },
+                  {
+                    title: 'Amount',
+                    dataIndex: 'amount',
+                    key: 'amount',
+                    align: 'right',
+                    render: (amount: number) => formatCurrency(amount),
+                  },
+                  {
+                    title: 'Active upload',
+                    dataIndex: 'activeUpload',
+                    key: 'activeUpload',
+                    render: (active: boolean) => (active ? 'Active upload' : 'No active upload'),
+                  },
+                ]}
+              />
+              <Checkbox
+                checked={confirmOtherMonths}
+                onChange={(e) => setConfirmOtherMonths(e.target.checked)}
+              >
+                Count these invoices in the months above
+              </Checkbox>
+            </>
+          )}
           {warnings.unmapped.length > 0 && (
             <Alert
               type="warning"
@@ -443,13 +628,65 @@ export default function ImportPage({ importType }: Props) {
         title="Continue with mapping warnings?"
         open={confirmOpen}
         onCancel={() => setConfirmOpen(false)}
-        onOk={doUpload}
+        onOk={() => doUpload()}
         okText="Continue"
         cancelText="Go back"
         confirmLoading={uploading}
       >
         Some columns are unmapped or required fields are not mapped. Do you want
         to continue anyway?
+      </Modal>
+
+      <Modal
+        title="Invoices already on another period"
+        open={duplicateOpen}
+        onCancel={() => setDuplicateOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDuplicateOpen(false)}>
+            Cancel
+          </Button>,
+          <Button key="skip" type="primary" onClick={chooseSkipDuplicates}>
+            Skip these invoices in this upload
+          </Button>,
+        ]}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <Text>
+            These numbers are already on an active upload for another period.
+            Keeping both would count them twice.
+          </Text>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(row) => `${row.uploadId}-${row.documentNumber}`}
+            dataSource={preview?.crossPeriodDuplicates ?? []}
+            columns={[
+              { title: 'Number', dataIndex: 'documentNumber', key: 'number' },
+              { title: 'File', dataIndex: 'originalFilename', key: 'file' },
+              {
+                title: 'Upload period',
+                key: 'period',
+                render: (_, row) =>
+                  `${MONTH_OPTIONS.find((m) => m.value === row.periodMonth)?.label ?? row.periodMonth} ${row.periodYear}`,
+              },
+              { title: 'Version', dataIndex: 'versionNumber', key: 'version', width: 90 },
+            ]}
+          />
+        </Space>
+      </Modal>
+
+      <Modal
+        title="Replace the active version?"
+        open={shrinkOpen}
+        onCancel={() => setShrinkOpen(false)}
+        onOk={() => doUpload({ confirmVersionShrink: true })}
+        okText="Replace"
+        cancelText="Cancel"
+        confirmLoading={uploading}
+      >
+        {preview
+          ? `previous version: ${preview.previousVersionCount} invoices, this version: ${versionCount}. This version is under 50% of the previous one.`
+          : null}
       </Modal>
 
       <TemplateDrawer

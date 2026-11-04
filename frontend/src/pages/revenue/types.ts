@@ -27,6 +27,51 @@ export interface ParseHeadersResponse {
   rowCount: number;
 }
 
+export interface ImportSaveOptions {
+  confirmVersionShrink?: boolean;
+  confirmOtherMonths?: boolean;
+  skipCrossPeriodDuplicates?: boolean;
+}
+
+export interface EffectiveMonthSummary {
+  month: number;
+  year: number;
+  invoiceCount: number;
+  amount: number;
+  activeUpload: boolean;
+}
+
+export interface CrossPeriodDuplicate {
+  documentNumber: string;
+  uploadId: string;
+  originalFilename: string;
+  periodMonth: number;
+  periodYear: number;
+  versionNumber: number;
+}
+
+export interface RevenueImportPreview {
+  previousVersionCount: number;
+  thisVersionCount: number;
+  thisVersionCountIfSkipped: number;
+  tagFallbackBlankCount: number;
+  tagFallbackBlankCountIfSkipped: number;
+  servicePeriodWarnings: string[];
+  months: EffectiveMonthSummary[];
+  monthsExcludingCrossPeriodDuplicates: EffectiveMonthSummary[];
+  otherMonths: EffectiveMonthSummary[];
+  otherMonthsExcludingCrossPeriodDuplicates: EffectiveMonthSummary[];
+  otherMonthConfirmationRequired: boolean;
+  otherMonthConfirmationRequiredIfSkipped: boolean;
+  versionShrinkConfirmationRequired: boolean;
+  versionShrinkConfirmationRequiredIfSkipped: boolean;
+  crossPeriodDuplicates: CrossPeriodDuplicate[];
+  withinFileDuplicateNumbers: string[];
+  unmappedColumns: string[];
+  missingColumns: string[];
+  unrecognizedCustomerCodes: string[];
+}
+
 export interface UploadResult {
   uploadId: string;
   importType: RevenueImportType;
@@ -73,6 +118,9 @@ export interface InvoiceListItem {
   amountInr: number | null;
   /** Raw USD as invoiced — no conversion. Null for INR / unmapped. */
   amountUsd: number | null;
+  serviceMonth: number | null;
+  serviceYear: number | null;
+  monthSource: 'SERVICE' | 'TAG';
 }
 
 export interface InvoiceListPage {

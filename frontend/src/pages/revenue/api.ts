@@ -1,10 +1,12 @@
 import axios from 'axios';
 import type {
   DashboardResponse,
+  ImportSaveOptions,
   InvoiceListPage,
   MappingTemplate,
   ParseHeadersResponse,
   PeriodWithData,
+  RevenueImportPreview,
   RevenueImportType,
   UploadResult,
   UploadSummary,
@@ -26,8 +28,19 @@ export type InvoiceFilterParams = {
   customerId?: string;
   periodMonth?: number;
   periodYear?: number;
+  serviceMonth?: number;
+  serviceYear?: number;
   status?: string;
 };
+
+function saveParams(mappingId: string, options?: ImportSaveOptions) {
+  return {
+    mapping_id: mappingId,
+    confirm_version_shrink: options?.confirmVersionShrink ?? false,
+    confirm_other_months: options?.confirmOtherMonths ?? false,
+    skip_cross_period_duplicates: options?.skipCrossPeriodDuplicates ?? false,
+  };
+}
 
 export type InvoiceExportParams = InvoiceFilterParams;
 
@@ -73,11 +86,46 @@ export const saveMappingTemplate = (payload: {
     .post<MappingTemplate>('/api/revenue/imports/mappings', payload)
     .then((r) => r.data);
 
+export const previewInvoices = (
+  periodMonth: number,
+  periodYear: number,
+  mappingId: string,
+  file: File,
+): Promise<RevenueImportPreview> => {
+  const form = new FormData();
+  form.append('file', file);
+  return axios
+    .post<RevenueImportPreview>(
+      `/api/revenue/imports/${periodMonth}/${periodYear}/invoices/preview`,
+      form,
+      { params: { mapping_id: mappingId } },
+    )
+    .then((r) => r.data);
+};
+
+export const previewCreditNotes = (
+  periodMonth: number,
+  periodYear: number,
+  mappingId: string,
+  file: File,
+): Promise<RevenueImportPreview> => {
+  const form = new FormData();
+  form.append('file', file);
+  return axios
+    .post<RevenueImportPreview>(
+      `/api/revenue/imports/${periodMonth}/${periodYear}/credit-notes/preview`,
+      form,
+      { params: { mapping_id: mappingId } },
+    )
+    .then((r) => r.data);
+};
+
 export const uploadInvoices = (
   periodMonth: number,
   periodYear: number,
   mappingId: string,
   file: File,
+  options?: ImportSaveOptions,
 ): Promise<UploadResult> => {
   const form = new FormData();
   form.append('file', file);
@@ -85,7 +133,7 @@ export const uploadInvoices = (
     .post<UploadResult>(
       `/api/revenue/imports/${periodMonth}/${periodYear}/invoices`,
       form,
-      { params: { mapping_id: mappingId } },
+      { params: saveParams(mappingId, options) },
     )
     .then((r) => r.data);
 };
@@ -95,6 +143,7 @@ export const uploadCreditNotes = (
   periodYear: number,
   mappingId: string,
   file: File,
+  options?: ImportSaveOptions,
 ): Promise<UploadResult> => {
   const form = new FormData();
   form.append('file', file);
@@ -102,7 +151,7 @@ export const uploadCreditNotes = (
     .post<UploadResult>(
       `/api/revenue/imports/${periodMonth}/${periodYear}/credit-notes`,
       form,
-      { params: { mapping_id: mappingId } },
+      { params: saveParams(mappingId, options) },
     )
     .then((r) => r.data);
 };

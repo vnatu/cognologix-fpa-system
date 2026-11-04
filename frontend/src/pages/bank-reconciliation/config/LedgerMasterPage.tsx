@@ -391,7 +391,7 @@ function CodePreview({ preview }: { preview: LedgerCodeImportPreview }) {
           <Text type="danger">Errors</Text>
           {preview.errors.map((issue) => (
             <div key={`${issue.rowNumber}-${issue.message}`}>
-              <Text type="danger">
+              <Text type="danger" style={{ whiteSpace: 'pre-wrap' }}>
                 Row {issue.rowNumber}
                 {issue.ledgerName ? ` (${issue.ledgerName})` : ''}: {issue.message}
               </Text>
